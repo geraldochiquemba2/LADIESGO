@@ -207,12 +207,13 @@ const server = http.createServer(async (req, res) => {
 
     // Painel admin (demo em memória)
   if (req.url.startsWith('/api/v1/admin/') && req.method === 'GET') {
+    const apath = req.url.split('?')[0];
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
     const now = Date.now();
     for (const [id, d] of drivers) { if (now - d.ts > 45000) { drivers.delete(id); busy.delete(id); } }
     const live = [...drivers.values()].filter(d => now - d.ts < 45000);
     const all = [...trips.values()];
-    if (req.url === '/api/v1/admin/stats') {
+    if (apath === '/api/v1/admin/stats') {
       const by = { pending: 0, accepted: 0, arrived: 0, in_progress: 0, completed: 0, cancelled: 0 };
       let revenue = 0;
       for (const t of all) {
@@ -222,11 +223,11 @@ const server = http.createServer(async (req, res) => {
       send(200, { driversOnline: live.length, trips: by, revenueKz: revenue, total: all.length });
       return;
     }
-    if (req.url === '/api/v1/admin/trips') {
+    if (apath === '/api/v1/admin/trips') {
       send(200, { trips: all.slice(-100).reverse().map(t => ({ id: t.id, passenger: t.passengerName, passengerId: t.passengerId || '', from: (t.pickup && t.pickup.name) || '', pickup: (t.pickup && t.pickup.lat != null) ? { lat: t.pickup.lat, lng: t.pickup.lng } : null, to: (t.dest ? t.dest.n : '') + ' · ' + (t.dest ? t.dest.a : ''), dest: (t.dest && t.dest.lat != null) ? { lat: t.dest.lat, lng: t.dest.lng } : null, cat: t.cat, fare: t.fare, pay: t.pay || '', status: t.status, by: t.by || '', reason: t.reason || '', pin: t.pin || '', sched: t.scheduledAt || 0, stopsN: (t.stops || []).length, stops: (t.stops || []), views: (t.views || []).length, driver: t.driverName || '', driverId: t.driverId || '', ts: t.ts })) });
       return;
     }
-    if (req.url === '/api/v1/admin/drivers') {
+    if (apath === '/api/v1/admin/drivers') {
       send(200, { drivers: live.map(d => ({ id: d.id || '', name: d.name, lat: d.lat, lng: d.lng, cats: d.cats || [], carMake: d.carMake || '', carPlate: d.carPlate || '', age: Math.round((now - d.ts) / 1000) })) });
       return;
     }

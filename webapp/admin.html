@@ -100,8 +100,8 @@
   <section id="sec-clients" style="display:none">
     <h2>Registadas</h2>
     <table><thead><tr><th>Cliente</th><th>Desde</th><th>Papel</th><th>Senha</th></tr></thead><tbody id="users"><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>
-    <h2>Histórico por cliente</h2>
-    <table><thead><tr><th>Cliente</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Gasto</th></tr></thead><tbody id="cliHist"></tbody></table>
+    <h2 id="histT">Histórico por cliente</h2>
+    <div id="histWrap"><table><thead><tr><th>Cliente</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Gasto</th></tr></thead><tbody id="cliHist"></tbody></table></div>
   </section>
 </div>
 </div>
@@ -111,7 +111,8 @@ const $=id=>document.getElementById(id);
 const fmt=v=>String(Math.round(v||0)).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
-let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,mapFilter=null,selDrv=null,mapQuery='',PEND=[];
+let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,mapFilter=null,selDrv=null,mapQuery='',PEND=[],STATS=null,uPage=1,uRole='',uQ='',UTOT=0,selUser=null,tPage=1,TTOT=0;
+var STM_R={pending:'REQUESTED',accepted:'ACCEPTED',arrived:'DRIVER_ARRIVED',in_progress:'IN_PROGRESS',completed:'COMPLETED',cancelled:'CANCELLED'};
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
 var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
 function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[])}}
@@ -131,6 +132,7 @@ function logout(){try{sessionStorage.removeItem('lg_admin');localStorage.removeI
 
 function boot(){
   if(map)return;
+  injectAdminUI();
   $('login').style.display='none';$('panel').style.display='';
   map=L.map('map').setView([-8.839,13.2894],12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
@@ -138,25 +140,60 @@ function boot(){
   layerG=L.layerGroup().addTo(map);map.on('popupopen',e=>{try{openDrv=e.popup&&e.popup._drvId||null}catch(_){}});map.on('popupclose',e=>{try{if(openDrv&&e.popup&&e.popup._drvId===openDrv)openDrv=null}catch(_){}});
   load();setInterval(load,3000);
 }
+function tStatusReal(){try{const v=($('fStatus')||{}).value||'';return STM_R[v]||''}catch(e){return''}}
+function paintCards(){
+  const s=STATS||{},raw=s.trips||{};
+  if(s.byStatus)Object.keys(s.byStatus).forEach(k=>{raw[STM[k]||k]=s.byStatus[k]});
+  const cSt=st=>raw[st]||0;
+  const online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
+  const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
+  $('cards').innerHTML=
+    card('🟢 Motoristas online',online,'drivers')+card('⏳ Pendentes',cSt('pending'),'pending')+
+    card('🚕 Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'),'active')+card('✅ Concluídas',cSt('completed'),'completed')+
+    card('❌ Canceladas',cSt('cancelled'),'cancelled')+card('💰 Receita',fmt(receita)+' Kz','completed');
+}
+function paintPagers(){
+  const tp=$('tPager');
+  if(tp){const pg=Math.max(1,Math.ceil(TTOT/20));tp.innerHTML='Página '+tPage+' de '+pg+' ('+TTOT+' viagens) '+(tPage>1?'<button class="chip" data-a="tpage" data-d="-1">← Anterior</button> ':'')+(tPage<pg?'<button class="chip" data-a="tpage" data-d="1">Seguinte →</button>':'')}
+  const up=$('uPager');
+  if(up){const pg=Math.max(1,Math.ceil(UTOT/20));up.innerHTML='Página '+uPage+' de '+pg+' ('+UTOT+' users) '+(uPage>1?'<button class="chip" data-a="upage" data-d="-1">← Anterior</button> ':'')+(uPage<pg?'<button class="chip" data-a="upage" data-d="1">Seguinte →</button>':'')}
+}
+function injectAdminUI(){
+  try{
+    const tt=document.querySelector('#sec-trips table');
+    if(tt&&!document.getElementById('tPager')){const d=document.createElement('div');d.id='tPager';d.className='mut';d.style.marginTop='8px';tt.after(d)}
+    const ut=document.querySelector('#sec-clients table');
+    if(ut&&!document.getElementById('uTools')){const w=document.createElement('div');w.id='uTools';w.innerHTML='<div class="filters"><input id="uSearch" placeholder="Pesquisar nome ou número…" autocomplete="off"><select id="uRole"><option value="">Todos os papéis</option><option>PASSENGER</option><option>DRIVER</option><option>ADMIN</option></select></div><div class="mut" id="uPager" style="margin:6px 0 8px"></div>';ut.before(w)}
+  }catch(e){}
+}
+async function showUserTrips(id,name){
+  selUser={id:id,name:name};
+  $('histT').innerHTML='Histórico · '+esc(name)+' <button class="chip" data-a="clearuser">× limpar</button>';
+  if(!window._histOrig)window._histOrig=$('histWrap').innerHTML;
+  $('histWrap').innerHTML='<table><thead><tr><th>Quando</th><th>De → Para</th><th>Preço</th><th>Estado</th></tr></thead><tbody><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>';
+  try{
+    const r=await fetch('/api/v1/admin/trips?passengerId='+id+'&limit=100',{headers:ah()});const j=await r.json();
+    const list=((j&&j.trips)||[]).map(normT);
+    $('histWrap').innerHTML='<table><thead><tr><th>Quando</th><th>De → Para</th><th>Preço</th><th>Estado</th></tr></thead><tbody>'+(list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem viagens.</td></tr>')+'</tbody></table>';
+  }catch(e){$('histWrap').innerHTML='<table><tbody><tr><td class="mut">Falhou.</td></tr></tbody></table>'}
+}
 async function load(){
   try{
     const [s,t,d,u,p]=await Promise.all([
       fetch('/api/v1/admin/stats',{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/trips',{headers:ah()}).then(r=>r.json()),
+      fetch('/api/v1/admin/trips?page='+tPage+'&limit=20'+(tStatusReal()?('&status='+tStatusReal()):''),{headers:ah()}).then(r=>r.json()),
       fetch('/api/v1/admin/drivers',{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/users?limit=100',{headers:ah()}).then(r=>r.json()).catch(()=>({})),
+      fetch('/api/v1/admin/users?page='+uPage+'&limit=20'+(uRole?('&role='+uRole):'')+(uQ?('&q='+encodeURIComponent(uQ)):''),{headers:ah()}).then(r=>r.json()).catch(()=>({})),
       fetch('/api/v1/admin/drivers/pending',{headers:ah()}).then(r=>r.json()).catch(()=>[])
     ]);
-    ALL=((t&&t.trips)||[]).map(normT);DRV=((d&&d.drivers)||[]).map(normD);USERS=((u&&u.users)||[]);PEND=Array.isArray(p)?p:[];
+    STATS=s;ALL=((t&&t.trips)||[]).map(normT);TTOT=(t&&t.total)||ALL.length;DRV=((d&&d.drivers)||[]).map(normD);USERS=((u&&u.users)||[]);UTOT=(u&&u.total)||USERS.length;PEND=Array.isArray(p)?p:[];
+    paintCards();renderActive();renderTrips();renderDrivers();renderHist();renderUsers();renderPending();paintPagers();drawMap();
     const cSt=st=>ALL.filter(x=>x.status===st).length;
     const online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
     const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
-    $('cards').innerHTML=
-      card('🟢 Motoristas online',online,'drivers')+card('⏳ Pendentes',cSt('pending'),'pending')+
-      card('🚕 Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'),'active')+card('✅ Concluídas',cSt('completed'),'completed')+
-      card('❌ Canceladas',cSt('cancelled'),'cancelled')+card('💰 Receita',fmt(receita)+' Kz','completed');
+    paintCards();
     $('clock').textContent=new Date().toLocaleTimeString('pt-PT');
-    renderActive();renderTrips();renderDrivers();renderHist();renderUsers();renderPending();drawMap();
+    renderActive();renderTrips();renderDrivers();renderHist();renderUsers();renderPending();paintPagers();drawMap();
   }catch(e){}
 }
 function renderPending(){
@@ -169,7 +206,7 @@ async function decide(id,ok){
   }catch(e){alert('Falhou a decisão.')}
 }
 function renderUsers(){
-  $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+esc(x.role||'')+(x.driver?' 🚕':'')+'</td><td><button class="chip" data-a="resetpw" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Reset</button></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem registos.</td></tr>';
+  $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+esc(x.role||'')+(x.driver?' 🚕':'')+'</td><td><button class="chip" data-a="usertrips" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Ver</button> <button class="chip" data-a="resetpw" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Reset</button></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem registos.</td></tr>';
 }
 let ndT=null;
 async function checkNumber(){const c=$('ndCheck');if(c)c.textContent='';const dg=(($('ndPhone')||{}).value||'').replace(/\D/g,'');const lc=dg.indexOf('244')===0?dg.slice(3):dg;if(!/^9[123459]\d{7}$/.test(lc))return;try{const r=await fetch('/api/v1/admin/users?q='+lc,{headers:ah()});const j=await r.json();const hit=((j&&j.users)||[]).find(u=>(u.phone||'').replace(/\D/g,'').endsWith(lc));if(c)c.textContent=hit?('⚠ Já registado: '+(hit.name||hit.phone)+' ('+hit.role+')'):'✓ Número disponível.'}catch(_){}}
@@ -274,6 +311,7 @@ function agg(key){
   return Object.keys(m).map(k=>m[k]).sort((a,b)=>b.tot-a.tot);
 }
 function renderHist(){
+  if(selUser)return;
   const dh=agg('d'),dl=selDrv?dh.filter(x=>x.key===selDrv):dh;
   $('drvHist').innerHTML=dl.map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('')||(selDrv?'<tr><td colspan="5" class="mut">Sem viagens para esta motorista.</td></tr>':'');
   $('cliHist').innerHTML=agg('p').map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('');
@@ -288,6 +326,12 @@ document.addEventListener('click',e=>{
   if(rs){if(confirm('Repor a senha de '+(rs.dataset.n||'')+' para a padrão 0987654321?')){fetch('/api/v1/admin/users/'+rs.dataset.id+'/reset-password',{method:'POST',headers:ah()}).then(r=>{if(!r.ok)throw 0;rs.textContent='✓';setTimeout(load,800)}).catch(()=>alert('Falhou o reset.'))}return}
   const mk=e.target.closest('[data-a="mkdrv"]');
   if(mk){mkDriver();return}
+  const pg=e.target.closest('[data-a="upage"],[data-a="tpage"]');
+  if(pg){const d=Number(pg.dataset.d)||0;if(pg.dataset.a==='upage')uPage=Math.max(1,uPage+d);else tPage=Math.max(1,tPage+d);load();return}
+  const vu=e.target.closest('[data-a="usertrips"]');
+  if(vu){showUserTrips(vu.dataset.id,vu.dataset.n||'');return}
+  const cu=e.target.closest('[data-a="clearuser"]');
+  if(cu){selUser=null;$('histT').textContent='Histórico por cliente';if(window._histOrig)$('histWrap').innerHTML=window._histOrig;renderHist();return}
   const ap=e.target.closest('[data-a="appr"],[data-a="rej"]');
   if(ap){decide(ap.dataset.id,ap.dataset.a==='appr');return}
   const t=e.target.closest('[data-t]');
@@ -297,8 +341,8 @@ document.addEventListener('click',e=>{
   const r=e.target.closest('tr.pick');
   if(r){selTrip=r.dataset.id===selTrip?null:r.dataset.id;needFit=!!selTrip;renderActive();drawMap()}
 });
-document.addEventListener('input',e=>{if(e.target&&(e.target.id==='fText'))renderTrips();else if(e.target&&(e.target.id==='mSearch')){mapQuery=(e.target.value||'').toLowerCase().trim();renderActive();if(map)drawMap()}else if(e.target&&(e.target.id==='ndPhone')){clearTimeout(ndT);ndT=setTimeout(checkNumber,500)}});
-document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus'))renderTrips()});
+document.addEventListener('input',e=>{if(e.target&&(e.target.id==='fText'))renderTrips();else if(e.target&&(e.target.id==='mSearch')){mapQuery=(e.target.value||'').toLowerCase().trim();renderActive();if(map)drawMap()}else if(e.target&&(e.target.id==='ndPhone')){clearTimeout(ndT);ndT=setTimeout(checkNumber,500)}else if(e.target&&(e.target.id==='uSearch')){const v=e.target.value;clearTimeout(window._uT);window._uT=setTimeout(()=>{uQ=(v||'').trim();uPage=1;load()},450)}});
+document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus')){tPage=1;load()}else if(e.target&&(e.target.id==='uRole')){uRole=e.target.value||'';uPage=1;load()}});
 $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('admOut').addEventListener('click',logout);
