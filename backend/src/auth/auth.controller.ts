@@ -11,6 +11,15 @@ export class AuthController {
     return this.auth.guestLogin(name);
   }
 
+  @Post('login')
+  passwordLogin(
+    @Body('phone') phone: string,
+    @Body('password') password: string,
+    @Body('role') role?: string,
+  ) {
+    return this.auth.loginOrRegister(phone, password, role);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('refresh-token')
   refreshToken(@Request() req) {

@@ -13,12 +13,17 @@ export class PromosService implements OnModuleInit {
   constructor(private prisma: PrismaService) {}
 
   async onModuleInit() {
-    for (const c of SEED_CODES) {
-      await this.prisma.promoCode.upsert({
-        where: { code: c.code },
-        create: c,
-        update: {},
-      });
+    try {
+      for (const c of SEED_CODES) {
+        await this.prisma.promoCode.upsert({
+          where: { code: c.code },
+          create: c,
+          update: {},
+        });
+      }
+    } catch (e) {
+      // Local dev sem base de dados: o seed falha mas o servidor arranca na mesma.
+      console.warn('Promo seed skipped (no database):', (e as Error).message?.slice(0, 120));
     }
   }
 

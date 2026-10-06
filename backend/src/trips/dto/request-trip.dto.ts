@@ -1,5 +1,8 @@
 import { IsString, IsNumber, IsEnum, IsOptional, Min, Max } from 'class-validator';
-import { PaymentMethod } from '@prisma/client';
+
+// Local: o schema SQLite usa String em vez de enum (valores iguais aos de produção)
+export const PaymentMethod = { CASH: 'CASH', CARD: 'CARD' } as const;
+export type PaymentMethod = (typeof PaymentMethod)[keyof typeof PaymentMethod];
 
 export enum RideType {
   ECONOMY  = 'ECONOMY',
