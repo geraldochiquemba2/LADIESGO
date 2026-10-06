@@ -27,4 +27,10 @@ export class AuthController {
   refreshToken(@Request() req) {
     return this.auth.refreshToken(req.user.id);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  changePassword(@Request() req, @Body('newPassword') newPassword: string) {
+    return this.auth.changePassword(req.user.id, newPassword);
+  }
 }

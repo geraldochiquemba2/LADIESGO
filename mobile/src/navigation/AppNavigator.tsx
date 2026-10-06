@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { initAuth } from '../store/slices/authSlice';
 
 import ConnectingScreen from '../screens/shared/ConnectingScreen';
+import LoginScreen from '../screens/shared/LoginScreen';
 import ChatScreen from '../screens/shared/ChatScreen';
 import ProfileScreen from '../screens/shared/ProfileScreen';
 import SettingsScreen from '../screens/shared/SettingsScreen';
@@ -27,6 +28,7 @@ import ActiveTripScreen from '../screens/driver/ActiveTripScreen';
 import EarningsScreen from '../screens/driver/EarningsScreen';
 import PendingApprovalScreen from '../screens/driver/PendingApprovalScreen';
 import DriverTripCompleteScreen from '../screens/driver/TripCompleteScreen';
+import PasswordBanner from '../components/PasswordBanner';
 
 const Stack = createNativeStackNavigator();
 
@@ -69,9 +71,7 @@ export default function AppNavigator() {
     <NavigationContainer ref={navRef}>
       <Stack.Navigator screenOptions={headerStyle}>
         {!user ? (
-          <Stack.Screen name="Connecting" options={{ headerShown: false }}>
-            {() => <ConnectingScreen onRetry={() => dispatch(initAuth())} />}
-          </Stack.Screen>
+          <Stack.Screen name="Login" options={{ headerShown: false }} component={LoginScreen} />
         ) : user.role === 'DRIVER' ? (
           <>
             <Stack.Screen
@@ -200,6 +200,7 @@ export default function AppNavigator() {
           </>
         )}
       </Stack.Navigator>
+      <PasswordBanner />
     </NavigationContainer>
   );
 }

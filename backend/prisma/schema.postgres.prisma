@@ -73,6 +73,7 @@ model User {
   fcmToken       String?
   isActive       Boolean  @default(true)
   isVerified     Boolean  @default(false)
+  mustChangePassword Boolean @default(false)
   referralCode   String?  @unique
   referralCount  Int      @default(0)
   walletBalance  Float    @default(0)

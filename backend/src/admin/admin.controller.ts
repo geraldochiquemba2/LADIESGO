@@ -1,5 +1,6 @@
-import { Controller, Get, Put, Param, Body, Query, DefaultValuePipe, ParseIntPipe, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, Body, Query, DefaultValuePipe, ParseIntPipe, UseGuards } from '@nestjs/common';
 import { AdminService } from './admin.service';
+import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -8,7 +9,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 @Roles('ADMIN' as any)
 @Controller('admin')
 export class AdminController {
-  constructor(private admin: AdminService) {}
+  constructor(private admin: AdminService, private auth: AuthService) {}
 
   @Get('stats')
   getStats() {
@@ -38,6 +39,16 @@ export class AdminController {
   @Get('drivers')
   getDrivers() {
     return this.admin.getOnlineDrivers();
+  }
+
+  @Post('drivers/create')
+  createDriver(@Body('phone') phone: string, @Body('name') name?: string) {
+    return this.auth.adminCreateDriver(phone, name);
+  }
+
+  @Post('users/:id/reset-password')
+  resetPassword(@Param('id') id: string) {
+    return this.auth.resetPassword(id);
   }
 
   @Get('users')

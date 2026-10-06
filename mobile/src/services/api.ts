@@ -47,6 +47,8 @@ api.interceptors.response.use(
 
 export const authApi = {
   guest: (name?: string) => api.post('/auth/guest', { name }),
+  login: (phone: string, password: string) => api.post('/auth/login', { phone, password }),
+  changePassword: (newPassword: string) => api.post('/auth/change-password', { newPassword }),
 };
 
 export const usersApi = {

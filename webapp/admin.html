@@ -67,6 +67,7 @@
     <button data-t="trips">🧾 Viagens</button>
     <button data-t="drivers">🚕 Motoristas</button>
     <button data-t="clients">👤 Clientes</button>
+    <button data-t="new">➕ Registar</button>
   </div>
   <section id="sec-monitor">
     <div class="filters"><input id="mSearch" placeholder="Pesquisar motorista, matrícula, passageira ou local…"></div>
@@ -86,9 +87,16 @@
     <h2>Histórico por motorista</h2>
     <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Ganhos</th></tr></thead><tbody id="drvHist"></tbody></table>
   </section>
+  <section id="sec-new" style="display:none">
+    <h2>Registar motorista</h2>
+    <p class="mut">A conta entra com a senha padrão <b>0987654321</b> e troca no primeiro login.</p>
+    <div class="filters"><input id="ndName" placeholder="Nome da motorista" autocomplete="off"><input id="ndPhone" placeholder="9XX XXX XXX" inputmode="tel" autocomplete="off"></div>
+    <button data-a="mkdrv" style="height:48px;border:0;border-radius:14px;background:linear-gradient(135deg,#a45bf5,#6a2bd6);color:#fff;font:inherit;font-weight:800;font-size:15px;padding:0 26px;cursor:pointer">Criar conta de motorista</button>
+    <p class="mut" id="ndMsg" style="margin-top:10px"></p>
+  </section>
   <section id="sec-clients" style="display:none">
     <h2>Registadas</h2>
-    <table><thead><tr><th>Cliente</th><th>Desde</th><th>Motorista</th></tr></thead><tbody id="users"><tr><td colspan="3" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Cliente</th><th>Desde</th><th>Papel</th><th>Senha</th></tr></thead><tbody id="users"><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>
     <h2>Histórico por cliente</h2>
     <table><thead><tr><th>Cliente</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Gasto</th></tr></thead><tbody id="cliHist"></tbody></table>
   </section>
@@ -133,7 +141,7 @@ async function load(){
       fetch('/api/v1/admin/stats',{headers:ah()}).then(r=>r.json()),
       fetch('/api/v1/admin/trips',{headers:ah()}).then(r=>r.json()),
       fetch('/api/v1/admin/drivers',{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/users?role=PASSENGER',{headers:ah()}).then(r=>r.json()).catch(()=>({}))
+      fetch('/api/v1/admin/users?limit=100',{headers:ah()}).then(r=>r.json()).catch(()=>({}))
     ]);
     ALL=((t&&t.trips)||[]).map(normT);DRV=((d&&d.drivers)||[]).map(normD);USERS=((u&&u.users)||[]);
     const cSt=st=>ALL.filter(x=>x.status===st).length;
@@ -148,7 +156,19 @@ async function load(){
   }catch(e){}
 }
 function renderUsers(){
-  $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+(x.driver?'🚕 '+esc(x.driver.status||''):'—')+'</td></tr>').join('')||'<tr><td colspan="3" class="mut">Sem registos.</td></tr>';
+  $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+esc(x.role||'')+(x.driver?' 🚕':'')+'</td><td><button class="chip" data-a="resetpw" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Reset</button></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem registos.</td></tr>';
+}
+async function mkDriver(){
+  const m=$('ndMsg');if(m)m.textContent='';
+  const nm=(($('ndName')||{}).value||'').trim(),ph=(($('ndPhone')||{}).value||'').trim();
+  if(nm.length<2){if(m)m.textContent='Escreve o nome.';return}
+  try{
+    const r=await fetch('/api/v1/admin/drivers/create',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({phone:ph,name:nm})});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.message||'Falhou.');
+    if(m)m.textContent='✓ Conta criada para '+nm+' — senha padrão 0987654321.';
+    $('ndName').value='';$('ndPhone').value='';load();
+  }catch(e){if(m)m.textContent='Erro: '+((e&&e.message)||e)}
 }
 const card=(l,v,f)=>'<div class="card'+(mapFilter===f&&f?' sel':'')+'"'+(f?(' data-f="'+f+'"'):'')+'><small>'+l+'</small><b>'+v+'</b></div>';
 
@@ -243,12 +263,16 @@ function renderHist(){
   $('drvHist').innerHTML=dl.map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('')||(selDrv?'<tr><td colspan="5" class="mut">Sem viagens para esta motorista.</td></tr>':'');
   $('cliHist').innerHTML=agg('p').map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('');
 }
-function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50)}
+function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50)}
 document.addEventListener('click',e=>{
   const f=e.target.closest('[data-f]');
   if(f){const k=f.dataset.f;mapFilter=mapFilter===k?null:k;load();return}
   const dv=e.target.closest('[data-drv]');
   if(dv){e.preventDefault();const k=dv.dataset.drv||null;selDrv=selDrv===k?null:k;goTab('drivers');renderDrivers();renderHist();return}
+  const rs=e.target.closest('[data-a="resetpw"]');
+  if(rs){if(confirm('Repor a senha de '+(rs.dataset.n||'')+' para a padrão 0987654321?')){fetch('/api/v1/admin/users/'+rs.dataset.id+'/reset-password',{method:'POST',headers:ah()}).then(r=>{if(!r.ok)throw 0;rs.textContent='✓';setTimeout(load,800)}).catch(()=>alert('Falhou o reset.'))}return}
+  const mk=e.target.closest('[data-a="mkdrv"]');
+  if(mk){mkDriver();return}
   const t=e.target.closest('[data-t]');
   if(t){goTab(t.dataset.t);return}
   const dr=e.target.closest('[data-drvrow]');

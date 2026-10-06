@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, OnModuleInit } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, NotFoundException, ConflictException, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -110,6 +110,63 @@ export class AuthService implements OnModuleInit {
     }
     const tokens = await this.generateTokens(existing.id, existing.phone, existing.role);
     return { user: this.withoutHash(existing), ...tokens, isNew: false };
+  }
+
+  // Senha padrão das contas criadas pelo admin (motoristas). A app exige a
+  // troca no primeiro login (mustChangePassword). Envs: DRIVER_DEFAULT_PASSWORD.
+  private defaultDriverPassword() {
+    return this.config.get<string>('DRIVER_DEFAULT_PASSWORD', '') || '0987654321';
+  }
+
+  // Admin cria conta de motorista: nome + número.
+  async adminCreateDriver(phone: string, name?: string) {
+    const digits = (phone || '').replace(/\D/g, '');
+    const local = digits.startsWith('244') ? digits.slice(3) : digits;
+    if (!/^9[123459]\d{7}$/.test(local)) {
+      throw new BadRequestException('Número angolano inválido: 9XX XXX XXX.');
+    }
+    const cleanName = (name || '').trim().slice(0, 60);
+    if (cleanName.length < 2) throw new BadRequestException('Nome da motorista inválido.');
+    const cleanPhone = `+244${local}`;
+    const existing = await this.prisma.user.findUnique({ where: { phone: cleanPhone } });
+    if (existing) throw new ConflictException('Este número já está registado.');
+    const user = await this.prisma.user.create({
+      data: {
+        phone: cleanPhone,
+        passwordHash: await bcrypt.hash(this.defaultDriverPassword(), 10),
+        role: 'DRIVER',
+        name: cleanName,
+        isVerified: true,
+        mustChangePassword: true,
+      },
+    });
+    return { user: this.withoutHash(user) };
+  }
+
+  // Admin repõe a senha para a padrão (força troca no próximo login).
+  async resetPassword(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Utilizador não encontrado.');
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash: await bcrypt.hash(this.defaultDriverPassword(), 10),
+        mustChangePassword: true,
+      },
+    });
+    return { success: true };
+  }
+
+  // A própria utilizadora define nova senha (banner do primeiro login).
+  async changePassword(userId: string, newPassword: string) {
+    if (!newPassword || newPassword.length < 4) {
+      throw new BadRequestException('A senha deve ter pelo menos 4 caracteres.');
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await bcrypt.hash(newPassword, 10), mustChangePassword: false },
+    });
+    return { success: true };
   }
 
   private async generateTokens(userId: string, phone: string, role: string) {
