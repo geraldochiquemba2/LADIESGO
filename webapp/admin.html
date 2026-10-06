@@ -36,7 +36,7 @@
   .filters input{flex:2}.filters select{flex:1}
   #map{height:380px;border-radius:16px;box-shadow:0 2px 8px rgba(25,10,60,.07);z-index:1}
   .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--mut);margin-top:8px}
-  .legend i{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:5px}.drvtip{font-weight:800;font-size:12px;text-align:center;white-space:nowrap;pointer-events:auto;cursor:pointer}.drvtip small{color:#6c6680;font-weight:600}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:5px}.drvtip{font-weight:800;font-size:12px;text-align:center;white-space:nowrap;pointer-events:auto;cursor:pointer}.drvtip small{color:#6c6680;font-weight:600}.destflag{background:none;border:0}
   #login{max-width:380px;margin:12vh auto 0;background:#fff;border-radius:20px;padding:28px 24px;box-shadow:0 8px 30px rgba(25,10,60,.12)}
   #login h1{font-size:22px;margin-bottom:4px}#login p{color:var(--mut);font-size:13.5px;margin-bottom:14px}
   #login label{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
@@ -100,7 +100,8 @@ const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
 let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null;
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
-function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:t.status,ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[])}}
+var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
+function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[])}}
 function stopsHtml(x){const s=x.stops||[];if(!s.length)return '';return '<br><span class="mut">+ '+s.length+' '+(s.length===1?'paragem':'paragens')+': '+s.map(p=>esc((p&&(p.n||p.a))||((p&&p.lat!=null)?(p.lat+', '+p.lng):''))).join(' › ')+'</span>'}
 function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);c.age=(d.updated!=null?d.updated:null);c.cats=d.cats||[];return c}
 const stColor={pending:'#5b21c9',accepted:'#2563eb',arrived:'#2563eb',in_progress:'#7c3aed',completed:'#12a150',cancelled:'#d92d4b'};
@@ -173,7 +174,7 @@ function drawMap(){
     L.polyline([[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng]],{color:c,weight:4,opacity:.85}).addTo(layerG);
     L.circleMarker([t.pickup.lat,t.pickup.lng],{radius:6,color:'#fff',weight:2,fillColor:c,fillOpacity:1})
       .bindTooltip(esc(t.passenger)+' → '+esc(t.dest?destName(t):'')).addTo(layerG);
-    L.circleMarker([t.dest.lat,t.dest.lng],{radius:6,color:'#fff',weight:2,fillColor:'#15111f',fillOpacity:1})
+    L.marker([t.dest.lat,t.dest.lng],{interactive:false,keyboard:false,icon:L.divIcon({className:'destflag',html:'<div style="font-size:20px;line-height:20px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))">🏁</div>',iconSize:[22,22],iconAnchor:[5,20]})})
       .bindTooltip('🏁 '+esc(t.dest?destName(t):'')).addTo(layerG);
   });
   const t=(ALL||[]).find(x=>x.id===selTrip);
