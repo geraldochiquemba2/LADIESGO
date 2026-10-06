@@ -104,7 +104,7 @@ function login(){
   if(ph==='999999999'&&pw==='1234567890'){try{sessionStorage.setItem('lg_admin','1')}catch(e){}boot();}
   else $('loginErr').textContent='Credenciais inválidas.';
 }
-function logout(){try{sessionStorage.removeItem('lg_admin')}catch(e){}location.reload();}
+function logout(){try{sessionStorage.removeItem('lg_admin');localStorage.removeItem('taxi_token');localStorage.removeItem('taxi_user')}catch(e){}location.href='/app';}
 
 function boot(){
   if(map)return;
@@ -116,11 +116,12 @@ function boot(){
   load();setInterval(load,3000);
 }
 async function load(){
+  const ah=()=>{try{const t=localStorage.getItem('taxi_token');return t?{Authorization:'Bearer '+t}:{}}catch(e){return{}}};
   try{
     const [s,t,d]=await Promise.all([
-      fetch('/api/v1/admin/stats').then(r=>r.json()),
-      fetch('/api/v1/admin/trips').then(r=>r.json()),
-      fetch('/api/v1/admin/drivers').then(r=>r.json())
+      fetch('/api/v1/admin/stats',{headers:ah()}).then(r=>r.json()),
+      fetch('/api/v1/admin/trips',{headers:ah()}).then(r=>r.json()),
+      fetch('/api/v1/admin/drivers',{headers:ah()}).then(r=>r.json())
     ]);
     ALL=t.trips||[];DRV=d.drivers||[];
     const act=(s.trips.accepted||0)+(s.trips.arrived||0)+(s.trips.in_progress||0);
@@ -219,7 +220,10 @@ document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus'))re
 $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('admOut').addEventListener('click',logout);
-try{if(sessionStorage.getItem('lg_admin')==='1')boot()}catch(e){}
+try{
+  if(sessionStorage.getItem('lg_admin')==='1')boot();
+  else{const u=JSON.parse(localStorage.getItem('taxi_user')||'null');if(u&&u.role==='ADMIN'){try{sessionStorage.setItem('lg_admin','1')}catch(_){}boot();}}
+}catch(e){}
 </script>
 </body>
 </html>

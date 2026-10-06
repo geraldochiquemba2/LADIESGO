@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,12 +6,30 @@ import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
     private config: ConfigService,
   ) {}
+
+  // Conta admin via env (ADMIN_PHONE/ADMIN_PASSWORD): cria no arranque se não
+  // existir. Sem estas vars, nada acontece — o painel continua a exigir login.
+  async onModuleInit() {
+    try {
+      const phone = (this.config.get<string>('ADMIN_PHONE', '') || '').trim();
+      const pass = this.config.get<string>('ADMIN_PASSWORD', '') || '';
+      if (!phone || pass.length < 4) return;
+      const existing = await this.prisma.user.findUnique({ where: { phone } });
+      if (existing) return;
+      await this.prisma.user.create({
+        data: { phone, passwordHash: await bcrypt.hash(pass, 10), role: 'ADMIN', isVerified: true, name: 'Admin' },
+      });
+      console.log(`Conta admin criada para ${phone}`);
+    } catch (e) {
+      console.warn('Seed admin ignorado:', (e as Error).message?.slice(0, 120));
+    }
+  }
 
   // Nunca expor o hash da senha ao cliente.
   private withoutHash<T extends { passwordHash?: string | null }>(u: T) {

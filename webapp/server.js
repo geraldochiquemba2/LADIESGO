@@ -292,7 +292,6 @@ const server = http.createServer(async (req, res) => {
   let page = 'ladiesgo.html';
   if (req.url === '/app' || req.url.startsWith('/app?')) page = 'ladiesgo-login.html';
   else if (req.url === '/home' || req.url.startsWith('/home')) page = 'ladiesgo-home.html';
-  else if (req.url === '/demo') page = 'ladiesgo-app.html';
   else if (req.url === '/admin' || req.url.startsWith('/admin?')) page = 'admin.html';
   else if (req.url === '/historia') page = 'ladiesgo.html';
   else if (req.url === '/old') page = 'index.html';
