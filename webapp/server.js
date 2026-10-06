@@ -276,6 +276,35 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+    if (req.url === '/api/v1/auth/register' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const { phone = '', password = '', role = 'PASSENGER', name = '' } = JSON.parse(body || '{}');
+          const digits = String(phone).replace(/\D/g, '');
+          const local = digits.indexOf('244') === 0 ? digits.slice(3) : digits;
+          if (!/^9[123459]\d{7}$/.test(local)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: 'Número angolano inválido: 9XX XXX XXX.' }));
+            return;
+          }
+          if (String(password).length < 4) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: 'A senha deve ter pelo menos 4 caracteres.' }));
+            return;
+          }
+          const user = { id: 'demo-' + local, name: String(name || 'Beatriz').slice(0, 60), phone: '+244' + local, role };
+          const accessToken = 'demo.' + Buffer.from(JSON.stringify(user)).toString('base64') + '.demo';
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ accessToken, user, isNew: true }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: 'Pedido inválido.' }));
+        }
+      });
+      return;
+    }
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ message: 'Rota API não encontrada no mock local.' }));
     return;

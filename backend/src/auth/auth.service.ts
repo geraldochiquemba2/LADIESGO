@@ -61,10 +61,19 @@ export class AuthService implements OnModuleInit {
     return this.generateTokens(user.id, user.phone, user.role);
   }
 
-  // Número + senha. Se o número ainda não existe, cria a conta (registo
-  // implícito) com o papel escolhido; se existe, valida a senha.
-  // Nome e foto (do registo no site) são guardados na BD.
-  async loginOrRegister(phone: string, password: string, role?: string, name?: string, profilePhoto?: string) {
+  // LOGIN: só entra quem já tem conta + senha. Número desconhecido falha.
+  async login(phone: string, password: string) {
+    const cleanPhone = (phone || '').trim();
+    const existing = await this.prisma.user.findUnique({ where: { phone: cleanPhone } });
+    if (!existing?.passwordHash || !(await bcrypt.compare(password || '', existing.passwordHash))) {
+      throw new UnauthorizedException('Número ou senha incorretos');
+    }
+    const tokens = await this.generateTokens(existing.id, existing.phone, existing.role);
+    return { user: this.withoutHash(existing), ...tokens, isNew: false };
+  }
+
+  // REGISTO explícito (Criar conta / admin). Número repetido falha.
+  async register(phone: string, password: string, role?: string, name?: string, profilePhoto?: string) {
     const cleanPhone = (phone || '').trim();
     if (!cleanPhone || cleanPhone.length < 9) {
       throw new BadRequestException('Número de telefone inválido');
@@ -80,36 +89,19 @@ export class AuthService implements OnModuleInit {
         : undefined;
 
     const existing = await this.prisma.user.findUnique({ where: { phone: cleanPhone } });
-    if (!existing) {
-      const passwordHash = await bcrypt.hash(password, 10);
-      const user = await this.prisma.user.create({
-        data: {
-          phone: cleanPhone, passwordHash, role: wantedRole, isVerified: true,
-          ...(cleanName ? { name: cleanName } : {}),
-          ...(cleanPhoto ? { profilePhoto: cleanPhoto } : {}),
-        },
-      });
-      const tokens = await this.generateTokens(user.id, user.phone, user.role);
-      return { user: this.withoutHash(user), ...tokens, isNew: true };
+    if (existing) {
+      throw new ConflictException('Este número já está registado. Entra com a tua senha.');
     }
-
-    if (!existing.passwordHash || !(await bcrypt.compare(password, existing.passwordHash))) {
-      throw new UnauthorizedException('Número ou senha incorretos');
-    }
-    // Preenche nome/foto em falta (ex. contas criadas só com número).
-    if ((cleanName && !existing.name) || (cleanPhoto && !existing.profilePhoto)) {
-      const updated = await this.prisma.user.update({
-        where: { id: existing.id },
-        data: {
-          ...(cleanName && !existing.name ? { name: cleanName } : {}),
-          ...(cleanPhoto && !existing.profilePhoto ? { profilePhoto: cleanPhoto } : {}),
-        },
-      });
-      const tokens = await this.generateTokens(updated.id, updated.phone, updated.role);
-      return { user: this.withoutHash(updated), ...tokens, isNew: false };
-    }
-    const tokens = await this.generateTokens(existing.id, existing.phone, existing.role);
-    return { user: this.withoutHash(existing), ...tokens, isNew: false };
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await this.prisma.user.create({
+      data: {
+        phone: cleanPhone, passwordHash, role: wantedRole, isVerified: true,
+        ...(cleanName ? { name: cleanName } : {}),
+        ...(cleanPhoto ? { profilePhoto: cleanPhoto } : {}),
+      },
+    });
+    const tokens = await this.generateTokens(user.id, user.phone, user.role);
+    return { user: this.withoutHash(user), ...tokens, isNew: true };
   }
 
   // Senha padrão das contas criadas pelo admin (motoristas). A app exige a
