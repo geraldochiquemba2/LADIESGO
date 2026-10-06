@@ -201,7 +201,7 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b
   else if(a==='role-pax')doRoleLogin('PASSENGER');
   else if(a==='role-drv')doRoleLogin('DRIVER');
   else if(a==='do-credentials')doCredentialsLogin();
-  else if(a==='back-login')go('login');else if(a==='go-register')go('register')else if(a==='do-register')doRegister();else if(a==='toggle-terms')openTerms('termsBox');else if(a==='toggle-privacy')openTerms('privBox');else if(a==='close-terms')$('tmodal').classList.remove('on')
+  else if(a==='back-login')go('login');else if(a==='go-register')go('register');else if(a==='do-register')doRegister();else if(a==='toggle-terms')openTerms('termsBox');else if(a==='toggle-privacy')openTerms('privBox');else if(a==='close-terms')$('tmodal').classList.remove('on')
   else if(a==='sos')$('sos').classList.add('on');else if(a==='close')$('sos').classList.remove('on')});
 function openTerms(id){const s=document.getElementById(id),b=document.getElementById('tbody');if(s&&b){b.innerHTML=s.innerHTML;$('tmodal').classList.add('on')}}
 $('tmodal').addEventListener('click',e=>{if(e.target&&e.target.id==='tmodal')e.target.classList.remove('on')});
