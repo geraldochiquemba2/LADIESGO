@@ -9,10 +9,12 @@ import {
   ActivityIndicator,
   ScrollView,
   Share,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../store';
-import { logout } from '../../store/slices/authSlice';
+import { logout, setUser } from '../../store/slices/authSlice';
 import { usersApi } from '../../services/api';
 
 export default function ProfileScreen() {
@@ -22,10 +24,40 @@ export default function ProfileScreen() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [driverInfo, setDriverInfo] = useState<any>(null);
+  const [photo, setPhoto] = useState(user?.profilePhoto || '');
+  const [uploading, setUploading] = useState(false);
+
+  const changePhoto = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permissão', 'Permite o acesso às fotos para mudar a foto de perfil.');
+        return;
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+        base64: true,
+      });
+      if (res.canceled || !res.assets?.[0]?.base64) return;
+      const dataUrl = `data:image/jpeg;base64,${res.assets[0].base64}`;
+      setUploading(true);
+      await usersApi.updateProfile({ profilePhoto: dataUrl });
+      setPhoto(dataUrl);
+      dispatch(setUser({ ...user, profilePhoto: dataUrl }));
+    } catch {
+      Alert.alert('Erro', 'Não foi possível guardar a foto.');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   useEffect(() => {
     usersApi.getProfile().then((res) => {
       setName(res.data.name || '');
+      setPhoto(res.data.profilePhoto || '');
       if (res.data.driver) setDriverInfo(res.data.driver);
     }).catch(() => {});
   }, []);
@@ -63,8 +95,19 @@ export default function ProfileScreen() {
       {/* Avatar */}
       <View style={styles.avatarSection}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{roleIcon}</Text>
+          {photo ? (
+            <Image source={{ uri: photo }} style={styles.avatarImg} />
+          ) : (
+            <Text style={styles.avatarText}>{roleIcon}</Text>
+          )}
         </View>
+        <TouchableOpacity style={styles.photoBtn} onPress={changePhoto} disabled={uploading}>
+          {uploading ? (
+            <ActivityIndicator color="#1a1a2e" size="small" />
+          ) : (
+            <Text style={styles.photoBtnText}>Mudar foto</Text>
+          )}
+        </TouchableOpacity>
         <View style={styles.roleBadge}>
           <Text style={styles.roleText}>{roleLabel}</Text>
         </View>
@@ -204,6 +247,15 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   avatarText: { fontSize: 44 },
+  avatarImg: { width: 90, height: 90, borderRadius: 45 },
+  photoBtn: {
+    marginTop: 10,
+    backgroundColor: '#FFD700',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  photoBtnText: { color: '#1a1a2e', fontWeight: '700', fontSize: 14 },
   roleBadge: {
     backgroundColor: '#FFD700',
     paddingHorizontal: 14,

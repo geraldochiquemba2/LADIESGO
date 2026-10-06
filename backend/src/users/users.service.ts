@@ -12,7 +12,8 @@ export class UsersService {
       include: { driver: true },
     });
     if (!user) throw new NotFoundException('User not found');
-    return user;
+    const { passwordHash: _omit, ...safe } = user;
+    return safe;
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
