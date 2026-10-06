@@ -91,6 +91,7 @@
     <h2>Registar motorista</h2>
     <p class="mut">A conta entra com a senha padrão <b>0987654321</b> e troca no primeiro login.</p>
     <div class="filters"><input id="ndName" placeholder="Nome da motorista" autocomplete="off"><input id="ndPhone" placeholder="9XX XXX XXX" inputmode="tel" autocomplete="off"></div>
+    <div class="mut sm" id="ndCheck" style="margin:2px 0 8px"></div>
     <button data-a="mkdrv" style="height:48px;border:0;border-radius:14px;background:linear-gradient(135deg,#a45bf5,#6a2bd6);color:#fff;font:inherit;font-weight:800;font-size:15px;padding:0 26px;cursor:pointer">Criar conta de motorista</button>
     <p class="mut" id="ndMsg" style="margin-top:10px"></p>
   </section>
@@ -158,6 +159,8 @@ async function load(){
 function renderUsers(){
   $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+esc(x.role||'')+(x.driver?' 🚕':'')+'</td><td><button class="chip" data-a="resetpw" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Reset</button></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem registos.</td></tr>';
 }
+let ndT=null;
+async function checkNumber(){const c=$('ndCheck');if(c)c.textContent='';const dg=(($('ndPhone')||{}).value||'').replace(/\D/g,'');const lc=dg.indexOf('244')===0?dg.slice(3):dg;if(!/^9[123459]\d{7}$/.test(lc))return;try{const r=await fetch('/api/v1/admin/users?q='+lc,{headers:ah()});const j=await r.json();const hit=((j&&j.users)||[]).find(u=>(u.phone||'').replace(/\D/g,'').endsWith(lc));if(c)c.textContent=hit?('⚠ Já registado: '+(hit.name||hit.phone)+' ('+hit.role+')'):'✓ Número disponível.'}catch(_){}}
 async function mkDriver(){
   const m=$('ndMsg');if(m)m.textContent='';
   const nm=(($('ndName')||{}).value||'').trim(),ph=(($('ndPhone')||{}).value||'').trim();
@@ -280,7 +283,7 @@ document.addEventListener('click',e=>{
   const r=e.target.closest('tr.pick');
   if(r){selTrip=r.dataset.id===selTrip?null:r.dataset.id;needFit=!!selTrip;renderActive();drawMap()}
 });
-document.addEventListener('input',e=>{if(e.target&&(e.target.id==='fText'))renderTrips();else if(e.target&&(e.target.id==='mSearch')){mapQuery=(e.target.value||'').toLowerCase().trim();renderActive();if(map)drawMap()}});
+document.addEventListener('input',e=>{if(e.target&&(e.target.id==='fText'))renderTrips();else if(e.target&&(e.target.id==='mSearch')){mapQuery=(e.target.value||'').toLowerCase().trim();renderActive();if(map)drawMap()}else if(e.target&&(e.target.id==='ndPhone')){clearTimeout(ndT);ndT=setTimeout(checkNumber,500)}});
 document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus'))renderTrips()});
 $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});

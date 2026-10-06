@@ -35,8 +35,20 @@ export class AdminService {
     });
   }
 
-  async getAllUsers(page = 1, limit = 20, role?: string) {
-    const where = role ? { role: role as any } : {};
+  async getAllUsers(page = 1, limit = 20, role?: string, q?: string) {
+    limit = Math.max(1, Math.min(limit || 20, 100));
+    const and: any[] = [];
+    if (role) and.push({ role: role as any });
+    if (q) {
+      // SQLite não suporta mode:'insensitive' — só no Postgres (números não precisam).
+      const insensitive = process.env.DATABASE_URL?.startsWith('file:')
+        ? {}
+        : { mode: 'insensitive' as const };
+      and.push({
+        OR: [{ phone: { contains: q, ...insensitive } }, { name: { contains: q, ...insensitive } }],
+      });
+    }
+    const where = and.length ? { AND: and } : {};
     const [users, total] = await Promise.all([
       this.prisma.user.findMany({
         where,
@@ -82,8 +94,12 @@ export class AdminService {
     };
   }
 
-  async getAllTrips(page = 1, limit = 20, status?: string) {
-    const where = status ? { status: status as any } : {};
+  async getAllTrips(page = 1, limit = 20, status?: string, passengerId?: string) {
+    limit = Math.max(1, Math.min(limit || 20, 100));
+    const and: any[] = [];
+    if (status) and.push({ status: status as any });
+    if (passengerId) and.push({ passengerId });
+    const where = and.length ? { AND: and } : {};
     const [trips, total] = await Promise.all([
       this.prisma.trip.findMany({
         where,
@@ -117,6 +133,13 @@ export class AdminService {
       _sum: { amount: true },
     });
 
+    const byStatusRaw = await this.prisma.trip.groupBy({
+      by: ['status'],
+      _count: { status: true },
+    });
+    const byStatus: Record<string, number> = {};
+    for (const r of byStatusRaw) byStatus[r.status as string] = r._count.status;
+
     return {
       totalUsers,
       totalDrivers,
@@ -125,6 +148,7 @@ export class AdminService {
       completedTrips,
       pendingApprovals,
       totalRevenue: revenueResult._sum.amount ?? 0,
+      byStatus,
     };
   }
 }

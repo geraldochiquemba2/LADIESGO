@@ -56,8 +56,9 @@ export class AdminController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('role') role?: string,
+    @Query('q') q?: string,
   ) {
-    return this.admin.getAllUsers(page, limit, role);
+    return this.admin.getAllUsers(page, limit, role, q);
   }
 
   @Get('trips')
@@ -65,7 +66,8 @@ export class AdminController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('status') status?: string,
+    @Query('passengerId') passengerId?: string,
   ) {
-    return this.admin.getAllTrips(page, limit, status);
+    return this.admin.getAllTrips(page, limit, status, passengerId);
   }
 }
