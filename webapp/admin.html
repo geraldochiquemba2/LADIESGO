@@ -17,6 +17,7 @@
   .card{background:#fff;border-radius:16px;padding:14px 16px;box-shadow:0 2px 8px rgba(25,10,60,.07)}
   .card small{color:var(--mut);font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
   .card b{display:block;font-size:26px;margin-top:4px;letter-spacing:-.5px}
+  .card[data-f]{cursor:pointer}.card.sel{outline:2.5px solid var(--b)}
   .tabs{display:flex;gap:8px;margin:4px 0 14px;flex-wrap:wrap}
   .tabs button{border:1.5px solid var(--ln);background:#fff;border-radius:99px;padding:8px 18px;font:inherit;font-weight:700;color:var(--mut);cursor:pointer}
   .tabs button.sel{border-color:var(--b);background:#ede9fe;color:var(--b)}
@@ -98,7 +99,7 @@ const $=id=>document.getElementById(id);
 const fmt=v=>String(Math.round(v||0)).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
-let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null;
+let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,mapFilter=null;
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
 var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
 function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[])}}
@@ -136,9 +137,9 @@ async function load(){
     const online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
     const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
     $('cards').innerHTML=
-      card('🟢 Motoristas online',online)+card('⏳ Pendentes',cSt('pending'))+
-      card('🚕 Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'))+card('✅ Concluídas',cSt('completed'))+
-      card('❌ Canceladas',cSt('cancelled'))+card('💰 Receita',fmt(receita)+' Kz');
+      card('🟢 Motoristas online',online,'drivers')+card('⏳ Pendentes',cSt('pending'),'pending')+
+      card('🚕 Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'),'active')+card('✅ Concluídas',cSt('completed'),'completed')+
+      card('❌ Canceladas',cSt('cancelled'),'cancelled')+card('💰 Receita',fmt(receita)+' Kz','completed');
     $('clock').textContent=new Date().toLocaleTimeString('pt-PT');
     renderActive();renderTrips();renderDrivers();renderHist();renderUsers();drawMap();
   }catch(e){}
@@ -146,7 +147,7 @@ async function load(){
 function renderUsers(){
   $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+(x.driver?'🚕 '+esc(x.driver.status||''):'—')+'</td></tr>').join('')||'<tr><td colspan="3" class="mut">Sem registos.</td></tr>';
 }
-const card=(l,v)=>'<div class="card"><small>'+l+'</small><b>'+v+'</b></div>';
+const card=(l,v,f)=>'<div class="card'+(mapFilter===f&&f?' sel':'')+'"'+(f?(' data-f="'+f+'"'):'')+'><small>'+l+'</small><b>'+v+'</b></div>';
 
 function drawMap(){
   if(!map)return;
@@ -169,13 +170,23 @@ function drawMap(){
     mk.addTo(layerG);drvMarks[x.id]=mk;try{const _te=mk.getTooltip();const _el=_te&&_te.getElement?_te.getElement():null;if(_el)_el.addEventListener('click',()=>{try{mk.openPopup()}catch(_){}})}catch(_){}
   });
   
-  ALL.filter(t=>t.pickup&&t.dest&&['pending','accepted','arrived','in_progress'].indexOf(t.status)>=0).forEach(t=>{
+  const showT=t=>{
+    if(!t.pickup||!t.dest)return false;
+    if(mapFilter==='drivers')return false;
+    if(mapFilter==='pending')return t.status==='pending';
+    if(mapFilter==='active')return['accepted','arrived','in_progress'].indexOf(t.status)>=0;
+    if(mapFilter==='completed')return t.status==='completed';
+    if(mapFilter==='cancelled')return t.status==='cancelled';
+    return true;
+  };
+  ALL.filter(showT).forEach(t=>{
     const c=stColor[t.status]||'#5b21c9';
-    L.polyline([[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng]],{color:c,weight:4,opacity:.85}).addTo(layerG);
-    L.circleMarker([t.pickup.lat,t.pickup.lng],{radius:6,color:'#fff',weight:2,fillColor:c,fillOpacity:1})
-      .bindTooltip(esc(t.passenger)+' → '+esc(t.dest?destName(t):'')).addTo(layerG);
-    L.marker([t.dest.lat,t.dest.lng],{interactive:false,keyboard:false,icon:L.divIcon({className:'destflag',html:'<div style="font-size:20px;line-height:20px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))">🏁</div>',iconSize:[22,22],iconAnchor:[5,20]})})
-      .bindTooltip('🏁 '+esc(t.dest?destName(t):'')).addTo(layerG);
+    const dim=!mapFilter&&(t.status==='completed'||t.status==='cancelled');
+    L.polyline([[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng]],{color:c,weight:dim?2:4,opacity:dim?.35:.85,dashArray:dim?'6 6':null}).addTo(layerG);
+    L.circleMarker([t.pickup.lat,t.pickup.lng],{radius:6,color:'#fff',weight:2,fillColor:c,fillOpacity:dim?.4:1})
+      .bindTooltip(esc(t.passenger)+' → '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-10]}).addTo(layerG);
+    L.marker([t.dest.lat,t.dest.lng],{interactive:false,keyboard:false,opacity:dim?.45:1,icon:L.divIcon({className:'destflag',html:'<div style="font-size:20px;line-height:20px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))">🏁</div>',iconSize:[22,22],iconAnchor:[5,20]})})
+      .bindTooltip('🏁 '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-16]}).addTo(layerG);
   });
   const t=(ALL||[]).find(x=>x.id===selTrip);
   if(t&&t.pickup&&t.dest){
@@ -221,6 +232,8 @@ function renderHist(){
   $('cliHist').innerHTML=agg('p').map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('');
 }
 document.addEventListener('click',e=>{
+  const f=e.target.closest('[data-f]');
+  if(f){const k=f.dataset.f;mapFilter=mapFilter===k?null:k;load();return}
   const t=e.target.closest('[data-t]');
   if(t){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b===t));
     ['monitor','trips','drivers','clients'].forEach(k=>$('sec-'+k).style.display=k===t.dataset.t?'':'none');
