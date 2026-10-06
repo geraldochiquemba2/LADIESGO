@@ -21,6 +21,9 @@
     },
     "production": {
       "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ladiesgo.onrender.com/api/v1"
+      },
       "android": {
         "buildType": "aab"
       },
