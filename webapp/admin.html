@@ -85,6 +85,8 @@
     <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Ganhos</th></tr></thead><tbody id="drvHist"></tbody></table>
   </section>
   <section id="sec-clients" style="display:none">
+    <h2>Registadas</h2>
+    <table><thead><tr><th>Cliente</th><th>Desde</th><th>Motorista</th></tr></thead><tbody id="users"><tr><td colspan="3" class="mut">A carregar…</td></tr></tbody></table>
     <h2>Histórico por cliente</h2>
     <table><thead><tr><th>Cliente</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Gasto</th></tr></thead><tbody id="cliHist"></tbody></table>
   </section>
@@ -96,7 +98,10 @@ const $=id=>document.getElementById(id);
 const fmt=v=>String(Math.round(v||0)).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
-let ALL=[],DRV=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null;
+let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null;
+// Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
+function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:t.status,ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null)}}
+function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);c.age=(d.updated!=null?d.updated:null);c.cats=d.cats||[];return c}
 const stColor={pending:'#5b21c9',accepted:'#2563eb',arrived:'#2563eb',in_progress:'#7c3aed',completed:'#12a150',cancelled:'#d92d4b'};
 
 function login(){
@@ -118,20 +123,26 @@ function boot(){
 async function load(){
   const ah=()=>{try{const t=localStorage.getItem('taxi_token');return t?{Authorization:'Bearer '+t}:{}}catch(e){return{}}};
   try{
-    const [s,t,d]=await Promise.all([
+    const [s,t,d,u]=await Promise.all([
       fetch('/api/v1/admin/stats',{headers:ah()}).then(r=>r.json()),
       fetch('/api/v1/admin/trips',{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/drivers',{headers:ah()}).then(r=>r.json())
+      fetch('/api/v1/admin/drivers',{headers:ah()}).then(r=>r.json()),
+      fetch('/api/v1/admin/users?role=PASSENGER',{headers:ah()}).then(r=>r.json()).catch(()=>({}))
     ]);
-    ALL=t.trips||[];DRV=d.drivers||[];
-    const act=(s.trips.accepted||0)+(s.trips.arrived||0)+(s.trips.in_progress||0);
+    ALL=((t&&t.trips)||[]).map(normT);DRV=((d&&d.drivers)||[]).map(normD);USERS=((u&&u.users)||[]);
+    const cSt=st=>ALL.filter(x=>x.status===st).length;
+    const online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
+    const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
     $('cards').innerHTML=
-      card('🟢 Motoristas online',s.driversOnline)+card('⏳ Pendentes',s.trips.pending||0)+
-      card('🚕 Ativas',act)+card('✅ Concluídas',s.trips.completed||0)+
-      card('❌ Canceladas',s.trips.cancelled||0)+card('💰 Receita',fmt(s.revenueKz)+' Kz');
+      card('🟢 Motoristas online',online)+card('⏳ Pendentes',cSt('pending'))+
+      card('🚕 Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'))+card('✅ Concluídas',cSt('completed'))+
+      card('❌ Canceladas',cSt('cancelled'))+card('💰 Receita',fmt(receita)+' Kz');
     $('clock').textContent=new Date().toLocaleTimeString('pt-PT');
-    renderActive();renderTrips();renderDrivers();renderHist();drawMap();
+    renderActive();renderTrips();renderDrivers();renderHist();renderUsers();drawMap();
   }catch(e){}
+}
+function renderUsers(){
+  $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+(x.driver?'🚕 '+esc(x.driver.status||''):'—')+'</td></tr>').join('')||'<tr><td colspan="3" class="mut">Sem registos.</td></tr>';
 }
 const card=(l,v)=>'<div class="card"><small>'+l+'</small><b>'+v+'</b></div>';
 
@@ -142,7 +153,7 @@ function drawMap(){
   layerG.clearLayers();if(roadLine){map.removeLayer(roadLine);roadLine=null}
   const enRoute={};ALL.forEach(t=>{if((t.status==='accepted'||t.status==='arrived')&&t.driverId)enRoute[t.driverId]=t});
   const drvMarks={};
-  DRV.forEach(x=>{
+  DRV.filter(x=>x.lat!=null&&x.lng!=null).forEach(x=>{
     const tr=enRoute[x.id];const yw=!!tr;const fc=yw?'#eab308':'#12a150';
     const car=[x.carPlate,x.carMake].filter(Boolean).join(' · ');
     const mk=L.circleMarker([x.lat,x.lng],{radius:9,color:'#fff',weight:3,fillColor:fc,fillOpacity:1});
@@ -150,7 +161,7 @@ function drawMap(){
     mk.bindPopup('<b>🚕 '+esc(x.name)+'</b> '+(yw?'<b style="color:#b45309">a caminho</b>':'<span style="color:#12a150">online</span>')
       +(car?'<br>'+esc(car):'')
       +'<br><span class="mut">'+esc((x.cats||[]).join(', '))+'</span>'
-      +'<br><span class="mut">'+x.lat.toFixed(4)+', '+x.lng.toFixed(4)+' \u00b7 h\u00e1 '+x.age+' s</span>'
+      +'<br><span class="mut">'+x.lat.toFixed(4)+', '+x.lng.toFixed(4)+(x.age!=null?(' · há '+x.age+' s'):'')+'</span>'
       +(tr?'<br><b>'+esc(tr.passenger)+'</b><br><span class="mut">'+esc(tr.from)+' \u2192 '+esc(tr.to)+'</span><br>'+fmt(tr.fare)+' Kz \u00b7 '+tr.status:''));
     mk.getPopup()._drvId=x.id;
     mk.addTo(layerG);drvMarks[x.id]=mk;try{const _te=mk.getTooltip();const _el=_te&&_te.getElement?_te.getElement():null;if(_el)_el.addEventListener('click',()=>{try{mk.openPopup()}catch(_){}})}catch(_){}
@@ -191,7 +202,7 @@ function renderTrips(){
   $('trips').innerHTML=list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+'</td><td>'+esc(x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+'</td></tr>').join('')||'<tr><td colspan="9" class="mut">Sem resultados.</td></tr>';
 }
 function renderDrivers(){
-  $('drivers').innerHTML=DRV.map(x=>'<tr><td><b>'+esc(x.name)+'</b></td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+x.lat.toFixed(4)+', '+x.lng.toFixed(4)+'</td><td class="mut">há '+x.age+' s</td></tr>').join('')||'<tr><td colspan="4" class="mut">Nenhuma motorista online.</td></tr>';
+  $('drivers').innerHTML=DRV.map(x=>'<tr><td><b>'+esc(x.name)+'</b></td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td></tr>').join('')||'<tr><td colspan="4" class="mut">Nenhuma motorista online.</td></tr>';
 }
 function agg(key){
   const m={};

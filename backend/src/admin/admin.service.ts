@@ -43,11 +43,43 @@ export class AdminService {
         skip: (page - 1) * limit,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: { driver: { select: { status: true, rating: true, totalTrips: true } } },
+        // Nunca expor passwordHash nem fcmToken ao painel.
+        select: {
+          id: true, phone: true, name: true, email: true, role: true,
+          profilePhoto: true, isActive: true, isVerified: true,
+          referralCode: true, referralCount: true, walletBalance: true,
+          createdAt: true, updatedAt: true,
+          driver: { select: { status: true, rating: true, totalTrips: true } },
+        },
       }),
       this.prisma.user.count({ where }),
     ]);
     return { users, total, page, limit };
+  }
+
+  // Motoristas online agora para o mapa do painel.
+  async getOnlineDrivers() {
+    const list = await this.prisma.driver.findMany({
+      where: { isOnline: true },
+      orderBy: { updatedAt: 'desc' },
+      take: 100,
+      include: { user: { select: { name: true, phone: true } } },
+    });
+    const now = Date.now();
+    return {
+      drivers: list.map((d) => ({
+        id: d.id,
+        name: d.user?.name || d.user?.phone || 'Motorista',
+        phone: d.user?.phone || '',
+        lat: d.currentLat,
+        lng: d.currentLng,
+        updated: d.updatedAt ? Math.max(0, Math.round((now - d.updatedAt.getTime()) / 1000)) : null,
+        carMake: [d.carMake, d.carModel].filter(Boolean).join(' '),
+        carPlate: d.carPlate,
+        status: d.status,
+        rating: d.rating,
+      })),
+    };
   }
 
   async getAllTrips(page = 1, limit = 20, status?: string) {

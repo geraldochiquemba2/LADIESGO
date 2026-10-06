@@ -35,6 +35,11 @@ export class AdminController {
     return this.admin.suspendDriver(id);
   }
 
+  @Get('drivers')
+  getDrivers() {
+    return this.admin.getOnlineDrivers();
+  }
+
   @Get('users')
   getUsers(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
