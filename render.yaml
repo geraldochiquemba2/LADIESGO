@@ -16,5 +16,9 @@ services:
         generateValue: true
       - key: JWT_EXPIRES_IN
         value: 7d
+      - key: KEEP_ALIVE_URL
+        value: https://ladiesgo.onrender.com
+      - key: KEEP_ALIVE_INTERVAL_MS
+        value: 600000
       - key: PORT
         value: 10000

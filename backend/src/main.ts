@@ -46,9 +46,25 @@ async function bootstrap() {
   // Single-service Render free: API + Web LadiesGo! no mesmo processo/porta.
   const httpAdapter = app.getHttpAdapter();
 
+  // Keep-alive INTERNO: o próprio serviço faz ping ao seu URL público
+  // a cada 10 min. Tem de ser o URL público (volta pela edge do Render como
+  // tráfego inbound) — ping a localhost não evita o sleep. Sem KEEP_ALIVE_URL
+  // fica desligado (estado honesto). O GitHub Actions continua como 2ª camada.
+  // Não fazemos heartbeat à BD de propósito: Neon acorda em ~300ms e o plano
+  // free só tem 100 CU-h/mês — always-on esgotava a meio do mês.
+  const keepAlive = {
+    enabled: !!process.env.KEEP_ALIVE_URL,
+    target: (process.env.KEEP_ALIVE_URL || '').replace(/\/+$/, '') || null,
+    intervalMs: Number(process.env.KEEP_ALIVE_INTERVAL_MS) || 10 * 60 * 1000,
+    pings: 0,
+    failures: 0,
+    lastPing: null as string | null,
+    lastStatus: null as number | string | null,
+  };
+
   // Keep-alive leve — sem BD, sem log pesado (UptimeRobot / GitHub Actions)
   httpAdapter.get('/ping', (_req: any, res: any) => {
-    res.json({ ok: true, ts: Date.now() });
+    res.json({ ok: true, ts: Date.now(), keepAlive });
   });
 
   // Proxy zona por coordenadas (Nominatim + BigDataCloud fallback) — sem auth
@@ -149,5 +165,28 @@ async function bootstrap() {
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
   console.log(`LadiesGo single-service running on port ${port}`);
+
+  if (keepAlive.enabled && keepAlive.target) {
+    const target = `${keepAlive.target}/ping`;
+    const tick = async () => {
+      try {
+        const r = await fetch(target, { signal: AbortSignal.timeout(20000) });
+        keepAlive.pings++;
+        keepAlive.lastStatus = r.status;
+      } catch (e: any) {
+        keepAlive.failures++;
+        keepAlive.lastStatus = String(e?.message || e);
+      }
+      keepAlive.lastPing = new Date().toISOString();
+    };
+    // Primeiro ping aos 30s (deixa o boot assentar), depois no intervalo
+    setTimeout(() => {
+      tick();
+      setInterval(tick, keepAlive.intervalMs);
+    }, 30 * 1000);
+    console.log(`Keep-alive interno ligado: ${target} a cada ${keepAlive.intervalMs / 60000} min`);
+  } else {
+    console.log('Keep-alive interno desligado (sem KEEP_ALIVE_URL).');
+  }
 }
 bootstrap();
