@@ -3,7 +3,8 @@ WORKDIR /app
 
 COPY backend/package*.json ./
 # Lock gerado com npm 11: alinhar o npm do Docker (10 no node:20) ou o `ci` falha
-RUN npm i -g npm@11 && npm ci
+# `install` em vez de `ci` para auto-curar entradas em falta; toolchain para prebuild do better-sqlite3 no musl
+RUN apk add --no-cache python3 make g++ && npm i -g npm@11 && npm install
 
 COPY backend/ .
 COPY webapp/ ./webapp/
