@@ -21,7 +21,14 @@ export class AuthService implements OnModuleInit {
       const pass = this.config.get<string>('ADMIN_PASSWORD', '') || '';
       if (!phone || pass.length < 4) return;
       const existing = await this.prisma.user.findUnique({ where: { phone } });
-      if (existing) return;
+      if (existing) {
+        // Número já registado (ex. como PASSAGEIRA): promove a ADMIN sem mexer na senha.
+        if (existing.role !== 'ADMIN') {
+          await this.prisma.user.update({ where: { phone }, data: { role: 'ADMIN' } });
+          console.log(`Conta ${phone} promovida a ADMIN`);
+        }
+        return;
+      }
       await this.prisma.user.create({
         data: { phone, passwordHash: await bcrypt.hash(pass, 10), role: 'ADMIN', isVerified: true, name: 'Admin' },
       });
