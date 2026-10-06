@@ -223,7 +223,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.url === '/api/v1/admin/trips') {
-      send(200, { trips: all.slice(-100).reverse().map(t => ({ id: t.id, passenger: t.passengerName, passengerId: t.passengerId || '', from: (t.pickup && t.pickup.name) || '', pickup: (t.pickup && t.pickup.lat != null) ? { lat: t.pickup.lat, lng: t.pickup.lng } : null, to: (t.dest ? t.dest.n : '') + ' · ' + (t.dest ? t.dest.a : ''), dest: (t.dest && t.dest.lat != null) ? { lat: t.dest.lat, lng: t.dest.lng } : null, cat: t.cat, fare: t.fare, pay: t.pay || '', status: t.status, by: t.by || '', reason: t.reason || '', pin: t.pin || '', sched: t.scheduledAt || 0, stopsN: (t.stops || []).length, views: (t.views || []).length, driver: t.driverName || '', driverId: t.driverId || '', ts: t.ts })) });
+      send(200, { trips: all.slice(-100).reverse().map(t => ({ id: t.id, passenger: t.passengerName, passengerId: t.passengerId || '', from: (t.pickup && t.pickup.name) || '', pickup: (t.pickup && t.pickup.lat != null) ? { lat: t.pickup.lat, lng: t.pickup.lng } : null, to: (t.dest ? t.dest.n : '') + ' · ' + (t.dest ? t.dest.a : ''), dest: (t.dest && t.dest.lat != null) ? { lat: t.dest.lat, lng: t.dest.lng } : null, cat: t.cat, fare: t.fare, pay: t.pay || '', status: t.status, by: t.by || '', reason: t.reason || '', pin: t.pin || '', sched: t.scheduledAt || 0, stopsN: (t.stops || []).length, stops: (t.stops || []), views: (t.views || []).length, driver: t.driverName || '', driverId: t.driverId || '', ts: t.ts })) });
       return;
     }
     if (req.url === '/api/v1/admin/drivers') {

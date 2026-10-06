@@ -63,7 +63,8 @@ export class AuthService implements OnModuleInit {
 
   // Número + senha. Se o número ainda não existe, cria a conta (registo
   // implícito) com o papel escolhido; se existe, valida a senha.
-  async loginOrRegister(phone: string, password: string, role?: string) {
+  // Nome e foto (do registo no site) são guardados na BD.
+  async loginOrRegister(phone: string, password: string, role?: string, name?: string, profilePhoto?: string) {
     const cleanPhone = (phone || '').trim();
     if (!cleanPhone || cleanPhone.length < 9) {
       throw new BadRequestException('Número de telefone inválido');
@@ -72,12 +73,21 @@ export class AuthService implements OnModuleInit {
       throw new BadRequestException('A senha deve ter pelo menos 4 caracteres');
     }
     const wantedRole = role === 'DRIVER' ? 'DRIVER' : 'PASSENGER';
+    const cleanName = (name || '').trim().slice(0, 60) || undefined;
+    const cleanPhoto =
+      typeof profilePhoto === 'string' && profilePhoto.startsWith('data:image/') && profilePhoto.length < 500000
+        ? profilePhoto
+        : undefined;
 
     const existing = await this.prisma.user.findUnique({ where: { phone: cleanPhone } });
     if (!existing) {
       const passwordHash = await bcrypt.hash(password, 10);
       const user = await this.prisma.user.create({
-        data: { phone: cleanPhone, passwordHash, role: wantedRole, isVerified: true },
+        data: {
+          phone: cleanPhone, passwordHash, role: wantedRole, isVerified: true,
+          ...(cleanName ? { name: cleanName } : {}),
+          ...(cleanPhoto ? { profilePhoto: cleanPhoto } : {}),
+        },
       });
       const tokens = await this.generateTokens(user.id, user.phone, user.role);
       return { user: this.withoutHash(user), ...tokens, isNew: true };
@@ -85,6 +95,18 @@ export class AuthService implements OnModuleInit {
 
     if (!existing.passwordHash || !(await bcrypt.compare(password, existing.passwordHash))) {
       throw new UnauthorizedException('Número ou senha incorretos');
+    }
+    // Preenche nome/foto em falta (ex. contas criadas só com número).
+    if ((cleanName && !existing.name) || (cleanPhoto && !existing.profilePhoto)) {
+      const updated = await this.prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          ...(cleanName && !existing.name ? { name: cleanName } : {}),
+          ...(cleanPhoto && !existing.profilePhoto ? { profilePhoto: cleanPhoto } : {}),
+        },
+      });
+      const tokens = await this.generateTokens(updated.id, updated.phone, updated.role);
+      return { user: this.withoutHash(updated), ...tokens, isNew: false };
     }
     const tokens = await this.generateTokens(existing.id, existing.phone, existing.role);
     return { user: this.withoutHash(existing), ...tokens, isNew: false };

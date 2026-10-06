@@ -80,6 +80,19 @@ export class TripsService {
 
     const finalEstimate = Math.max(0, estimate.estimatedFare - discount);
 
+    // Paragens intermédias (máx 3, saneadas) — visíveis no painel admin.
+    const cleanStops = Array.isArray(dto.stops)
+      ? dto.stops
+          .slice(0, 3)
+          .map((s) => ({
+            n: typeof s?.n === 'string' ? s.n.slice(0, 60) : '',
+            a: typeof s?.a === 'string' ? s.a.slice(0, 80) : '',
+            lat: Number(s?.lat),
+            lng: Number(s?.lng),
+          }))
+          .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+      : [];
+
     return this.prisma.trip.create({
       data: {
         passengerId,
@@ -100,6 +113,7 @@ export class TripsService {
         paymentMethod: dto.paymentMethod,
         promoCodeId: promoCodeId ?? null,
         scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
+        stops: cleanStops,
       },
       include: { passenger: { select: { name: true, phone: true, profilePhoto: true } } },
     });

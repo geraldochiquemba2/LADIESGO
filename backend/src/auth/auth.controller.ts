@@ -16,8 +16,10 @@ export class AuthController {
     @Body('phone') phone: string,
     @Body('password') password: string,
     @Body('role') role?: string,
+    @Body('name') name?: string,
+    @Body('profilePhoto') profilePhoto?: string,
   ) {
-    return this.auth.loginOrRegister(phone, password, role);
+    return this.auth.loginOrRegister(phone, password, role, name, profilePhoto);
   }
 
   @UseGuards(JwtAuthGuard)

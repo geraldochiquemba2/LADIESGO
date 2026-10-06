@@ -156,6 +156,7 @@ model Trip {
   paymentStatus  PaymentStatus @default(PENDING)
   promoCodeId    String?
   scheduledAt    DateTime?
+  stops          Json?
   cancelledBy    String?
   cancelReason   String?
   createdAt      DateTime      @default(now())

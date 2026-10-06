@@ -1,4 +1,5 @@
-import { IsString, IsNumber, IsEnum, IsOptional, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsEnum, IsOptional, IsArray, ValidateNested, ArrayMaxSize, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 
 // Local: o schema SQLite usa String em vez de enum (valores iguais aos de produção)
 export const PaymentMethod = { CASH: 'CASH', CARD: 'CARD' } as const;
@@ -19,6 +20,24 @@ export const RIDE_TYPE_MULTIPLIER: Record<RideType, number> = {
 export enum TripType {
   RIDE     = 'RIDE',
   DELIVERY = 'DELIVERY',
+}
+
+export class TripStopDto {
+  @IsOptional()
+  @IsString()
+  n?: string;
+
+  @IsOptional()
+  @IsString()
+  a?: string;
+
+  @IsNumber()
+  @Min(-90) @Max(90)
+  lat: number;
+
+  @IsNumber()
+  @Min(-180) @Max(180)
+  lng: number;
 }
 
 export class RequestTripDto {
@@ -78,6 +97,13 @@ export class RequestTripDto {
   @IsOptional()
   @IsString()
   receiverPhone?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @ValidateNested({ each: true })
+  @Type(() => TripStopDto)
+  stops?: TripStopDto[];
 }
 
 export class EstimateFareDto {
