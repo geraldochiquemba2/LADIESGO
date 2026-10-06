@@ -1,0 +1,224 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  PASSENGER
+  DRIVER
+  ADMIN
+}
+
+enum DriverStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum TripStatus {
+  REQUESTED
+  ACCEPTED
+  DRIVER_ARRIVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+}
+
+enum RideType {
+  ECONOMY
+  COMFORT
+  PREMIUM
+}
+
+enum TripType {
+  RIDE
+  DELIVERY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum NotificationType {
+  TRIP_REQUEST
+  TRIP_ACCEPTED
+  DRIVER_ARRIVED
+  TRIP_STARTED
+  TRIP_COMPLETED
+  TRIP_CANCELLED
+  PAYMENT
+  GENERAL
+}
+
+model User {
+  id             String   @id @default(cuid())
+  phone          String   @unique
+  passwordHash   String?
+  name           String?
+  email          String?  @unique
+  role           Role     @default(PASSENGER)
+  profilePhoto   String?
+  fcmToken       String?
+  isActive       Boolean  @default(true)
+  isVerified     Boolean  @default(false)
+  referralCode   String?  @unique
+  referralCount  Int      @default(0)
+  walletBalance  Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  driver           Driver?
+  tripsAsPassenger Trip[]         @relation("PassengerTrips")
+  ratingsGiven     Rating[]       @relation("RaterRatings")
+  ratingsReceived  Rating[]       @relation("RatedRatings")
+  notifications    Notification[]
+
+  @@map("users")
+}
+
+model PromoCode {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  label       String
+  discountPct Int
+  maxUses     Int       @default(1000)
+  usedCount   Int       @default(0)
+  expiresAt   DateTime?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  trips Trip[]
+
+  @@map("promo_codes")
+}
+
+model Driver {
+  id            String       @id @default(cuid())
+  userId        String       @unique
+  licenseNumber String       @unique
+  licensePhoto  String?
+  carMake       String?
+  carModel      String?
+  carYear       Int?
+  carColor      String?
+  carPlate      String       @unique
+  carPhoto      String?
+  status        DriverStatus @default(PENDING)
+  isOnline      Boolean      @default(false)
+  currentLat    Float?
+  currentLng    Float?
+  rating        Float        @default(5.0)
+  totalTrips    Int          @default(0)
+  totalEarnings Float        @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trips Trip[]
+
+  @@map("drivers")
+}
+
+model Trip {
+  id             String        @id @default(cuid())
+  passengerId    String
+  driverId       String?
+  pickupAddress  String
+  pickupLat      Float
+  pickupLng      Float
+  dropoffAddress String
+  dropoffLat     Float
+  dropoffLng     Float
+  status         TripStatus    @default(REQUESTED)
+  rideType       RideType      @default(ECONOMY)
+  tripType       TripType      @default(RIDE)
+  packageDescription String?
+  receiverName   String?
+  receiverPhone  String?
+  fareEstimate   Float
+  finalFare      Float?
+  discount       Float         @default(0)
+  distanceKm     Float?
+  durationMin    Int?
+  paymentMethod  PaymentMethod @default(CASH)
+  paymentStatus  PaymentStatus @default(PENDING)
+  promoCodeId    String?
+  scheduledAt    DateTime?
+  cancelledBy    String?
+  cancelReason   String?
+  createdAt      DateTime      @default(now())
+  acceptedAt     DateTime?
+  arrivedAt      DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  updatedAt      DateTime      @updatedAt
+
+  passenger User       @relation("PassengerTrips", fields: [passengerId], references: [id])
+  driver    Driver?    @relation(fields: [driverId], references: [id])
+  promoCode PromoCode? @relation(fields: [promoCodeId], references: [id])
+  payment   Payment?
+  ratings   Rating[]
+
+  @@map("trips")
+}
+
+model Rating {
+  id        String   @id @default(cuid())
+  tripId    String
+  raterId   String
+  ratedId   String
+  score     Int
+  comment   String?
+  createdAt DateTime @default(now())
+
+  trip  Trip @relation(fields: [tripId], references: [id])
+  rater User @relation("RaterRatings", fields: [raterId], references: [id])
+  rated User @relation("RatedRatings", fields: [ratedId], references: [id])
+
+  @@unique([tripId, raterId])
+  @@map("ratings")
+}
+
+model Payment {
+  id                 String        @id @default(cuid())
+  tripId             String        @unique
+  amount             Float
+  currency           String        @default("SAR")
+  method             PaymentMethod
+  status             PaymentStatus @default(PENDING)
+  stripePaymentId    String?
+  stripeClientSecret String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  trip Trip @relation(fields: [tripId], references: [id])
+
+  @@map("payments")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  type      NotificationType @default(GENERAL)
+  isRead    Boolean          @default(false)
+  data      Json?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}

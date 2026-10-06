@@ -1,18 +1,42 @@
 {
   "expo": {
-    "name": "TaxiApp",
-    "slug": "taxiapp-rider",
+    "name": "LadiesGo!",
+    "slug": "ladiesgo",
+    "scheme": "ladiesgo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "plugins": ["@maplibre/maplibre-react-native"],
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1b0a3c"
+    },
+    "plugins": [
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "A LadiesGo precisa da tua posição para mostrar viagens perto de ti.",
+          "locationAlwaysAndWhenInUsePermission": "A LadiesGo precisa da tua posição sempre para continuares online e receberes pedidos mesmo com o Waze aberto.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.taxiapp.rider"
+      "bundleIdentifier": "com.ladiesgo.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "A LadiesGo precisa da câmara para foto de perfil e documentos da motorista.",
+        "NSPhotoLibraryUsageDescription": "A LadiesGo precisa da galeria para escolher foto de perfil e documentos.",
+        "NSLocationWhenInUseUsageDescription": "A LadiesGo precisa da tua posição para mostrar motoristas perto de ti.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "A LadiesGo precisa da tua posição sempre para continuares online e receberes pedidos.",
+        "NSUserNotificationsUsageDescription": "A LadiesGo envia alertas de viagem: motorista encontrada, chegada e conclusão."
+      }
     },
     "android": {
-      "package": "com.taxiapp.rider",
+      "package": "com.ladiesgo.app",
       "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -24,16 +48,13 @@
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
         "REQUEST_INSTALL_PACKAGES"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "taxiapp-rider"
-      }
-    }
+    "extra": {}
   }
 }

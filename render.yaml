@@ -1,0 +1,20 @@
+# LadiesGo! — 1 serviço único no Render free (API + Web no mesmo processo)
+# ~720h/mês, cabe nos 750h grátis. DB: Neon Postgres.
+# DNS Cloudflare: ladiesgo.ao -> ladiesgo.onrender.com (proxy ON, SSL Full)
+services:
+  - type: web
+    name: ladiesgo
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /ping
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # colar URL pooled do Neon: postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: PORT
+        value: 10000

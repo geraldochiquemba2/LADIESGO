@@ -1,0 +1,19 @@
+name: keep-alive (não deixar dormir)
+
+on:
+  schedule:
+    # a cada 10 min — Render dorme aos 15 min. 1 serviço = ~720h/mês, cabe nos 750h free.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping LadiesGo single-service
+        env:
+          APP_URL: ${{ secrets.LADIESGO_URL }}
+        run: |
+          echo "Ping $APP_URL/ping"
+          curl -fsS -m 20 "$APP_URL/ping" || echo "a acordar..."
+          curl -fsS -m 20 "$APP_URL/api/v1/health" || true

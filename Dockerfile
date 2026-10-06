@@ -5,7 +5,10 @@ COPY backend/package*.json ./
 RUN npm ci
 
 COPY backend/ .
+COPY webapp/ ./webapp/
 
+# Neon = Postgres: trocar SQLite local pelo schema de produção antes do generate
+RUN cp prisma/schema.postgres.prisma prisma/schema.prisma
 RUN npx prisma generate
 RUN npm run build
 RUN ls -la dist/ && echo "Build OK"

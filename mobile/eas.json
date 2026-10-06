@@ -3,12 +3,24 @@
     "version": ">= 10.0.0"
   },
   "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    },
     "preview": {
+      "distribution": "internal",
+      "ios": {
+        "simulator": true
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
+      "autoIncrement": true,
       "android": {
         "buildType": "aab"
       },
@@ -18,6 +30,12 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "SUBSTITUIR_APPLE_ID_EMAIL",
+        "ascAppId": "SUBSTITUIR_ASC_APP_ID",
+        "appleTeamId": "SUBSTITUIR_TEAM_ID"
+      }
+    }
   }
 }
