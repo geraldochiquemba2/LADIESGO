@@ -82,6 +82,8 @@
     <table><thead><tr><th>Quando</th><th>Passageira</th><th>De → Para</th><th>Cat.</th><th>Preço</th><th>Estado</th><th>Quem cancelou</th><th>Motivo</th><th>Motorista</th></tr></thead><tbody id="trips"><tr><td colspan="9" class="mut">A carregar…</td></tr></tbody></table>
   </section>
   <section id="sec-drivers" style="display:none">
+    <h2>Aprovações pendentes</h2>
+    <table><thead><tr><th>Motorista</th><th>Licença</th><th>Viatura</th><th>Desde</th><th>Decisão</th></tr></thead><tbody id="pending"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
     <h2>Motoristas online agora</h2>
     <table><thead><tr><th>Nome</th><th>Categorias</th><th>Posição</th><th>Atualizado</th></tr></thead><tbody id="drivers"><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>
     <h2>Histórico por motorista</h2>
@@ -109,7 +111,7 @@ const $=id=>document.getElementById(id);
 const fmt=v=>String(Math.round(v||0)).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
-let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,mapFilter=null,selDrv=null,mapQuery='';
+let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,mapFilter=null,selDrv=null,mapQuery='',PEND=[];
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
 var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
 function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[])}}
@@ -138,13 +140,14 @@ function boot(){
 }
 async function load(){
   try{
-    const [s,t,d,u]=await Promise.all([
+    const [s,t,d,u,p]=await Promise.all([
       fetch('/api/v1/admin/stats',{headers:ah()}).then(r=>r.json()),
       fetch('/api/v1/admin/trips',{headers:ah()}).then(r=>r.json()),
       fetch('/api/v1/admin/drivers',{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/users?limit=100',{headers:ah()}).then(r=>r.json()).catch(()=>({}))
+      fetch('/api/v1/admin/users?limit=100',{headers:ah()}).then(r=>r.json()).catch(()=>({})),
+      fetch('/api/v1/admin/drivers/pending',{headers:ah()}).then(r=>r.json()).catch(()=>[])
     ]);
-    ALL=((t&&t.trips)||[]).map(normT);DRV=((d&&d.drivers)||[]).map(normD);USERS=((u&&u.users)||[]);
+    ALL=((t&&t.trips)||[]).map(normT);DRV=((d&&d.drivers)||[]).map(normD);USERS=((u&&u.users)||[]);PEND=Array.isArray(p)?p:[];
     const cSt=st=>ALL.filter(x=>x.status===st).length;
     const online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
     const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
@@ -153,8 +156,17 @@ async function load(){
       card('🚕 Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'),'active')+card('✅ Concluídas',cSt('completed'),'completed')+
       card('❌ Canceladas',cSt('cancelled'),'cancelled')+card('💰 Receita',fmt(receita)+' Kz','completed');
     $('clock').textContent=new Date().toLocaleTimeString('pt-PT');
-    renderActive();renderTrips();renderDrivers();renderHist();renderUsers();drawMap();
+    renderActive();renderTrips();renderDrivers();renderHist();renderUsers();renderPending();drawMap();
   }catch(e){}
+}
+function renderPending(){
+  $('pending').innerHTML=PEND.map(x=>{const u=x.user||{};const car=[x.carMake,x.carModel,x.carYear].filter(Boolean).join(' ')+' · '+(x.carPlate||'');return '<tr><td><b>'+esc(u.name||'(sem nome)')+'</b><br><span class="mut">'+esc(u.phone||'')+'</span></td><td class="mono">'+esc(x.licenseNumber||'—')+'</td><td>'+esc(car)+'<br><span class="mut">'+esc(x.carColor||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td><button class="chip" data-a="appr" data-id="'+x.id+'">Aprovar</button> <button class="chip" data-a="rej" data-id="'+x.id+'">Rejeitar</button></td></tr>'}).join('')||'<tr><td colspan="5" class="mut">Sem pendentes.</td></tr>';
+}
+async function decide(id,ok){
+  try{
+    const r=await fetch('/api/v1/admin/drivers/'+id+'/'+(ok?'approve':'reject'),{method:'PUT',headers:ah()});
+    if(!r.ok)throw 0;load();
+  }catch(e){alert('Falhou a decisão.')}
 }
 function renderUsers(){
   $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+esc(x.role||'')+(x.driver?' 🚕':'')+'</td><td><button class="chip" data-a="resetpw" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Reset</button></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem registos.</td></tr>';
@@ -276,6 +288,8 @@ document.addEventListener('click',e=>{
   if(rs){if(confirm('Repor a senha de '+(rs.dataset.n||'')+' para a padrão 0987654321?')){fetch('/api/v1/admin/users/'+rs.dataset.id+'/reset-password',{method:'POST',headers:ah()}).then(r=>{if(!r.ok)throw 0;rs.textContent='✓';setTimeout(load,800)}).catch(()=>alert('Falhou o reset.'))}return}
   const mk=e.target.closest('[data-a="mkdrv"]');
   if(mk){mkDriver();return}
+  const ap=e.target.closest('[data-a="appr"],[data-a="rej"]');
+  if(ap){decide(ap.dataset.id,ap.dataset.a==='appr');return}
   const t=e.target.closest('[data-t]');
   if(t){goTab(t.dataset.t);return}
   const dr=e.target.closest('[data-drvrow]');

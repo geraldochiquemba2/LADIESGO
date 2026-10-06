@@ -16,11 +16,13 @@ export class DriversService {
       data: { role: 'DRIVER' },
     });
 
-    // No admin panel — drivers are approved automatically on registration
-    return this.prisma.driver.create({
-      data: { userId, ...dto, status: 'APPROVED' },
+    // A motorista entra como PENDENTE — o admin aprova no painel após verificar.
+    const created = await this.prisma.driver.create({
+      data: { userId, ...dto, status: 'PENDING' },
       include: { user: true },
     });
+    const { passwordHash: _omit, ...safeUser } = created.user;
+    return { ...created, user: safeUser };
   }
 
   async getStatus(userId: string) {
