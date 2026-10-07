@@ -13,6 +13,7 @@ import { RatingsModule } from './ratings/ratings.module';
 import { AdminModule } from './admin/admin.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PromosModule } from './promos/promos.module';
+import { TurnModule } from './turn/turn.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { PromosModule } from './promos/promos.module';
     AdminModule,
     NotificationsModule,
     PromosModule,
+    TurnModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
