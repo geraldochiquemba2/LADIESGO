@@ -557,6 +557,7 @@ function __alarmTick(){
   try{
     var on=false;try{on=(typeof online!=='undefined')?!!online:false;}catch(e){}
     if(!on)return;
+    try{if((typeof myTripId!=='undefined')&&myTripId)return;}catch(e){}
     var ids=(__lastIncList||[]).map(function(t){return t.id;});
     if(!ids.length)return;
     var muted=[];try{muted=JSON.parse(localStorage.getItem('lg_mute')||'[]');}catch(e){}
