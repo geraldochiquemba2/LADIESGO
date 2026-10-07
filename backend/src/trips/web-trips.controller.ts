@@ -2,7 +2,7 @@ import { Controller, Post, Get, Body, Param, Query, UseGuards } from '@nestjs/co
 import { WebTripsService } from './web-trips.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { WebRequestTripDto, TripStatusDto, ChatPostDto } from './dto/web-trip.dto';
+import { WebRequestTripDto, TripStatusDto, ChatPostDto, CallSignalDto } from './dto/web-trip.dto';
 
 // Rotas usadas pela página web (/home) — formatos legados, dados no Neon.
 // A app móvel usa as rotas nativas do TripsController.
@@ -55,5 +55,23 @@ export class WebTripsController {
     @Body() dto: TripStatusDto,
   ) {
     return this.web.tripStatus(tripId, userId, dto);
+  }
+
+  @Get(':id/call/signal')
+  callGet(
+    @Param('id') tripId: string,
+    @CurrentUser('id') userId: string,
+    @Query('since') since?: string,
+  ) {
+    return this.web.callGet(tripId, userId, since);
+  }
+
+  @Post(':id/call/signal')
+  callPost(
+    @Param('id') tripId: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: CallSignalDto,
+  ) {
+    return this.web.callPost(tripId, userId, dto.type, dto.payload);
   }
 }
