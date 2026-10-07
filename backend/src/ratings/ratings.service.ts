@@ -20,8 +20,7 @@ export class CreateRatingDto {
 export class RatingsService {
   constructor(private prisma: PrismaService) {}
 
-  async createRating(raterId: string, dto: CreateRatingDto) {
-    if (dto.score < 1 || dto.score > 5) throw new BadRequestException('Score must be 1-5');
+  async createRating(raterId: string, dto: CreateRatingDto) {    if (dto.score < 1 || dto.score > 5) throw new BadRequestException('Score must be 1-5');
 
     const trip = await this.prisma.trip.findUnique({
       where: { id: dto.tripId },
@@ -60,5 +59,28 @@ export class RatingsService {
     }
 
     return rating;
+  }
+
+  // Viagens concluídas por avaliar (a passageira avalia antes de pedir outra).
+  async pendingFor(userId: string) {
+    const trips = await this.prisma.trip.findMany({
+      where: { passengerId: userId, status: 'COMPLETED' },
+      include: {
+        driver: { include: { user: { select: { name: true } } } },
+        ratings: { where: { raterId: userId }, select: { id: true } },
+      },
+      orderBy: { completedAt: 'desc' },
+      take: 10,
+    });
+    return {
+      pendings: trips
+        .filter((t) => t.ratings.length === 0)
+        .map((t) => ({
+          tripId: t.id,
+          driverName: t.driver?.user?.name || 'Motorista',
+          fare: t.finalFare ?? t.fareEstimate,
+          ts: t.completedAt ? t.completedAt.getTime() : new Date(t.createdAt).getTime(),
+        })),
+    };
   }
 }

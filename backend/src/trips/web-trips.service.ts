@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TripsService } from './trips.service';
 import { LiveDriversService } from '../drivers/live-drivers.service';
@@ -85,6 +85,14 @@ export class WebTripsService {
   async requestWebTrip(callerId: string, dto: WebRequestTripDto) {
     if (dto.passengerId !== callerId) {
       throw new ForbiddenException('Só podes pedir viagens para a tua conta.');
+    }
+    // Avaliação obrigatória: há viagem concluída por avaliar? Primeiro avalia.
+    const unrated = await this.prisma.trip.findFirst({
+      where: { passengerId: callerId, status: 'COMPLETED', ratings: { none: { raterId: callerId } } },
+      select: { id: true },
+    });
+    if (unrated) {
+      throw new ConflictException('Avalia a tua última viagem antes de pedir outra.');
     }
     for (const [k, v] of Object.entries({ pickupLat: dto.pickupLat, pickupLng: dto.pickupLng, destLat: dto.destLat, destLng: dto.destLng })) {
       if (!Number.isFinite(v)) throw new BadRequestException(`Coordenada inválida: ${k}`);
