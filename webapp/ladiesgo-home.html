@@ -454,6 +454,10 @@ async function __callLoop(){
       if(!m||m.ts<=__call.seen)continue;
       __call.seen=m.ts;
       if(m.from===myId)continue;
+      if(m.type==='offer'&&__call.state==='calling'&&m.from!==myId){
+        if(myId&&m.from&&String(myId)<String(m.from)){try{__callEnd(false);}catch(e){}__call.offer=m.payload;__call.state='ringing';var pr=__callPeer();__call.peerName=(pr&&pr.name)||'';__callUI('ringing');}
+        continue;
+      }
       if(m.type==='answer'&&__call.state==='calling'&&m.payload&&m.payload.sdp){
         try{await __call.pc.setRemoteDescription(new RTCSessionDescription(m.payload.sdp));}catch(e){}
       }else if(m.type==='ice'&&m.payload&&m.payload.candidate&&__call.pc){
