@@ -294,13 +294,18 @@ export class WebTripsService {
   async callGet(tripId: string, userId: string, since?: string) {
     await this.assertParticipant(tripId, userId);
     const sinceMs = Number(since) || 0;
+    // Sem `since` (primeira sondagem): só últimos 60s pelo relógio do
+    // servidor — evita tocar por chamadas antigas e dispensa o relógio do
+    // telemóvel (que pode estar adiantado e filtrar tudo).
+    const cutoff = sinceMs > 0 ? sinceMs : Date.now() - 60 * 1000;
     const rows = await this.prisma.callSignal.findMany({
-      where: { tripId, createdAt: { gt: new Date(sinceMs) } },
+      where: { tripId, createdAt: { gt: new Date(cutoff) } },
       orderBy: { createdAt: 'asc' },
       take: 50,
     });
     return {
       signals: rows.map((s) => ({ from: s.senderId, type: s.type, payload: s.payload, ts: s.createdAt.getTime() })),
+      now: Date.now(),
     };
   }
   async tripStatus(tripId: string, userId: string, body: TripStatusDto) {

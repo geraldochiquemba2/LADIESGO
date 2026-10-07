@@ -391,7 +391,7 @@ async function startNativeCall(){
   __call.trip=tid;__call.peerName=(peer&&peer.name)||'';__call.muted=false;
   var s=null;
   try{s=await __pcSetup();}catch(e){__callUI('failed','Sem microfone. Verifica a permissão.');return;}
-  __call.pc=s.pc;__call.mic=s.stream;__call.state='calling';__call.seen=Date.now();__call.offer=null;
+  __call.pc=s.pc;__call.mic=s.stream;__call.state='calling';__call.seen=0;__call.offer=null;
   __callUI('calling');
   try{
     var offer=await s.pc.createOffer({offerToReceiveAudio:true});
@@ -439,14 +439,15 @@ async function __callLoop(){
     var myId=(me&&me.id)||'';
     if(__call.state==='idle'){
       var since=0;try{since=Number(localStorage.getItem('lg_call_seen')||0)||0;}catch(e){}
-      if(!since){since=Date.now()-60000;try{localStorage.setItem('lg_call_seen',String(since));}catch(e){}}
       var j=await __callFetch(tid,since);
+      if(!j)return;
+      var nowSrv=Number((j&&j.now)||0)||Date.now();
       var msgs=(j&&j.signals)||[];
       var offer=null;
-      msgs.forEach(function(m){if(m&&m.ts>since){since=m.ts;if(m.type==='offer'&&m.from!==myId)offer=m;}});
-      try{localStorage.setItem('lg_call_seen',String(since));}catch(e){}
+      msgs.forEach(function(m){if(m&&m.ts>since){since=m.ts;if(m.type==='offer'&&m.from!==myId&&(nowSrv-m.ts)<45000)offer=m;}});
+      try{localStorage.setItem('lg_call_seen',String(since||nowSrv));}catch(e){}
       if(offer){
-        __call.trip=tid;__call.offer=offer.payload;__call.state='ringing';__call.seen=Date.now();
+        __call.trip=tid;__call.offer=offer.payload;__call.state='ringing';__call.seen=since;
         var peer=__callPeer();__call.peerName=(peer&&peer.name)||'';
         __callUI('ringing');
       }
