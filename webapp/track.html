@@ -10,7 +10,7 @@
   var card=document.getElementById('card');
   if(!id){card.innerHTML='<h2>LadiesGo! 💜</h2><p class="mut">Ligação inválida. Pede à passageira o link de partilha.</p>';return;}
   var map=L.map('map').setView([-8.839,13.289],13);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  var _tileErr=0;L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).on('tileerror',function(){try{_tileErr++;if(_tileErr===12){map.eachLayer(function(l){try{if(l._url&&l._url.indexOf('openstreetmap')>=0)map.removeLayer(l);}catch(e){}});L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);}}catch(e){}}).addTo(map);
   map.attributionControl.setPrefix('© OpenStreetMap');
   var carMk=null,destMk=null,pickMk=null,stopMks=[],done=false;
   var ST={REQUESTED:'À espera de motorista',ACCEPTED:'Motorista a caminho',DRIVER_ARRIVED:'Motorista chegou',IN_PROGRESS:'Em viagem',COMPLETED:'Viagem concluída ✓',CANCELLED:'Viagem cancelada'};
