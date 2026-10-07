@@ -342,6 +342,7 @@ function __callNet(){
     el.textContent=st?('rede: '+st+(ks.length?' · '+ks.join(','):'')):'';
   }catch(e){}
 }
+function __callTick(){
   try{
     var el=document.getElementById('callTimer');
     if(el&&__call.acceptT){var s=Math.floor((Date.now()-__call.acceptT)/1000);var m=Math.floor(s/60);s=s%60;el.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
