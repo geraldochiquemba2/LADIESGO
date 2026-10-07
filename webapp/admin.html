@@ -214,7 +214,7 @@ async function load(){
     renderActive();renderTrips();renderDrivers();renderHist();renderUsers();renderPending();paintPagers();drawMap();
   }catch(e){}
 }
-function renderPending(){
+function renderPending(){try{var pb=$('pending');if(pb){var tbl=pb.closest?pb.closest('table'):null;if(tbl){tbl.style.display='none';var h=tbl.previousElementSibling;if(h&&h.tagName==='H2')h.style.display='none';}}}catch(e){}return;
   $('pending').innerHTML=PEND.map(x=>{const u=x.user||{};const car=[x.carMake,x.carModel,x.carYear].filter(Boolean).join(' ')+' · '+(x.carPlate||'');return '<tr><td><b>'+esc(u.name||'(sem nome)')+'</b><br><span class="mut">'+esc(u.phone||'')+'</span></td><td class="mono">'+esc(x.licenseNumber||'—')+'</td><td>'+esc(car)+'<br><span class="mut">'+esc(x.carColor||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td><button class="chip" data-a="appr" data-id="'+x.id+'">Aprovar</button> <button class="chip" data-a="rej" data-id="'+x.id+'">Rejeitar</button></td></tr>'}).join('')||'<tr><td colspan="5" class="mut">Sem pendentes.</td></tr>';
 }
 async function decide(id,ok){
