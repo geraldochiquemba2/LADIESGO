@@ -252,6 +252,24 @@ async function mkDriver(){
 }
 const card=(l,v,f)=>'<div class="card'+(mapFilter===f&&f?' sel':'')+'"'+(f?(' data-f="'+f+'"'):'')+'><small>'+l+'</small><b>'+v+'</b></div>';
 
+var roadCache={},roadPending={};
+function roadLeg(key,a,b,opt){
+  try{
+    opt=opt||{};
+    if(!a||!b||a[0]==null||b[0]==null)return;
+    var now=Date.now();
+    var e=roadCache[key];
+    var pts=(e&&e.pts&&e.pts.length>1&&(!e.exp||e.exp>now))?e.pts:null;
+    if(!pts&&!roadPending[key]&&Object.keys(roadPending).length<3){
+      roadPending[key]=1;
+      fetch('/api/route?from='+a[0]+','+a[1]+'&to='+b[0]+','+b[1]).then(function(r){return r.ok?r.json():null;}).then(function(j){
+        try{delete roadPending[key];}catch(err){}
+        if(j&&j.points&&j.points.length>1){try{if(Object.keys(roadCache).length>300)roadCache={};roadCache[key]={pts:j.points,exp:opt.ttl?now+opt.ttl:0};}catch(err){}}
+      }).catch(function(){try{delete roadPending[key];}catch(err){}});
+    }
+    L.polyline(pts||[a,b],{color:opt.color||'#5b21c9',weight:opt.weight||4,opacity:opt.opacity!=null?opt.opacity:.85,dashArray:opt.dash||null}).addTo(layerG);
+  }catch(err){}
+}
 function drawMap(){
   if(!map)return;
   if(openDrv&&!(DRV||[]).some(x=>x.id===openDrv))openDrv=null;
@@ -286,13 +304,13 @@ function drawMap(){
   ALL.filter(showT).forEach(t=>{
     const c=stColor[t.status]||'#5b21c9';
     const dim=!mapFilter&&(t.status==='completed'||t.status==='cancelled');
-    L.polyline([[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng]],{color:c,weight:dim?2:4,opacity:dim?.35:.85,dashArray:dim?'6 6':null}).addTo(layerG);
+    roadLeg('t:'+t.id,[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng],{color:c,weight:dim?2:4,opacity:dim?.35:.85,dash:dim?'6 6':null,ttl:0});
     L.circleMarker([t.pickup.lat,t.pickup.lng],{radius:6,color:'#fff',weight:2,fillColor:'#2563eb',fillOpacity:dim?.4:1,tripId:t.id})
       .bindTooltip(esc(t.passenger)+' → '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-10],interactive:true}).bindPopup(tripPopup(t)).addTo(layerG);
     L.marker([t.dest.lat,t.dest.lng],{keyboard:false,opacity:dim?.45:1,tripId:t.id,icon:L.divIcon({className:'destflag',html:'<div style="font-size:20px;line-height:20px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))">🏁</div>',iconSize:[22,22],iconAnchor:[5,20]})})
       .bindTooltip('🏁 '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-16],interactive:true}).bindPopup(tripPopup(t)).addTo(layerG);
   });
-  try{Object.keys(enRoute||{}).forEach(function(did){var tr=enRoute[did];var dv=null;try{dv=(DRV||[]).find(function(x){return x.id===did;});}catch(e){}if(!tr||!tr.pickup||!dv||dv.lat==null||dv.lng==null)return;L.polyline([[dv.lat,dv.lng],[tr.pickup.lat,tr.pickup.lng]],{color:'#eab308',weight:3,opacity:.9,dashArray:'10 8'}).addTo(layerG);});}catch(e){}
+  try{Object.keys(enRoute||{}).forEach(function(did){var tr=enRoute[did];var dv=null;try{dv=(DRV||[]).find(function(x){return x.id===did;});}catch(e){}if(!tr||!tr.pickup||!dv||dv.lat==null||dv.lng==null)return;roadLeg('d:'+did,[dv.lat,dv.lng],[tr.pickup.lat,tr.pickup.lng],{color:'#eab308',weight:3,opacity:.9,dash:'10 8',ttl:60000});});}catch(e){}
   const t=(ALL||[]).find(x=>x.id===selTrip);
   if(t&&t.pickup&&t.dest){
     if(needFit){needFit=false;map.flyToBounds(L.latLngBounds([[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng]]).pad(.3));}
