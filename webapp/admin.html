@@ -90,10 +90,11 @@
   <section id="sec-drivers" style="display:none">
     <h2>Aprovações pendentes</h2>
     <table><thead><tr><th>Motorista</th><th>Licença</th><th>Viatura</th><th>Desde</th><th>Decisão</th></tr></thead><tbody id="pending"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
+    <div class="filters"><input id="drvQ" placeholder="Pesquisar motorista, viatura, matricula..."></div>
     <h2>Motoristas online agora</h2>
     <table><thead><tr><th>Nome</th><th>Viatura</th><th>Categorias</th><th>Posição</th><th>Atualizado</th></tr></thead><tbody id="drivers"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
     <h2>Histórico por motorista</h2>
-    <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Ganhos</th></tr></thead><tbody id="drvHist"></tbody></table>
+    <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Ganhos</th></tr></thead><tbody id="drvHist"></tbody></table><div id="drvDetail" style="margin-top:14px"></div>
   </section>
   <section id="sec-new" style="display:none">
     <h2>Registar motorista</h2>
@@ -120,7 +121,7 @@ const $=id=>document.getElementById(id);
 const fmt=v=>String(Math.round(v||0)).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
-let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,openTrip=null,mapFilter=null,selDrv=null,mapQuery='',PEND=[],STATS=null,uPage=1,uRole='',uQ='',UTOT=0,selUser=null,tPage=1,TTOT=0;
+let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,openTrip=null,mapFilter=null,selDrv=null,drvQ='',mapQuery='',PEND=[],STATS=null,uPage=1,uRole='',uQ='',UTOT=0,selUser=null,tPage=1,TTOT=0;
 var STM_R={pending:'REQUESTED',accepted:'ACCEPTED',arrived:'DRIVER_ARRIVED',in_progress:'IN_PROGRESS',completed:'COMPLETED',cancelled:'CANCELLED'};
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
 var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
@@ -346,7 +347,7 @@ function renderTrips(){
   $('trips').innerHTML=list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(CAT_PT[x.cat]||x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+(STM_PT[x.status]||x.status)+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+'</td><td>'+esc(x.vehicle||'—')+'</td></tr>').join('')||'<tr><td colspan="10" class="mut">Sem resultados.</td></tr>';
 }
 function renderDrivers(){
-  $('drivers').innerHTML=DRV.map(x=>'<tr data-drvrow="'+x.id+'" class="pick'+(x.id===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b></td><td>'+esc(([x.carMake,x.carPlate].filter(Boolean).join(' · '))||'—')+'</td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td></tr>').join('')||'<tr><td colspan="5" class="mut">Nenhuma motorista online.</td></tr>';
+  $('drivers').innerHTML=DRV.filter(function(x){try{var q=(drvQ||'').toLowerCase();if(!q)return true;return ((x.name||'')+' '+(x.carMake||'')+' '+(x.carPlate||'')).toLowerCase().indexOf(q)>=0;}catch(e){return true;}}).map(x=>'<tr data-drvrow="'+x.id+'" class="pick'+(x.id===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b></td><td>'+esc(([x.carMake,x.carPlate].filter(Boolean).join(' · '))||'—')+'</td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td></tr>').join('')||'<tr><td colspan="5" class="mut">Nenhuma motorista online.</td></tr>';
 }
 function agg(key){
   const m={};
@@ -361,10 +362,12 @@ function agg(key){
 function renderHist(){
   if(selUser)return;
   const dh=agg('d'),dl=selDrv?dh.filter(x=>x.key===selDrv):dh;
-  $('drvHist').innerHTML=dl.map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('')||(selDrv?'<tr><td colspan="5" class="mut">Sem viagens para esta motorista.</td></tr>':'');
+  $('drvHist').innerHTML=dl.map(x=>'<tr data-drvrow="'+x.key+'" class="pick'+(x.key===selDrv?' sel':'')+'"><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('')||(selDrv?'<tr><td colspan="5" class="mut">Sem viagens para esta motorista.</td></tr>':'');
   $('cliHist').innerHTML=agg('p').map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('');
 }
+function renderDrvDetail(){try{var box=document.getElementById('drvDetail');if(!box)return;if(!selDrv){box.innerHTML='';return;}var trips=ALL.filter(function(t){return (t.driverId||('n:'+t.driver))===selDrv;});var live=null;try{live=DRV.filter(function(x){return x.id===selDrv;})[0]||null;}catch(e){}var nm=(trips[0]&&trips[0].driver)||(live&&live.name)||'';var ok=0,cx=0,amt=0;trips.forEach(function(t){if(t.status==='completed'){ok++;amt+=t.fare||0;}if(t.status==='cancelled')cx++;});var rows=trips.slice().sort(function(a,b){return (b.ts||0)-(a.ts||0);}).slice(0,30).map(function(t){var dt='';try{dt=new Date(t.ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){}return '<tr><td class="mut">'+dt+'</td><td><b>'+esc(t.passenger||'-')+'</b></td><td>'+esc(t.from||'')+' > '+esc(t.to||'')+'</td><td>'+esc(t.cat||'')+'</td><td class="mono">'+fmt(t.fare||0)+' Kz</td><td>'+esc(t.status||'')+'</td></tr>';}).join('');box.innerHTML='<h2>Tudo da motorista: '+esc(nm)+'</h2>'+(live?'<p class="mut">Online agora: '+esc(([live.carMake,live.carPlate].filter(Boolean).join(' · '))||'')+' · '+live.lat+', '+live.lng+'</p>':'<p class="mut">Offline de momento.</p>')+'<p><b>'+trips.length+' viagens · '+ok+' concluidas · '+cx+' canceladas · '+fmt(amt)+' Kz</b></p><table><thead><tr><th>Quando</th><th>Passageira</th><th>Rota</th><th>Cat.</th><th>Preco</th><th>Estado</th></tr></thead><tbody>'+(rows||'<tr><td colspan="6" class="mut">Sem viagens.</td></tr>')+'</tbody></table>';}catch(e){}}
 function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50)}
+document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}}catch(e){}});
 document.addEventListener('click',e=>{
   const f=e.target.closest('[data-f]');
   if(f){const k=f.dataset.f;mapFilter=mapFilter===k?null:k;load();return}
@@ -386,7 +389,7 @@ document.addEventListener('click',e=>{
   const t=e.target.closest('[data-t]');
   if(t){goTab(t.dataset.t);return}
   const dr=e.target.closest('[data-drvrow]');
-  if(dr){const k=dr.dataset.drvrow;selDrv=selDrv===k?null:k;renderDrivers();renderHist();return}
+  if(dr){const k=dr.dataset.drvrow;selDrv=selDrv===k?null:k;renderDrivers();renderHist();renderDrvDetail();return}
   const r=e.target.closest('tr.pick');
   if(r){selTrip=r.dataset.id===selTrip?null:r.dataset.id;needFit=!!selTrip;renderActive();drawMap()}
 });
