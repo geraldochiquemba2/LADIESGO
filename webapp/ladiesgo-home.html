@@ -436,7 +436,7 @@ async function __callLoop(){
     var myId=(me&&me.id)||'';
     if(__call.state==='idle'){
       var since=0;try{since=Number(localStorage.getItem('lg_call_seen')||0)||0;}catch(e){}
-      if(!since){try{localStorage.setItem('lg_call_seen',String(Date.now()));}catch(e){}return;}
+      if(!since){since=Date.now()-60000;try{localStorage.setItem('lg_call_seen',String(since));}catch(e){}}
       var j=await __callFetch(tid,since);
       var msgs=(j&&j.signals)||[];
       var offer=null;
