@@ -114,7 +114,7 @@ model Driver {
   carModel      String?
   carYear       Int?
   carColor      String?
-  carPlate      String       @unique
+  carPlate      String?      @unique
   carPhoto      String?
   status        DriverStatus @default(PENDING)
   isOnline      Boolean      @default(false)

@@ -78,6 +78,18 @@ export class DriversService {
     return this.prisma.driver.update({ where: { userId }, data });
   }
 
+  // Eliminar os dados da viatura (ecrã Viaturas). Sem viatura, a motorista
+  // não pode ficar online até registar outra.
+  async deleteVehicle(userId: string) {
+    const driver = await this.prisma.driver.findUnique({ where: { userId } });
+    if (!driver) throw new NotFoundException('Driver not found');
+    await this.prisma.driver.update({
+      where: { userId },
+      data: { carMake: null, carModel: null, carYear: null, carColor: null, carPlate: null },
+    });
+    return { ok: true };
+  }
+
   // Posição em tempo real (página web da motorista): guarda em memória
   // com expiração (TTL 45s). Se já houver registo na BD, espelha isOnline
   // e a posição (painel admin fica verdadeiro). Sem erro se não houver.

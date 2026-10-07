@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Put, Body, Query, ParseFloatPipe, DefaultValuePipe, ParseIntPipe, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Put, Delete, Body, Query, ParseFloatPipe, DefaultValuePipe, ParseIntPipe, UseGuards } from '@nestjs/common';
 import { DriversService } from './drivers.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Public } from '../common/decorators/public.decorator';
@@ -36,6 +36,11 @@ export class DriversController {
   @Put('vehicle')
   updateVehicle(@CurrentUser('id') userId: string, @Body() dto: UpdateVehicleDto) {
     return this.drivers.updateVehicle(userId, dto);
+  }
+
+  @Delete('vehicle')
+  deleteVehicle(@CurrentUser('id') userId: string) {
+    return this.drivers.deleteVehicle(userId);
   }
 
   @Public()
