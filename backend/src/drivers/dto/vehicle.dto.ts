@@ -28,4 +28,9 @@ export class UpdateVehicleDto {
   @IsString()
   @MaxLength(12)
   carPlate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  licenseNumber?: string;
 }

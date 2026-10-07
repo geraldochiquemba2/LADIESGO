@@ -110,7 +110,10 @@ export class WebTripsService {
   // ---- Uma viagem no formato da página (?view=web) ----
   async getWebTrip(tripId: string, userId: string) {
     const trip = await this.assertAccess(tripId, userId);
-    return this.formatTrip(trip);
+    const isPax = trip.passengerId === userId;
+    const isDrv = !!trip.driver && trip.driver.userId === userId;
+    // Telefones só para os próprios intervenientes (nunca em listagens).
+    return this.formatTrip(trip, { driverPhone: isPax || isDrv, passengerPhone: isDrv });
   }
 
   // ---- Pedidos à espera de motorista (GET /trips/incoming) ----
@@ -257,7 +260,7 @@ export class WebTripsService {
   }
 
   // ---- Formato exato que a página web espera ----
-  formatTrip(t: any) {
+  formatTrip(t: any, opts?: { driverPhone?: boolean; passengerPhone?: boolean }) {
     const [n, ...rest] = String(t.dropoffAddress || '').split(' · ');
     const driverUserId = t.driver?.userId || null;
     let live: any = null;
@@ -269,6 +272,7 @@ export class WebTripsService {
       id: t.id,
       passengerId: t.passengerId,
       passengerName: t.passenger?.name || t.passenger?.phone || 'Passageira',
+      passengerPhone: opts?.passengerPhone ? t.passenger?.phone || null : null,
       pickup: { lat: t.pickupLat, lng: t.pickupLng, name: t.pickupAddress },
       dest: { n, a: rest.join(' · '), lat: t.dropoffLat, lng: t.dropoffLng },
       stops: Array.isArray(t.stops) ? t.stops : [],
@@ -290,6 +294,15 @@ export class WebTripsService {
             lat: live ? live.lat : (t.driver?.currentLat ?? null),
             lng: live ? live.lng : (t.driver?.currentLng ?? null),
             name: t.driver?.user?.name || t.driver?.user?.phone || 'Motorista',
+            phone: opts?.driverPhone ? t.driver?.user?.phone || null : null,
+            rating: t.driver?.rating ?? null,
+            totalTrips: t.driver?.totalTrips ?? null,
+            carMake: t.driver?.carMake ?? null,
+            carModel: t.driver?.carModel ?? null,
+            carColor: t.driver?.carColor ?? null,
+            carPlate: t.driver?.carPlate ?? t.vehiclePlate ?? null,
+            snapLabel: t.vehicleLabel ?? null,
+            snapPlate: t.vehiclePlate ?? null,
           }
         : null,
     };

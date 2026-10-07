@@ -76,6 +76,15 @@ export class DriversService {
       }
       data.carPlate = plate;
     }
+    if (dto.licenseNumber !== undefined) {
+      const lic = dto.licenseNumber.trim().slice(0, 30);
+      if (!lic) throw new BadRequestException('Nº da carta inválido.');
+      const clash = await this.prisma.driver.findUnique({ where: { licenseNumber: lic } });
+      if (clash && clash.id !== driver.id) {
+        throw new ConflictException('Carta já usada noutra motorista.');
+      }
+      data.licenseNumber = lic;
+    }
     if (!Object.keys(data).length) throw new BadRequestException('Nada para guardar.');
     return this.prisma.driver.update({ where: { userId }, data });
   }

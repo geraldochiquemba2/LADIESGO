@@ -78,7 +78,7 @@
   <section id="sec-monitor">
     <div class="filters"><input id="mSearch" placeholder="Pesquisar motorista, matrícula, passageira ou local…"></div>
     <div id="map"></div>
-    <div class="legend"><span><i style="background:#12a150"></i>concluída</span><span><i style="background:#d92d4b"></i>cancelada</span><span><i style="background:#12a150"></i>online</span><span><i style="background:#eab308"></i>a caminho</span></div>
+    <div class="legend"><span><i style="background:#2563eb"></i>passageiro</span><span><i style="background:#12a150"></i>online</span><span><i style="background:#eab308"></i>a caminho</span><span><i style="background:#5b21c9"></i>pedido</span><span><i style="background:#f59e0b"></i>aceite</span><span><i style="background:#f97316"></i>chegou</span><span><i style="background:#7c3aed"></i>em viagem</span><span><i style="background:#0d9488"></i>concluída</span><span><i style="background:#d92d4b"></i>cancelada</span></div>
     <h2>Ativas agora (clica para ver no mapa)</h2>
     <table><thead><tr><th>Passageira</th><th>De → Para</th><th>Cat.</th><th>Preço</th><th>Estado</th><th>Motorista</th></tr></thead><tbody id="active"><tr><td colspan="6" class="mut">Sem viagens ativas.</td></tr></tbody></table>
   </section>
@@ -129,7 +129,7 @@ function stopsHtml(x){const s=x.stops||[];if(!s.length)return '';return '<br><sp
 function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);c.age=(d.updated!=null?d.updated:null);c.cats=d.cats||[];return c}
 function matchDrv(x){const q=mapQuery;if(!q)return true;return ((x.name||'')+' '+(x.phone||'')+' '+(x.carPlate||'')+' '+(x.carMake||'')+' '+(x.cats||[]).join(' ')).toLowerCase().indexOf(q)>=0}
 function matchTrip(t){const q=mapQuery;if(!q)return true;return ((t.passenger||'')+' '+(t.driver||'')+' '+(t.from||'')+' '+(t.to||'')+' '+((t.stops||[]).map(p=>p.n||p.a||'').join(' '))).toLowerCase().indexOf(q)>=0}
-const stColor={pending:'#5b21c9',accepted:'#2563eb',arrived:'#2563eb',in_progress:'#7c3aed',completed:'#12a150',cancelled:'#d92d4b'};
+const stColor={pending:'#5b21c9',accepted:'#f59e0b',arrived:'#f97316',in_progress:'#7c3aed',completed:'#0d9488',cancelled:'#d92d4b'};
 
 const ah=()=>{try{const t=localStorage.getItem('taxi_token');return t?{Authorization:'Bearer '+t}:{}}catch(e){return{}}};
 function login(){
@@ -284,11 +284,12 @@ function drawMap(){
     const c=stColor[t.status]||'#5b21c9';
     const dim=!mapFilter&&(t.status==='completed'||t.status==='cancelled');
     L.polyline([[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng]],{color:c,weight:dim?2:4,opacity:dim?.35:.85,dashArray:dim?'6 6':null}).addTo(layerG);
-    L.circleMarker([t.pickup.lat,t.pickup.lng],{radius:6,color:'#fff',weight:2,fillColor:c,fillOpacity:dim?.4:1})
-      .bindTooltip(esc(t.passenger)+' → '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-10]}).bindPopup(tripPopup(t)).addTo(layerG);
+    L.circleMarker([t.pickup.lat,t.pickup.lng],{radius:6,color:'#fff',weight:2,fillColor:'#2563eb',fillOpacity:dim?.4:1})
+      .bindTooltip(esc(t.passenger)+' → '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-10],interactive:true}).bindPopup(tripPopup(t)).addTo(layerG);
     L.marker([t.dest.lat,t.dest.lng],{keyboard:false,opacity:dim?.45:1,icon:L.divIcon({className:'destflag',html:'<div style="font-size:20px;line-height:20px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))">🏁</div>',iconSize:[22,22],iconAnchor:[5,20]})})
-      .bindTooltip('🏁 '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-16]}).bindPopup(tripPopup(t)).addTo(layerG);
+      .bindTooltip('🏁 '+esc(t.dest?destName(t):''),{permanent:true,direction:'top',offset:[0,-16],interactive:true}).bindPopup(tripPopup(t)).addTo(layerG);
   });
+  try{Object.keys(enRoute||{}).forEach(function(did){var tr=enRoute[did];var dv=null;try{dv=(DRV||[]).find(function(x){return x.id===did;});}catch(e){}if(!tr||!tr.pickup||!dv||dv.lat==null||dv.lng==null)return;L.polyline([[dv.lat,dv.lng],[tr.pickup.lat,tr.pickup.lng]],{color:'#eab308',weight:3,opacity:.9,dashArray:'10 8'}).addTo(layerG);});}catch(e){}
   const t=(ALL||[]).find(x=>x.id===selTrip);
   if(t&&t.pickup&&t.dest){
     if(needFit){needFit=false;map.flyToBounds(L.latLngBounds([[t.pickup.lat,t.pickup.lng],[t.dest.lat,t.dest.lng]]).pad(.3));}
