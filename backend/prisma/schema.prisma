@@ -139,6 +139,18 @@ model ChatMessage {
   @@map("chat_messages")
 }
 
+model CallSignal {
+  id        String   @id @default(cuid())
+  tripId    String
+  senderId  String
+  type      String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([tripId, createdAt])
+  @@map("call_signals")
+}
+
 model Rating {
   id        String   @id @default(cuid())
   tripId    String

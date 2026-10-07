@@ -101,6 +101,15 @@ export class TripStatusDto {
   driverName?: string;
 }
 
+// Corpo do POST /trips/:id/call/signal (chamada de voz nativa).
+export class CallSignalDto {
+  @IsString()
+  @MaxLength(16)
+  type!: string;
+
+  @IsOptional()
+  payload?: any;
+}
 // Corpo do POST /trips/:id/chat (página web).
 export class ChatPostDto {
   @IsOptional()

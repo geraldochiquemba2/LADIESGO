@@ -254,7 +254,47 @@ export class WebTripsService {
     return { ok: true };
   }
 
-  // ---- Mudança de estado (POST /trips/:id/status) ----
+  // ---- Sinalização da chamada de voz (só intervenientes) ----
+  private async assertParticipant(tripId: string, userId: string) {
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      include: { driver: { select: { userId: true } } },
+    });
+    if (!trip) throw new NotFoundException('Viagem não encontrada.');
+    const ok = trip.passengerId === userId || (!!trip.driver && trip.driver.userId === userId);
+    if (!ok) throw new ForbiddenException('Sem acesso a esta viagem.');
+    return trip;
+  }
+
+  private static readonly CALL_TYPES = ['offer', 'answer', 'ice', 'reject', 'end', 'cancel'];
+
+  async callPost(tripId: string, userId: string, type: string, payload?: any) {
+    await this.assertParticipant(tripId, userId);
+    if (WebTripsService.CALL_TYPES.indexOf(String(type)) < 0) {
+      throw new BadRequestException('Sinal inválido.');
+    }
+    await this.prisma.callSignal.create({
+      data: { tripId, senderId: userId, type: String(type), payload: payload ?? null },
+    });
+    // Higiene: apaga sinais com +10min (sem bloquear).
+    void this.prisma.callSignal
+      .deleteMany({ where: { tripId, createdAt: { lt: new Date(Date.now() - 10 * 60 * 1000) } } })
+      .catch(() => {});
+    return { ok: true };
+  }
+
+  async callGet(tripId: string, userId: string, since?: string) {
+    await this.assertParticipant(tripId, userId);
+    const sinceMs = Number(since) || 0;
+    const rows = await this.prisma.callSignal.findMany({
+      where: { tripId, createdAt: { gt: new Date(sinceMs) } },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+    });
+    return {
+      signals: rows.map((s) => ({ from: s.senderId, type: s.type, payload: s.payload, ts: s.createdAt.getTime() })),
+    };
+  }
   async tripStatus(tripId: string, userId: string, body: TripStatusDto) {
     const st = String(body.status || '');
     if (st === 'accepted') {
@@ -320,6 +360,7 @@ export class WebTripsService {
       pay: payToWeb(t.paymentMethod),
       fare: t.finalFare ?? t.fareEstimate,
       fareEstimate: t.fareEstimate,
+      distanceKm: t.distanceKm ?? null,
       cat: RIDE_TO_WEB[t.rideType] || 'Económico',
       status: DB_TO_WEB_STATUS[t.status] || 'pending',
       scheduledAt: t.scheduledAt ? new Date(t.scheduledAt).getTime() : 0,
