@@ -20,8 +20,10 @@ export class DriversService {
     });
 
     // A motorista entra como PENDENTE — o admin aprova no painel após verificar.
+    // Exceção: conta criada pelo admin (adminCreated) — entra APROVADA direta,
+    // sem "em análise", porque o admin já a registou.
     const created = await this.prisma.driver.create({
-      data: { userId, ...dto, status: 'PENDING' },
+      data: { userId, ...dto, status: user.adminCreated ? 'APPROVED' : 'PENDING' },
       include: { user: true },
     });
     const { passwordHash: _omit, ...safeUser } = created.user;

@@ -137,6 +137,7 @@ export class AuthService implements OnModuleInit {
         name: cleanName,
         isVerified: true,
         mustChangePassword: true,
+        adminCreated: true,
       },
     });
     const lic = (docs?.licenseNumber || '').trim().slice(0, 30);
