@@ -337,9 +337,8 @@ function __callNet(){
   try{
     var el=document.getElementById('callNet');
     if(!el)return;
-    var st='';try{st=__call.pc?(__call.pc.iceConnectionState||''):'';}catch(e){}
-    var ks=[];try{for(var k in (__call.cands||{}))ks.push(k);}catch(e){}
-    el.textContent=st?('rede: '+st+(ks.length?' · '+ks.join(','):'')):'';
+    el.style.display='none';
+    el.textContent='';
   }catch(e){}
 }
 function __callTick(){
