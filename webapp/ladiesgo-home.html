@@ -347,14 +347,26 @@ async function __sigPost(type,payload){
 }
 async function __pcSetup(){
   if(typeof RTCPeerConnection==='undefined')throw new Error('no-webrtc');
-  var pc=new RTCPeerConnection({iceServers:[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']}]});
+  var pc=new RTCPeerConnection({iceServers:[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turns:openrelay.metered.ca:443'],username:'openrelay',credential:'openrelay'}]});
   var stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});
   stream.getTracks().forEach(function(tr){pc.addTrack(tr,stream);});
   var audio=document.getElementById('callAudio');
   if(!audio){audio=document.createElement('audio');audio.id='callAudio';audio.autoplay=true;try{audio.setAttribute('playsinline','');}catch(e){}document.body.appendChild(audio);}
   pc.ontrack=function(ev){try{audio.srcObject=ev.streams[0];var p=audio.play();if(p&&p.catch)p.catch(function(){});}catch(e){}};
   pc.onicecandidate=function(ev){if(ev.candidate){__sigPost('ice',{candidate:ev.candidate});}};
-  pc.oniceconnectionstatechange=function(){try{if(pc.iceConnectionState==='failed'&&__call.state==='active'){__callUI('failed','Ligação fraca.');}}catch(e){}};
+  pc.oniceconnectionstatechange=function(){
+    try{
+      var st=pc.iceConnectionState;
+      if((st==='connected'||st==='completed')&&__call.state!=='idle'&&__call.state!=='active'){
+        __call.state='active';__call.acceptT=Date.now();__callUI('active');
+        try{if(__call.tickT)clearInterval(__call.tickT);}catch(e){}
+        __call.tickT=setInterval(__callTick,1000);
+        try{var ae=document.getElementById('callAudio');if(ae&&ae.paused){var pr=ae.play();if(pr&&pr.catch)pr.catch(function(){});}}catch(e){}
+      }else if(st==='failed'){
+        if(__call.state==='calling'||__call.state==='ringing'){__callEnd(false);__callUI('failed','Sem ligação direta. Usa a chamada normal.');}
+      }
+    }catch(e){}
+  };
   return{pc:pc,stream:stream};
 }
 async function startNativeCall(){
@@ -384,10 +396,8 @@ async function __callAccept(){
     var answer=await s.pc.createAnswer();
     await s.pc.setLocalDescription(answer);
     await __sigPost('answer',{sdp:s.pc.localDescription});
-    __call.state='active';__call.acceptT=Date.now();__call.muted=false;
-    __callUI('active');
-    try{if(__call.tickT)clearInterval(__call.tickT);}catch(e){}
-    __call.tickT=setInterval(__callTick,1000);
+    __call.state='calling';__call.muted=false;
+    __callUI('calling');
   }catch(e){__callEnd(false);__callUI('failed','Falhou a atender.');}
 }
 function __callEnd(post,how){
@@ -435,7 +445,7 @@ async function __callLoop(){
       __call.seen=m.ts;
       if(m.from===myId)continue;
       if(m.type==='answer'&&__call.state==='calling'&&m.payload&&m.payload.sdp){
-        try{await __call.pc.setRemoteDescription(new RTCSessionDescription(m.payload.sdp));__call.state='active';__call.acceptT=Date.now();__callUI('active');try{if(__call.tickT)clearInterval(__call.tickT);}catch(e){}__call.tickT=setInterval(__callTick,1000);}catch(e){}
+        try{await __call.pc.setRemoteDescription(new RTCSessionDescription(m.payload.sdp));}catch(e){}
       }else if(m.type==='ice'&&m.payload&&m.payload.candidate&&__call.pc){
         try{await __call.pc.addIceCandidate(new RTCIceCandidate(m.payload.candidate));}catch(e){}
       }else if((m.type==='reject'||m.type==='end'||m.type==='cancel')&&(__call.state==='calling'||__call.state==='active'||__call.state==='ringing')){
@@ -551,7 +561,7 @@ function __onIncoming(list){
     }
   }catch(e){}
 }
-document.addEventListener('click',function(){try{var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;__beep.ctx=__beep.ctx||new AC();if(__beep.ctx.state==='suspended'){try{__beep.ctx.resume().catch(function(){});}catch(e){}}}catch(e){}},true);
+document.addEventListener('click',function(){try{var AC=window.AudioContext||window.webkitAudioContext;if(AC){__beep.ctx=__beep.ctx||new AC();if(__beep.ctx.state==='suspended'){try{__beep.ctx.resume().catch(function(){});}catch(e){}}}}catch(e){}try{var _ae=document.getElementById('callAudio');if(_ae&&_ae.paused){var _pp=_ae.play();if(_pp&&_pp.catch)_pp.catch(function(){});}}catch(e){}},true);
 var __lastIncList=[];
 function __alarmTick(){
   try{
