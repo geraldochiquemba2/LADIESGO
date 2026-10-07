@@ -507,6 +507,7 @@ async function __submitRating(){
 }
 /* Alerta de novos pedidos para a motorista: som + vibração. */
 var __lastIncIds=[];
+var __lastBeep=0;
 function __beep(){
   try{
     var AC=window.AudioContext||window.webkitAudioContext;
