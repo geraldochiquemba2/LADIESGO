@@ -84,7 +84,7 @@
   </section>
   <section id="sec-trips" style="display:none">
     <h2>Histórico de viagens</h2>
-    <div class="filters"><input id="fText" placeholder="Pesquisar passageira, motorista ou local…"><select id="fStatus"><option value="">Todos os estados</option><option>pending</option><option>accepted</option><option>arrived</option><option>in_progress</option><option>completed</option><option>cancelled</option></select></div>
+    <div class="filters"><input id="fText" placeholder="Pesquisar passageira, motorista ou local…"><select id="fStatus"><option value="">Todos os estados</option><option value="pending">Pendente</option><option value="accepted">Aceite</option><option value="arrived">Chegou</option><option value="in_progress">Em viagem</option><option value="completed">Concluída</option><option value="cancelled">Cancelada</option></select></div>
     <table><thead><tr><th>Quando</th><th>Passageira</th><th>De → Para</th><th>Cat.</th><th>Preço</th><th>Estado</th><th>Quem cancelou</th><th>Motivo</th><th>Motorista</th><th>Viatura</th></tr></thead><tbody id="trips"><tr><td colspan="10" class="mut">A carregar…</td></tr></tbody></table>
   </section>
   <section id="sec-drivers" style="display:none">
@@ -130,6 +130,8 @@ function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);
 function matchDrv(x){const q=mapQuery;if(!q)return true;return ((x.name||'')+' '+(x.phone||'')+' '+(x.carPlate||'')+' '+(x.carMake||'')+' '+(x.cats||[]).join(' ')).toLowerCase().indexOf(q)>=0}
 function matchTrip(t){const q=mapQuery;if(!q)return true;return ((t.passenger||'')+' '+(t.driver||'')+' '+(t.from||'')+' '+(t.to||'')+' '+((t.stops||[]).map(p=>p.n||p.a||'').join(' '))).toLowerCase().indexOf(q)>=0}
 const stColor={pending:'#5b21c9',accepted:'#f59e0b',arrived:'#f97316',in_progress:'#7c3aed',completed:'#0d9488',cancelled:'#d92d4b'};
+var STM_PT={pending:'Pendente',accepted:'Aceite',arrived:'Chegou',in_progress:'Em viagem',completed:'Concluída',cancelled:'Cancelada'};
+var CAT_PT={ECONOMY:'Económico',COMFORT:'Conforto',PREMIUM:'Premium'};
 
 const ah=()=>{try{const t=localStorage.getItem('taxi_token');return t?{Authorization:'Bearer '+t}:{}}catch(e){return{}}};
 function login(){
@@ -319,11 +321,11 @@ function renderActive(){
   const a=ALL.filter(t=>['pending','accepted','arrived','in_progress'].indexOf(t.status)>=0&&matchTrip(t));
   $('active').innerHTML=a.map(row6).join('')||'<tr><td colspan="6" class="mut">Sem viagens ativas.</td></tr>';
 }
-const row6=x=>'<tr class="pick'+(x.id===selTrip?' sel':'')+'" data-id="'+x.id+'"><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td><td>'+esc(x.driver||'—')+'</td></tr>';
+const row6=x=>'<tr class="pick'+(x.id===selTrip?' sel':'')+'" data-id="'+x.id+'"><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(CAT_PT[x.cat]||x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+(STM_PT[x.status]||x.status)+'</span></td><td>'+esc(x.driver||'—')+'</td></tr>';
 function renderTrips(){
   const q=($('fText').value||'').toLowerCase(),st=$('fStatus').value;
   const list=ALL.filter(x=>(!st||x.status===st)&&(!q||(x.passenger+' '+x.driver+' '+x.from+' '+x.to+' '+(x.vehicle||'')).toLowerCase().indexOf(q)>=0));
-  $('trips').innerHTML=list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+'</td><td>'+esc(x.vehicle||'—')+'</td></tr>').join('')||'<tr><td colspan="10" class="mut">Sem resultados.</td></tr>';
+  $('trips').innerHTML=list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(CAT_PT[x.cat]||x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+(STM_PT[x.status]||x.status)+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+'</td><td>'+esc(x.vehicle||'—')+'</td></tr>').join('')||'<tr><td colspan="10" class="mut">Sem resultados.</td></tr>';
 }
 function renderDrivers(){
   $('drivers').innerHTML=DRV.map(x=>'<tr data-drvrow="'+x.id+'" class="pick'+(x.id===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b></td><td>'+esc(([x.carMake,x.carPlate].filter(Boolean).join(' · '))||'—')+'</td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td></tr>').join('')||'<tr><td colspan="5" class="mut">Nenhuma motorista online.</td></tr>';
