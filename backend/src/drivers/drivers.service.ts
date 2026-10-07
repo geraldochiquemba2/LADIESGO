@@ -108,16 +108,25 @@ export class DriversService {
     if (dto.offline) {
       this.live.remove(dto.id);
     } else {
+      if (!Number.isFinite(dto.lat) || !Number.isFinite(dto.lng)) {
+        throw new BadRequestException('Coordenadas inválidas.');
+      }
       this.live.upsert({
         id: dto.id,
         name: dto.name || 'Motorista',
-        lat: dto.lat,
-        lng: dto.lng,
+        lat: dto.lat!,
+        lng: dto.lng!,
         cats: dto.cats ?? [],
         carMake: dto.carMake,
         carPlate: dto.carPlate,
       });
     }
+    // Espelho na BD sem bloquear a resposta (a rede até ao Neon oscila).
+    void this.mirrorOnlineState(dto).catch(() => {});
+    return { ok: true };
+  }
+
+  private async mirrorOnlineState(dto: PositionDto) {
     try {
       const row = await this.prisma.driver.findUnique({ where: { userId: dto.id } });
       if (row) {
@@ -125,15 +134,13 @@ export class DriversService {
           where: { userId: dto.id },
           data: dto.offline
             ? { isOnline: false }
-            : { isOnline: true, currentLat: dto.lat, currentLng: dto.lng },
+            : { isOnline: true, currentLat: dto.lat!, currentLng: dto.lng! },
         });
       }
     } catch {}
-    return { ok: true };
   }
 
-  async getNearbyDrivers(lat: number, lng: number, radiusKm = 25) {
-    const live = this.live
+  async getNearbyDrivers(lat: number, lng: number, radiusKm = 25) {    const live = this.live
       .list()
       .filter((d) => this.haversine(lat, lng, d.lat, d.lng) <= radiusKm)
       .map((d) => ({
@@ -151,10 +158,21 @@ export class DriversService {
         source: 'live',
       }));
 
-    const dbDrivers = await this.prisma.driver.findMany({
-      where: { isOnline: true, status: 'APPROVED', currentLat: { not: null }, currentLng: { not: null } },
-      include: { user: { select: { name: true, profilePhoto: true } } },
-    });
+    const dbDrivers: any[] = await Promise.race([
+      this.prisma.driver.findMany({
+        where: {
+          isOnline: true,
+          status: 'APPROVED',
+          currentLat: { not: null },
+          currentLng: { not: null },
+          // Sem frescura, sem fantasma: posição da BD com +90s é tratada como offline.
+          updatedAt: { gte: new Date(Date.now() - 90 * 1000) },
+        },
+        include: { user: { select: { name: true, profilePhoto: true } } },
+      }),
+      // Se o Neon estiver a dormir, responde só com o tempo real (rápido).
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('db-timeout')), 8000)),
+    ]).catch(() => []);
 
     const seen = new Set(live.map((d) => d.userId));
     const db = dbDrivers

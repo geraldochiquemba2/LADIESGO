@@ -72,7 +72,7 @@ export class AdminService {
   // Motoristas online agora para o mapa do painel.
   async getOnlineDrivers() {
     const list = await this.prisma.driver.findMany({
-      where: { isOnline: true },
+      where: { isOnline: true, updatedAt: { gte: new Date(Date.now() - 90 * 1000) } },
       orderBy: { updatedAt: 'desc' },
       take: 100,
       include: { user: { select: { name: true, phone: true } } },
@@ -125,7 +125,7 @@ export class AdminService {
       await Promise.all([
         this.prisma.user.count({ where: { role: 'PASSENGER' } }),
         this.prisma.driver.count(),
-        this.prisma.driver.count({ where: { isOnline: true, status: 'APPROVED' } }),
+        this.prisma.driver.count({ where: { isOnline: true, status: 'APPROVED', updatedAt: { gte: new Date(Date.now() - 90 * 1000) } } }),
         this.prisma.trip.count(),
         this.prisma.trip.count({ where: { status: 'COMPLETED' } }),
         this.prisma.driver.count({ where: { status: 'PENDING' } }),
