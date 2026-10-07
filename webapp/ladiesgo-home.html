@@ -354,7 +354,7 @@ function __callTick(){
 var __quota={remaining:Infinity,perCall:120,exhausted:false};
 async function __quotaFetch(){try{var r=await fetch('/api/v1/turn/quota',{headers:__callH()});if(!r.ok)return __quota;var j=await r.json();__quota={remaining:Number(j.remainingSec),perCall:Number(j.perCallSec)||120,exhausted:!!j.exhausted};paintQuota();}catch(e){}return __quota;}
 function __quotaFmt(s){if(!isFinite(s))return'';s=Math.max(0,Math.floor(s));return Math.floor(s/60)+' min';}
-function paintQuota(){try{var els=document.querySelectorAll('.qfree');for(var i=0;i<els.length;i++){var el=els[i];if(__quota.exhausted){el.textContent='Chamadas grátis terminaram — usa a chamada normal 📞';}else{el.textContent='📞 Chamadas grátis: '+__quotaFmt(__quota.remaining)+' restantes · máx 2 min/chamada';}}}catch(e){}}
+function paintQuota(){try{var els=document.querySelectorAll('.qfree');for(var i=0;i<els.length;i++){var el=els[i];if(__quota.exhausted){el.textContent='Chamadas grátis terminaram — usa a chamada normal 📞';}else{el.textContent='📞 Chamadas grátis: '+__quotaFmt(__quota.remaining)+' restantes · máx 2 min/chamada';}}}catch(e){}try{var btns=document.querySelectorAll('[data-a="call"],[data-a="dcall"]');for(var j=0;j<btns.length;j++){var b=btns[j];if(__quota.exhausted){b.style.opacity='.45';b.style.filter='grayscale(1)';}else{b.style.opacity='';b.style.filter='';}}}catch(e){}}
 async function __sigPost(type,payload){
   try{
     var tid=__call.trip;if(!tid)return {ok:false,ts:0};
