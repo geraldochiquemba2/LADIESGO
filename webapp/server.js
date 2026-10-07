@@ -230,6 +230,22 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Quota local (mock): 500MB ≈ 800 min partilhados, 2 min/chamada.
+  if (req.url.startsWith('/api/v1/turn/quota') && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ remainingSec: 48000, budgetSec: 48000, usedSec: 0, perCallSec: 120, exhausted: false, mock: true }));
+    return;
+  }
+  if (req.url === '/api/v1/turn/log' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ remainingSec: 48000, budgetSec: 48000, usedSec: 0, perCallSec: 120, exhausted: false, mock: true }));
+    });
+    return;
+  }
+
   // Zona por coordenadas (proxy com fallback + registo)
   if (req.url.startsWith('/api/zone') && req.method === 'GET') {
     try {

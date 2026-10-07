@@ -204,6 +204,18 @@ model CallSignal {
   @@map("call_signals")
 }
 
+// Duração das chamadas de voz (quota grátis mensal partilhada).
+model CallLog {
+  id         String   @id @default(cuid())
+  tripId     String
+  userId     String
+  durationSec Int     @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("call_logs")
+}
+
 model Rating {
   id        String   @id @default(cuid())
   tripId    String
