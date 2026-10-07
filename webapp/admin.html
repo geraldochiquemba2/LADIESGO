@@ -18,6 +18,12 @@
   .card small{color:var(--mut);font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
   .card b{display:block;font-size:26px;margin-top:4px;letter-spacing:-.5px}
   .card[data-f]{cursor:pointer}.card.sel{outline:2.5px solid var(--b)}
+  .umodal{position:fixed;inset:0;z-index:600;background:rgba(20,0,50,.6);display:none;align-items:center;justify-content:center;padding:18px}
+  .umodal.on{display:flex}
+  .ubox{position:relative;background:#fff;border-radius:20px;padding:22px 18px;max-width:480px;width:100%;max-height:86vh;overflow-y:auto}
+  .ux{position:absolute;top:8px;right:10px;width:34px;height:34px;border-radius:50%;border:0;background:#f3e6ff;color:#6a2bd6;font-weight:800;font-size:15px;cursor:pointer}
+  .urow{display:flex;gap:12px;align-items:center}
+  .uav{flex:none;width:58px;height:58px;border-radius:50%;background:#f3e6ff;display:grid;place-items:center;font-size:24px;font-weight:800;color:#6a2bd6;overflow:hidden}
   .tabs{display:flex;gap:8px;margin:4px 0 14px;flex-wrap:wrap}
   .tabs button{border:1.5px solid var(--ln);background:#fff;border-radius:99px;padding:8px 18px;font:inherit;font-weight:700;color:var(--mut);cursor:pointer}
   .tabs button.sel{border-color:var(--b);background:#ede9fe;color:var(--b)}
@@ -105,6 +111,7 @@
   </section>
 </div>
 </div>
+<div class="umodal" id="umodal"><div class="ubox"><button class="ux" data-a="closeuser" aria-label="Fechar">✕</button><div id="ubody"></div></div></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const $=id=>document.getElementById(id);
@@ -166,16 +173,23 @@ function injectAdminUI(){
     if(ut&&!document.getElementById('uTools')){const w=document.createElement('div');w.id='uTools';w.innerHTML='<div class="filters"><input id="uSearch" placeholder="Pesquisar nome ou número…" autocomplete="off"><select id="uRole"><option value="">Todos os papéis</option><option>PASSENGER</option><option>DRIVER</option><option>ADMIN</option></select></div><div class="mut" id="uPager" style="margin:6px 0 8px"></div>';ut.before(w)}
   }catch(e){}
 }
+function closeUser(){const m=$('umodal');if(m)m.classList.remove('on')}
 async function showUserTrips(id,name){
-  selUser={id:id,name:name};
-  $('histT').innerHTML='Histórico · '+esc(name)+' <button class="chip" data-a="clearuser">× limpar</button>';
-  if(!window._histOrig)window._histOrig=$('histWrap').innerHTML;
-  $('histWrap').innerHTML='<table><thead><tr><th>Quando</th><th>De → Para</th><th>Preço</th><th>Estado</th></tr></thead><tbody><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>';
+  const m=$('umodal'),b=$('ubody');
+  if(!m||!b)return;
+  const u=((USERS||[]).find(x=>x.id===id))||{};
+  const ini=esc((((u.name||name)||'?').trim()[0]||'?').toUpperCase());
+  const ph=u.profilePhoto||'';
+  b.innerHTML='<div class="urow"><div class="uav">'+(ph?'<img src="'+ph+'" alt="" style="width:100%;height:100%;object-fit:cover">':ini)+'</div><div style="flex:1;min-width:0"><b style="font-size:17px">'+esc(u.name||name||'(sem nome)')+'</b><br><span class="mut">'+esc(u.phone||'')+' · '+esc(u.role||'')+'</span><br><span class="mut sm">Desde '+dstr(u.createdAt)+'</span>'+(u.driver?'<br><span class="mut sm">Motorista: '+esc(u.driver.status||'')+' · '+u.driver.totalTrips+' viagens</span>':'')+'</div></div>'
+    +'<div style="display:flex;gap:8px;margin:12px 0"><button class="chip" data-a="resetpw" data-id="'+id+'" data-n="'+esc(u.name||u.phone||'')+'">Repor senha (0987654321)</button></div>'
+    +'<h2 style="margin-top:4px">Viagens</h2><div id="utrips"><p class="mut">A carregar…</p></div>';
+  m.classList.add('on');
   try{
     const r=await fetch('/api/v1/admin/trips?passengerId='+id+'&limit=100',{headers:ah()});const j=await r.json();
     const list=((j&&j.trips)||[]).map(normT);
-    $('histWrap').innerHTML='<table><thead><tr><th>Quando</th><th>De → Para</th><th>Preço</th><th>Estado</th></tr></thead><tbody>'+(list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem viagens.</td></tr>')+'</tbody></table>';
-  }catch(e){$('histWrap').innerHTML='<table><tbody><tr><td class="mut">Falhou.</td></tr></tbody></table>'}
+    const el=document.getElementById('utrips');
+    if(el)el.innerHTML=list.length?'<table><thead><tr><th>Quando</th><th>De → Para</th><th>Preço</th><th>Estado</th></tr></thead><tbody>'+list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td></tr>').join('')+'</tbody></table>':'<p class="mut">Sem viagens.</p>';
+  }catch(e){const el=document.getElementById('utrips');if(el)el.innerHTML='<p class="mut">Falhou.</p>'}
 }
 async function load(){
   try{
@@ -331,7 +345,8 @@ document.addEventListener('click',e=>{
   const vu=e.target.closest('[data-a="usertrips"]');
   if(vu){showUserTrips(vu.dataset.id,vu.dataset.n||'');return}
   const cu=e.target.closest('[data-a="clearuser"]');
-  if(cu){selUser=null;$('histT').textContent='Histórico por cliente';if(window._histOrig)$('histWrap').innerHTML=window._histOrig;renderHist();return}
+  if(cu){closeUser();return}
+  if(e.target&&e.target.id==='umodal'){closeUser();return}
   const ap=e.target.closest('[data-a="appr"],[data-a="rej"]');
   if(ap){decide(ap.dataset.id,ap.dataset.a==='appr');return}
   const t=e.target.closest('[data-t]');
