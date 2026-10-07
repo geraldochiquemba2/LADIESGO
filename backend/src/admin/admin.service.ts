@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -97,8 +97,7 @@ export class AdminService {
     };
   }
 
-  async getAllTrips(page = 1, limit = 20, status?: string, passengerId?: string) {
-    limit = Math.max(1, Math.min(limit || 20, 100));
+  async getAllTrips(page = 1, limit = 20, status?: string, passengerId?: string) {    limit = Math.max(1, Math.min(limit || 20, 100));
     const and: any[] = [];
     if (status) and.push({ status: status as any });
     if (passengerId) and.push({ passengerId });
@@ -118,6 +117,23 @@ export class AdminService {
       this.prisma.trip.count({ where }),
     ]);
     return { trips, total, page, limit };
+  }
+
+  // Admin cancela qualquer viagem ativa (pedidos mortos, emergências).
+  async cancelTripAsAdmin(tripId: string, adminId: string, reason?: string) {
+    const trip = await this.prisma.trip.findUnique({ where: { id: tripId } });
+    if (!trip) throw new NotFoundException('Viagem não encontrada.');
+    if (['COMPLETED', 'CANCELLED'].includes(trip.status)) {
+      throw new BadRequestException('Viagem já terminada.');
+    }
+    return this.prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        status: 'CANCELLED',
+        cancelledBy: adminId,
+        cancelReason: (reason || '').slice(0, 80) || 'Cancelada pelo admin',
+      },
+    });
   }
 
   async getDashboardStats() {

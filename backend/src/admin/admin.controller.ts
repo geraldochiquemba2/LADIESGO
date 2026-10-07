@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Param, Body, Query, DefaultValuePipe, Parse
 import { AdminService } from './admin.service';
 import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 
@@ -69,5 +70,14 @@ export class AdminController {
     @Query('passengerId') passengerId?: string,
   ) {
     return this.admin.getAllTrips(page, limit, status, passengerId);
+  }
+
+  @Post('trips/:id/cancel')
+  cancelTrip(
+    @Param('id') id: string,
+    @CurrentUser('id') adminId: string,
+    @Body('reason') reason?: string,
+  ) {
+    return this.admin.cancelTripAsAdmin(id, adminId, reason);
   }
 }

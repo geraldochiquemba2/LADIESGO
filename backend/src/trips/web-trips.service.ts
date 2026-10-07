@@ -53,6 +53,34 @@ export class WebTripsService {
     private live: LiveDriversService,
   ) {}
 
+  private lastSweep = 0;
+
+  // Pedidos mortos: REQUESTED sem motorista há +10min (ou agendados há muito
+  // passados) passam a CANCELLED sozinhos — a motorista deixa de os ver e
+  // a passageira, se voltar, vê "cancelada" em vez de espera infinita.
+  private isStale(t: { createdAt: Date; scheduledAt: Date | null }): boolean {
+    const now = Date.now();
+    if (t.createdAt.getTime() > now - 10 * 60 * 1000) return false;
+    if (!t.scheduledAt) return true;
+    return t.scheduledAt.getTime() < now - 15 * 60 * 1000;
+  }
+
+  private async sweepStale() {
+    const now = Date.now();
+    if (now - this.lastSweep < 60 * 1000) return;
+    this.lastSweep = now;
+    try {
+      await this.prisma.trip.updateMany({
+        where: {
+          status: 'REQUESTED',
+          createdAt: { lt: new Date(now - 10 * 60 * 1000) },
+          OR: [{ scheduledAt: null }, { scheduledAt: { lt: new Date(now - 15 * 60 * 1000) } }],
+        },
+        data: { status: 'CANCELLED', cancelledBy: 'system', cancelReason: 'Sem resposta das motoristas' },
+      });
+    } catch {}
+  }
+
   // ---- Pedido da passageira (POST /trips/request-web) ----
   async requestWebTrip(callerId: string, dto: WebRequestTripDto) {
     if (dto.passengerId !== callerId) {
@@ -109,7 +137,19 @@ export class WebTripsService {
 
   // ---- Uma viagem no formato da página (?view=web) ----
   async getWebTrip(tripId: string, userId: string) {
-    const trip = await this.assertAccess(tripId, userId);
+    let trip = await this.assertAccess(tripId, userId);
+    if (trip.status === 'REQUESTED' && this.isStale(trip)) {
+      try {
+        trip = await this.prisma.trip.update({
+          where: { id: tripId },
+          data: { status: 'CANCELLED', cancelledBy: 'system', cancelReason: 'Sem resposta das motoristas' },
+          include: {
+            passenger: { select: { name: true, phone: true } },
+            driver: { include: { user: { select: { name: true, phone: true } } } },
+          },
+        });
+      } catch {}
+    }
     const isPax = trip.passengerId === userId;
     const isDrv = !!trip.driver && trip.driver.userId === userId;
     // Telefones só para os próprios intervenientes (nunca em listagens).
@@ -122,6 +162,7 @@ export class WebTripsService {
       throw new ForbiddenException('Só podes ver os teus pedidos.');
     }
     await this.assertDriver(callerId);
+    await this.sweepStale();
     const now = Date.now();
     const trips = await this.prisma.trip.findMany({
       where: {
