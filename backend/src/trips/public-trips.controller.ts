@@ -21,6 +21,7 @@ export class PublicTripsController {
     const firstName = String(t.driver?.user?.name || 'Motorista').split(' ')[0];
     const paxFirst = String(t.passenger?.name || 'Passageira').split(' ')[0];
     const car = [t.driver?.carMake, t.driver?.carModel, t.driver?.carColor].filter(Boolean).join(' ');
+    const carFull = [t.driver?.carMake, t.driver?.carModel, t.driver?.carYear ? String(t.driver.carYear) : '', t.driver?.carColor].filter(Boolean).join(' ');
     return {
       id: t.id,
       status: t.status,
@@ -29,7 +30,7 @@ export class PublicTripsController {
       stops: (t.stops as any[]) || [],
       passenger: { name: paxFirst, phone: t.passenger?.phone || '' },
       driver: t.driver
-        ? { name: firstName, phone: t.driver.user?.phone || '', lat: t.driver.currentLat, lng: t.driver.currentLng, car, plate: t.driver.carPlate }
+        ? { name: firstName, phone: t.driver.user?.phone || '', lat: t.driver.currentLat, lng: t.driver.currentLng, car, carFull, year: t.driver.carYear || null, plate: t.driver.carPlate, photo: t.driver.carPhoto || '', rating: t.driver.rating ?? 5 }
         : null,
       updatedAt: t.updatedAt,
     };

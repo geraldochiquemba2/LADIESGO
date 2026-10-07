@@ -35,9 +35,10 @@
       var started=(st==='DRIVER_ARRIVED'||st==='IN_PROGRESS'||st==='COMPLETED');
       document.getElementById('st').innerHTML='<span class="pill">'+(ST[st]||st)+'</span>';
       var info=[];
-      if(t.driver&&t.driver.name)info.push('🚗 '+t.driver.name+(t.driver.car?' · '+t.driver.car:'')+(t.driver.plate?' · '+t.driver.plate:''));
+      if(t.driver&&t.driver.name){var carTxt=t.driver.carFull||t.driver.car||'';info.push('🚗 '+t.driver.name+(carTxt?' · '+carTxt:'')+(t.driver.plate?' · '+t.driver.plate:'')+(t.driver.rating?' · ★ '+t.driver.rating:''));}
       if(t.dest&&t.dest.name)info.push('📍 '+(t.dest.name||''));
       document.getElementById('info').textContent=info.join('  —  ')||'A acompanhar…';
+      var cw=document.getElementById('carphoto');if(t.driver&&t.driver.photo){if(!cw){var im=document.createElement('img');im.id='carphoto';im.alt='Viatura';im.style.cssText='width:100%;border-radius:12px;margin-top:8px;max-height:150px;object-fit:cover';document.getElementById('card').appendChild(im);}document.getElementById('carphoto').src=t.driver.photo;}else if(cw){cw.remove();}
       paintContacts(t);
       var pts=[];
       // Bola da recolha só antes de arrancar; depois: só carro + destino + paragens.
@@ -49,7 +50,7 @@
       stops.slice(0,3).forEach(function(s,i){var ll=s.lat!=null?[s.lat,s.lng]:s.c;var mk=L.marker(ll,{icon:stopIcon(i+1),interactive:false});mk.addTo(map);stopMks.push(mk);pts.push(ll);});
       if(t.driver&&t.driver.lat!=null){if(!carMk)carMk=L.marker([t.driver.lat,t.driver.lng],{icon:emoji('🚕'),interactive:false}).addTo(map);else carMk.setLatLng([t.driver.lat,t.driver.lng]);pts.push([t.driver.lat,t.driver.lng]);}
       if(pts.length){try{map.flyToBounds(L.latLngBounds(pts).pad(0.3),{duration:0.8});}catch(e){}}
-      if(st==='COMPLETED'||st==='CANCELLED'){done=true;}
+      if(st==='COMPLETED'||st==='CANCELLED'){if(carMk){try{map.removeLayer(carMk);}catch(e){}carMk=null;}done=true;}
     }catch(e){document.getElementById('info').textContent='Sem ligação. A tentar de novo…';}
   }
   tick();setInterval(tick,4000);
