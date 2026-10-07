@@ -274,7 +274,7 @@ function openCall(name,phone){
   }catch(e){return false;}
 }
 document.addEventListener('click',function(e){var b=e.target&&e.target.closest?e.target.closest('[data-a="dcall"]'):null;if(!b)return;try{var t=null;try{t=(typeof myTrip!=='undefined')?myTrip:null;}catch(e2){}var nm=(t&&(t.passengerName||''))||'Passageira';var ph2=(t&&(t.passengerPhone||''))||'';if(ph2&&typeof openCall==='function'&&openCall(nm,ph2))return;if(typeof openChat==='function')openChat();}catch(e){}});
-(function(){try{setTimeout(function(){try{__restoreTrip();}catch(e){}try{__restoreOnline();}catch(e){}},1800);}catch(e){}try{setInterval(function(){try{__chatTick();}catch(e){}},5000);}catch(e){}})();
+(function(){try{setTimeout(function(){try{__restoreTrip();}catch(e){}try{__restoreOnline();}catch(e){}try{__adoptActive();}catch(e){}},1800);}catch(e){}try{setInterval(function(){try{__chatTick();}catch(e){}},5000);}catch(e){}})();
 /* Retoma o estado online após refresh (antes perdia-se e o botão voltava a "Ficar online"). */
 async function __restoreOnline(){
   try{
@@ -288,6 +288,27 @@ async function __restoreOnline(){
     var isOn=false;try{isOn=(typeof online!=='undefined')?!!online:false;}catch(e){}
     if(!isOn&&typeof setOnline==='function'){setOnline(true);}
     try{if(typeof show==='function')show('home');}catch(e){}
+  }catch(e){}
+}
+/* A viagem ativa é do servidor, não do telefone: se a passageira tem viagem
+   ativa (mesmo pedida noutro aparelho), o painel adota-a sempre. */
+async function __adoptActive(){
+  try{
+    var u=null;try{u=JSON.parse(localStorage.getItem('taxi_user')||'null');}catch(e){}
+    if(!u||u.role!=='PASSENGER')return;
+    try{if((typeof tripId!=='undefined')&&tripId)return;}catch(e){}
+    var h={};try{h=(typeof ah==='function')?ah():{};}catch(e2){}
+    if(!h.Authorization)return;
+    var r=await fetch('/api/v1/trips/active',{headers:h});
+    if(!r.ok)return;
+    var t=await r.json();
+    if(!t||!t.id)return;
+    try{localStorage.setItem('lg_trip',t.id);}catch(e){}
+    tripId=t.id;paxSt=null;searchT0=Date.now();
+    try{if(tripTimer)clearInterval(tripTimer);}catch(e){}
+    try{tripTimer=setInterval(function(){try{pollTrip();}catch(e){}},2000);}catch(e){}
+    try{if(typeof pollTrip==='function')pollTrip();}catch(e){}
+    try{var st=String(t.status||'').toUpperCase();if(st==='REQUESTED')show('search');}catch(e){}
   }catch(e){}
 }
 </script></body></html>
