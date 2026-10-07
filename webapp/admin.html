@@ -281,7 +281,7 @@ function drawMap(){
     if(mapFilter==='active')return['accepted','arrived','in_progress'].indexOf(t.status)>=0;
     if(mapFilter==='completed')return t.status==='completed';
     if(mapFilter==='cancelled')return t.status==='cancelled';
-    return true;
+    return['pending','accepted','arrived','in_progress'].indexOf(t.status)>=0;
   };
   ALL.filter(showT).forEach(t=>{
     const c=stColor[t.status]||'#5b21c9';
