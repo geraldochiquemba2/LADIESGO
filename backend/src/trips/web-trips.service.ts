@@ -281,14 +281,14 @@ export class WebTripsService {
     if (WebTripsService.CALL_TYPES.indexOf(String(type)) < 0) {
       throw new BadRequestException('Sinal inválido.');
     }
-    await this.prisma.callSignal.create({
+    const row = await this.prisma.callSignal.create({
       data: { tripId, senderId: userId, type: String(type), payload: payload ?? null },
     });
     // Higiene: apaga sinais com +10min (sem bloquear).
     void this.prisma.callSignal
       .deleteMany({ where: { tripId, createdAt: { lt: new Date(Date.now() - 10 * 60 * 1000) } } })
       .catch(() => {});
-    return { ok: true };
+    return { ok: true, ts: row.createdAt.getTime() };
   }
 
   async callGet(tripId: string, userId: string, since?: string) {

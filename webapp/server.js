@@ -146,10 +146,11 @@ const server = http.createServer(async (req, res) => {
               if (tok.startsWith('demo.')) from = (JSON.parse(Buffer.from(tok.split('.')[1], 'base64').toString()).id) || '';
             } catch (e) {}
             const arr = callSignals.get(tid) || [];
-            arr.push({ type, payload: b.payload || null, from, ts: Date.now() });
+            const sigTs = Date.now();
+            arr.push({ type, payload: b.payload || null, from, ts: sigTs });
             while (arr.length > 50) arr.shift();
             callSignals.set(tid, arr);
-            sendS(200, { ok: true });
+            sendS(200, { ok: true, ts: sigTs });
           } catch (e) { sendS(400, { message: 'Sinal inválido.' }); }
         });
         return;

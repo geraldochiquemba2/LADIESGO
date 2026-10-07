@@ -355,12 +355,13 @@ function __quotaFmt(s){if(!isFinite(s))return'';s=Math.max(0,Math.floor(s));retu
 function paintQuota(){try{var els=document.querySelectorAll('.qfree');for(var i=0;i<els.length;i++){var el=els[i];if(__quota.exhausted){el.textContent='Chamadas grátis terminaram — usa a chamada normal 📞';}else{el.textContent='📞 Chamadas grátis: '+__quotaFmt(__quota.remaining)+' restantes · máx 2 min/chamada';}}}catch(e){}}
 async function __sigPost(type,payload){
   try{
-    var tid=__call.trip;if(!tid)return false;
+    var tid=__call.trip;if(!tid)return {ok:false,ts:0};
     var h=__callH();h['Content-Type']='application/json';
     var r=await fetch('/api/v1/trips/'+tid+'/call/signal',{method:'POST',headers:h,body:JSON.stringify({type:type,payload:payload||null})});
     try{__call.lastPost=r.status;}catch(e){}
-    return r.ok;
-  }catch(e){return false;}
+    var pst=0;try{var pjj=await r.json();pst=Number((pjj&&pjj.ts)||0)||0;}catch(e){}
+    return {ok:r.ok,ts:pst};
+  }catch(e){return {ok:false,ts:0};}
 }
 async function __pcSetup(){
   if(typeof RTCPeerConnection==='undefined')throw new Error('no-webrtc');
@@ -404,7 +405,8 @@ async function startNativeCall(){
     var offer=await s.pc.createOffer({offerToReceiveAudio:true});
     await s.pc.setLocalDescription(offer);
     var posted=await __sigPost('offer',{sdp:s.pc.localDescription});
-    if(!posted){__callEnd(false);__callUI('failed','Sem avisar a outra parte ('+(__call.lastPost||'rede')+'). A viagem foi aceite? Tens sessão?');return;}
+    if(!posted.ok){__callEnd(false);__callUI('failed','Sem avisar a outra parte ('+(__call.lastPost||'rede')+'). A viagem foi aceite? Tens sessão?');return;}
+    if(posted.ts)__call.seen=posted.ts;
   }catch(e){__callEnd(false);__callUI('failed','Falhou a ligar.');return;}
   setTimeout(function(){if(__call.state==='calling'){__sigPost('end',null);__callEnd(false);__callUI('failed','Sem resposta. Tenta de novo ou usa a chamada normal.');}},45000);
 }
@@ -497,7 +499,7 @@ function openCall(name,phone){
     return true;
   }catch(e){return false;}
 }
-(function(){try{setInterval(function(){try{__callLoop();}catch(e){}},2500);}catch(e){}})();
+(function(){try{setInterval(function(){try{__callLoop();}catch(e){}},1200);}catch(e){}})();
 /* Avaliação obrigatória: a fatura só sai com avaliação; sobrevive a refresh
    e logout; bloqueia novo pedido até avaliar. */
 async function __pendingList(){
