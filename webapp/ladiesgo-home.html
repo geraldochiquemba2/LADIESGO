@@ -260,7 +260,7 @@ async function __chatTick(){
 }
 function __waDigits(p){var d=String(p||'').replace(/\D/g,'');if(!d)return '';if(d.length===9&&d[0]==='9')d='244'+d;return d;}
 document.addEventListener('click',function(e){var b=e.target&&e.target.closest?e.target.closest('[data-a="dcall"]'):null;if(!b)return;try{var t=null;try{t=(typeof myTrip!=='undefined')?myTrip:null;}catch(e2){}var nm=(t&&(t.passengerName||''))||'Passageira';var ph2=(t&&(t.passengerPhone||''))||'';if(ph2&&typeof openCall==='function'&&openCall(nm,ph2))return;if(typeof openChat==='function')openChat();}catch(e){}});
-(function(){try{setTimeout(function(){try{__restoreTrip();}catch(e){}try{__restoreOnline();}catch(e){}try{__adoptActive();}catch(e){}try{__showPendingRating();}catch(e){}},1800);}catch(e){}try{setInterval(function(){try{__chatTick();}catch(e){}},5000);}catch(e){}})();
+(function(){try{setTimeout(function(){try{__restoreTrip();}catch(e){}try{__restoreOnline();}catch(e){}try{__adoptActive();}catch(e){}try{__showPendingRating();}catch(e){}},1800);}catch(e){}try{setInterval(function(){try{__chatTick();}catch(e){}},5000);}catch(e){}try{setInterval(function(){try{__alarmTick();}catch(e){}},3000);}catch(e){}})();
 /* Retoma o estado online após refresh (antes perdia-se e o botão voltava a "Ficar online"). */
 async function __restoreOnline(){
   try{
@@ -516,15 +516,15 @@ function __beep(){
     var ctx=__beep.ctx;
     if(ctx.state==='suspended'){try{ctx.resume().catch(function(){});}catch(e){}}
     var t0=ctx.currentTime;
-    [880,880,1320].forEach(function(f,i){
-      var dt=i*0.28;
+    [1046.5,1318.5,1568].forEach(function(f,i){
+      var dt=i*0.14;
       var o=ctx.createOscillator(),g=ctx.createGain();
-      o.type='sine';o.frequency.value=f;
+      o.type='triangle';o.frequency.value=f;
       g.gain.setValueAtTime(0.0001,t0+dt);
-      g.gain.exponentialRampToValueAtTime(0.5,t0+dt+0.03);
-      g.gain.exponentialRampToValueAtTime(0.0001,t0+dt+0.24);
+      g.gain.exponentialRampToValueAtTime(0.4,t0+dt+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t0+dt+0.16);
       o.connect(g);g.connect(ctx.destination);
-      o.start(t0+dt);o.stop(t0+dt+0.26);
+      o.start(t0+dt);o.stop(t0+dt+0.18);
     });
   }catch(e){}
   try{if(navigator.vibrate)navigator.vibrate([200,100,200,100,200]);}catch(e){}
@@ -547,12 +547,21 @@ function __onIncoming(list){
       try{lte('🔔 Novo pedido! ('+fresh.length+')');}catch(e){}
     }
     if(on){
-      var muted=[];try{muted=JSON.parse(localStorage.getItem('lg_mute')||'[]');}catch(e){}
-      var audible=ids.filter(function(id){return muted.indexOf(id)<0;});
-      var now=Date.now();
-      if(audible.length&&now-(__lastBeep||0)>2500){__lastBeep=now;__beep();}
+      try{__lastIncList=list||[];}catch(e){}
     }
   }catch(e){}
 }
 document.addEventListener('click',function(){try{var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;__beep.ctx=__beep.ctx||new AC();if(__beep.ctx.state==='suspended'){try{__beep.ctx.resume().catch(function(){});}catch(e){}}}catch(e){}},true);
+var __lastIncList=[];
+function __alarmTick(){
+  try{
+    var on=false;try{on=(typeof online!=='undefined')?!!online:false;}catch(e){}
+    if(!on)return;
+    var ids=(__lastIncList||[]).map(function(t){return t.id;});
+    if(!ids.length)return;
+    var muted=[];try{muted=JSON.parse(localStorage.getItem('lg_mute')||'[]');}catch(e){}
+    var audible=ids.filter(function(id){return muted.indexOf(id)<0;});
+    if(audible.length)__beep();
+  }catch(e){}
+}
 </script></body></html>
