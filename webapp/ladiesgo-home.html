@@ -316,9 +316,9 @@ function __callUI(state,sub){
   if(!back){back=document.createElement('div');back.id='callback';back.className='pwback';document.body.appendChild(back);}
   var nm='';try{nm=esc(__call.peerName||'');}catch(e){nm=__call.peerName||'';}
   var h='<div class="pwbox" style="text-align:center"><div style="font-size:44px">📞</div>';
-  if(state==='calling')h+='<h2>A ligar…</h2><p class="mut">'+nm+'</p><p class="mut">Chamada de voz LadiesGo (grátis)</p><button class="cta" id="callEnd" style="margin-top:12px">Desligar</button>';
-  else if(state==='ringing')h+='<h2>A chamar…</h2><p class="mut">'+nm+'</p><button class="cta" id="callOk" style="margin-top:12px;background:#12a150">Atender</button><button class="pwquit" id="callNo">Recusar</button>';
-  else if(state==='active')h+='<h2>Em chamada</h2><p class="mut">'+nm+'</p><p class="mut" id="callTimer">00:00</p><button class="cta" id="callMute" style="margin-top:12px">🔇 Silenciar</button><button class="cta" id="callEnd2" style="margin-top:8px;background:#d92d4b">Desligar</button>';
+  if(state==='calling')h+='<h2>A ligar…</h2><p class="mut">'+nm+'</p><p class="mut">Chamada de voz LadiesGo (grátis)</p><p class="mut" id="callNet"></p><button class="cta" id="callEnd" style="margin-top:12px">Desligar</button>';
+  else if(state==='ringing')h+='<h2>A chamar…</h2><p class="mut">'+nm+'</p><p class="mut" id="callNet"></p><button class="cta" id="callOk" style="margin-top:12px;background:#12a150">Atender</button><button class="pwquit" id="callNo">Recusar</button>';
+  else if(state==='active')h+='<h2>Em chamada</h2><p class="mut">'+nm+'</p><p class="mut" id="callTimer">00:00</p><p class="mut" id="callNet"></p><button class="cta" id="callMute" style="margin-top:12px">🔇 Silenciar</button><button class="cta" id="callEnd2" style="margin-top:8px;background:#d92d4b">Desligar</button>';
   else h+='<h2>'+(sub||'Falhou a chamada')+'</h2><p class="mut">Tenta a chamada normal.</p><button class="cta" id="callTel3" style="margin-top:12px">Chamada normal</button><button class="pwquit" id="callX2">Fechar</button>';
   h+='</div>';
   back.innerHTML=h;
@@ -331,8 +331,17 @@ function __callUI(state,sub){
   on('callMute',function(){try{__call.muted=!__call.muted;(__call.mic.getTracks()||[]).forEach(function(tr){tr.enabled=!__call.muted;});var b=document.getElementById('callMute');if(b)b.textContent=__call.muted?'🔈 Ativar som':'🔇 Silenciar';}catch(e){}});
   on('callTel3',function(){try{var ph2=__call.lastPhone||'';if(ph2)window.location.href='tel:+' + ph2.replace(/\D/g,'');}catch(e){}});
   if(state==='ringing'){try{if(navigator.vibrate)navigator.vibrate(300);}catch(e){}}
+  try{__callNet();}catch(e){}
 }
-function __callTick(){
+function __callNet(){
+  try{
+    var el=document.getElementById('callNet');
+    if(!el)return;
+    var st='';try{st=__call.pc?(__call.pc.iceConnectionState||''):'';}catch(e){}
+    var ks=[];try{for(var k in (__call.cands||{}))ks.push(k);}catch(e){}
+    el.textContent=st?('rede: '+st+(ks.length?' · '+ks.join(','):'')):'';
+  }catch(e){}
+}
   try{
     var el=document.getElementById('callTimer');
     if(el&&__call.acceptT){var s=Math.floor((Date.now()-__call.acceptT)/1000);var m=Math.floor(s/60);s=s%60;el.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
@@ -347,13 +356,13 @@ async function __sigPost(type,payload){
 }
 async function __pcSetup(){
   if(typeof RTCPeerConnection==='undefined')throw new Error('no-webrtc');
-  var pc=new RTCPeerConnection({iceServers:[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']},{urls:['turn:openrelay.metered.ca:443?transport=tcp','turns:openrelay.metered.ca:443'],username:'openrelay',credential:'openrelay'},{urls:['turn:freeturn.net:3478','turn:freeturn.net:3478?transport=tcp','turns:freeturn.net:5349'],username:'free',credential:'free'}]});
+  var pc=new RTCPeerConnection({iceServers:[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']},{urls:['turn:openrelay.metered.ca:443?transport=tcp','turns:openrelay.metered.ca:443'],username:'openrelay',credential:'openrelay'}]});
   var stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});
   stream.getTracks().forEach(function(tr){pc.addTrack(tr,stream);});
   var audio=document.getElementById('callAudio');
   if(!audio){audio=document.createElement('audio');audio.id='callAudio';audio.autoplay=true;try{audio.setAttribute('playsinline','');}catch(e){}document.body.appendChild(audio);}
   pc.ontrack=function(ev){try{audio.srcObject=ev.streams[0];var p=audio.play();if(p&&p.catch)p.catch(function(){});}catch(e){}};
-  pc.onicecandidate=function(ev){if(ev.candidate){__sigPost('ice',{candidate:ev.candidate});}};
+  pc.onicecandidate=function(ev){if(ev.candidate){try{var t=ev.candidate.type||'?';__call.cands=__call.cands||{};__call.cands[t]=1;}catch(e){}__sigPost('ice',{candidate:ev.candidate});}__callNet();};
   pc.oniceconnectionstatechange=function(){
     try{
       var st=pc.iceConnectionState;
