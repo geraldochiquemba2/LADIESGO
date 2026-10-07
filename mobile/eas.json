@@ -35,9 +35,9 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "SUBSTITUIR_APPLE_ID_EMAIL",
+        "appleId": "chiquembaines@gmail.com",
         "ascAppId": "SUBSTITUIR_ASC_APP_ID",
-        "appleTeamId": "SUBSTITUIR_TEAM_ID"
+        "appleTeamId": "4ZQGZ9N775"
       }
     }
   }

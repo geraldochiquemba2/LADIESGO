@@ -324,6 +324,7 @@ const server = http.createServer(async (req, res) => {
   else if (req.url === '/home' || req.url.startsWith('/home')) page = 'ladiesgo-home.html';
   else if (req.url === '/admin' || req.url.startsWith('/admin?')) page = 'admin.html';
   else if (req.url === '/historia') page = 'ladiesgo.html';
+  else if (req.url === '/privacidade') page = 'privacidade.html';
   else if (req.url === '/old') page = 'index.html';
   else if (req.url === '/site') page = '../website/index.html';
   const file = path.join(__dirname, page);

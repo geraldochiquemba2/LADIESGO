@@ -128,6 +128,7 @@ async function bootstrap() {
   httpAdapter.get('/home', (_req: any, res: any) => sendWeb(res, 'ladiesgo-home.html'));
   httpAdapter.get('/admin', (_req: any, res: any) => sendWeb(res, 'admin.html'));
   httpAdapter.get('/historia', (_req: any, res: any) => sendWeb(res, 'ladiesgo.html'));
+  httpAdapter.get('/privacidade', (_req: any, res: any) => sendWeb(res, 'privacidade.html'));
 
   // Info da API (JSON) em /api — landing / passa a servir o LadiesGo!
   httpAdapter.get('/api', (_req: any, res: any) => {
