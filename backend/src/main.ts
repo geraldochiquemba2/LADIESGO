@@ -126,6 +126,7 @@ async function bootstrap() {
   // Frontend LadiesGo! (antes do prefixo global para não cair em /api/v1)
   httpAdapter.get('/app', (_req: any, res: any) => sendWeb(res, 'ladiesgo-login.html'));
   httpAdapter.get('/home', (_req: any, res: any) => sendWeb(res, 'ladiesgo-home.html'));
+  httpAdapter.get('/t', (_req: any, res: any) => sendWeb(res, 'track.html')); // acompanhamento público (sem login)
   httpAdapter.get('/admin', (_req: any, res: any) => sendWeb(res, 'admin.html'));
   httpAdapter.get('/historia', (_req: any, res: any) => sendWeb(res, 'ladiesgo.html'));
   httpAdapter.get('/privacidade', (_req: any, res: any) => sendWeb(res, 'privacidade.html'));

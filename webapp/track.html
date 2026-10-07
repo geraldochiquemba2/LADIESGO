@@ -1,0 +1,38 @@
+<!DOCTYPE html><html lang="pt"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#5b21c9"><title>LadiesGo! – Acompanhar viagem</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>*{margin:0;box-sizing:border-box}html,body{height:100%}body{font-family:Inter,system-ui,sans-serif;background:#ece8f3;color:#15111f}#map{position:absolute;inset:0 0 148px 0}.leaflet-container{background:#ece8f3}.card{position:absolute;left:12px;right:12px;bottom:12px;background:#fff;border-radius:18px;padding:14px 16px;box-shadow:0 -8px 30px rgba(30,10,70,.25);max-width:560px;margin:0 auto}.card h2{font-size:16px;margin-bottom:2px}.mut{color:#6c6680;font-size:13px}.row{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:13.5px}.dot{flex:none;width:12px;height:12px;border-radius:50%;background:#12a150;animation:bl 1.6s infinite}@keyframes bl{50%{opacity:.35}}.pill{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700;background:#ede9fe;color:#5b21c9}.err{text-align:center;padding:60px 20px}</style></head><body>
+<div id="map"></div>
+<div class="card" id="card"><h2>LadiesGo! 💜</h2><p class="mut" id="st">A ligar…</p><div class="row"><span class="dot"></span><span id="info">A carregar viagem…</span></div></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){
+  var id=null;try{id=new URLSearchParams(location.search).get('id')||'';}catch(e){}
+  var card=document.getElementById('card');
+  if(!id){card.innerHTML='<h2>LadiesGo! 💜</h2><p class="mut">Ligação inválida. Pede à passageira o link de partilha.</p>';return;}
+  var map=L.map('map').setView([-8.839,13.289],13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  map.attributionControl.setPrefix('© OpenStreetMap');
+  var carMk=null,destMk=null,pickMk=null,line=null,done=false;
+  var ST={REQUESTED:'À espera de motorista',ACCEPTED:'Motorista a caminho',DRIVER_ARRIVED:'Motorista chegou',IN_PROGRESS:'Em viagem',COMPLETED:'Viagem concluída ✓',CANCELLED:'Viagem cancelada'};
+  function emoji(c){return L.divIcon({className:'',html:'<div style="font-size:30px;line-height:30px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.4))">'+c+'</div>',iconSize:[30,30],iconAnchor:[15,28]});}
+  async function tick(){
+    if(done)return;
+    try{
+      var r=await fetch('/api/v1/trips/public/'+encodeURIComponent(id),{cache:'no-store'});
+      if(!r.ok)throw 0;
+      var t=await r.json();
+      var st=String(t.status||'');
+      document.getElementById('st').innerHTML='<span class="pill">'+(ST[st]||st)+'</span>';
+      var info=[];
+      if(t.driver&&t.driver.name)info.push('🚗 '+t.driver.name+(t.driver.car?' · '+t.driver.car:'')+(t.driver.plate?' · '+t.driver.plate:''));
+      if(t.dest&&t.dest.name)info.push('📍 '+(t.dest.name||''));
+      document.getElementById('info').textContent=info.join('  —  ')||'A acompanhar…';
+      var pts=[];
+      if(t.pickup&&t.pickup.lat!=null){if(!pickMk)pickMk=L.marker([t.pickup.lat,t.pickup.lng],{icon:emoji('🟣'),interactive:false}).addTo(map);else pickMk.setLatLng([t.pickup.lat,t.pickup.lng]);pts.push([t.pickup.lat,t.pickup.lng]);}
+      if(t.dest&&t.dest.lat!=null){if(!destMk)destMk=L.marker([t.dest.lat,t.dest.lng],{icon:emoji('🏁'),interactive:false}).addTo(map);else destMk.setLatLng([t.dest.lat,t.dest.lng]);pts.push([t.dest.lat,t.dest.lng]);}
+      if(t.driver&&t.driver.lat!=null){if(!carMk)carMk=L.marker([t.driver.lat,t.driver.lng],{icon:emoji('🚕'),interactive:false}).addTo(map);else carMk.setLatLng([t.driver.lat,t.driver.lng]);pts.push([t.driver.lat,t.driver.lng]);}
+      if(pts.length){try{map.flyToBounds(L.latLngBounds(pts).pad(0.3),{duration:0.8});}catch(e){}}
+      if(st==='COMPLETED'||st==='CANCELLED'){done=true;}
+    }catch(e){document.getElementById('info').textContent='Sem ligação. A tentar de novo…';}
+  }
+  tick();setInterval(tick,4000);
+})();
+</script></body></html>
