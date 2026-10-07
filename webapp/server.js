@@ -7,7 +7,13 @@ const drivers = new Map();
 const trips = new Map();
 const busy = new Set();
 const chats = new Map();
+const callSignals = new Map();
 let tripN = 0;
+// Metered privado (Render -> Env Vars). Sem isto usa fallback openrelay (demo).
+// METERED_DOMAIN ex: ladiesgo-taxi.metered.live (SEM https, SEM /api...)
+// METERED_TURN_APIKEY ex: apiKey da credencial TURN (seguro no frontend via /api/v1/turn/ice)
+const METERED_DOMAIN = (process.env.METERED_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+const METERED_TURN_APIKEY = (process.env.METERED_TURN_APIKEY || '').trim();
 const TRIPS_FILE = path.join(__dirname, 'trips.json');
 function saveTrips(){ try{ fs.writeFileSync(TRIPS_FILE, JSON.stringify({ tripN, trips: [...trips.values()].slice(-300), chats: [...chats.entries()].slice(-50) })); }catch(e){} }
 try{ const saved = JSON.parse(fs.readFileSync(TRIPS_FILE, 'utf8')); if(saved && Array.isArray(saved.trips)){ tripN = saved.tripN || 0; saved.trips.forEach(t => { if(t && t.id) trips.set(t.id, t); }); (saved.chats || []).forEach(function(e){ if(e && e[0]) chats.set(e[0], e[1]); }); } }catch(e){}
@@ -119,6 +125,56 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const cm = req.url.match(/^\/api\/v1\/trips\/([A-Za-z0-9]+)\/chat(\?.*)?$/);
+    // Sinalização de voz WebRTC (offer/answer/ice/end/reject) — polling simples, 50 msgs por viagem.
+    const sm = req.url.match(/^\/api\/v1\/trips\/([A-Za-z0-9]+)\/call\/signal(\?.*)?$/);
+    if (sm && (req.method === 'GET' || req.method === 'POST')) {
+      const sendS = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
+      const tid = sm[1]; const t = trips.get(tid);
+      if (!t) { sendS(404, { message: 'Viagem não encontrada.' }); return; }
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+          try {
+            const b = JSON.parse(body || '{}');
+            const type = String(b.type || '').slice(0, 16);
+            if (['offer', 'answer', 'ice', 'end', 'reject'].indexOf(type) < 0) throw 0;
+            let from = '';
+            try {
+              const ah = req.headers.authorization || '';
+              const tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+              if (tok.startsWith('demo.')) from = (JSON.parse(Buffer.from(tok.split('.')[1], 'base64').toString()).id) || '';
+            } catch (e) {}
+            const arr = callSignals.get(tid) || [];
+            arr.push({ type, payload: b.payload || null, from, ts: Date.now() });
+            while (arr.length > 50) arr.shift();
+            callSignals.set(tid, arr);
+            sendS(200, { ok: true });
+          } catch (e) { sendS(400, { message: 'Sinal inválido.' }); }
+        });
+        return;
+      }
+      const since = Number(new URL(req.url, 'http://localhost').searchParams.get('since')) || 0;
+      sendS(200, { signals: (callSignals.get(tid) || []).filter(s => s.ts > since) });
+      return;
+    }
+    // ICE servers TURN: frontend chama isto em vez de embutir username/password.
+    // Se METERED_DOMAIN + METERED_TURN_APIKEY configurados no Render, devolve credencial privada.
+    // Senão devolve fallback openrelay (demo) para não partir.
+    if (req.url.startsWith('/api/v1/turn/ice') && req.method === 'GET') {
+      const sendI = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
+      const fallback = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls: ['turn:openrelay.metered.ca:443?transport=tcp', 'turns:openrelay.metered.ca:443'], username: 'openrelay', credential: 'openrelay' }];
+      if (!METERED_DOMAIN || !METERED_TURN_APIKEY) { sendI(200, { iceServers: fallback, demo: true }); return; }
+      (async () => {
+        try {
+          const r = await fetch('https://' + METERED_DOMAIN + '/api/v1/turn/credentials?apiKey=' + encodeURIComponent(METERED_TURN_APIKEY), { signal: AbortSignal.timeout(8000) });
+          const j = await r.json();
+          if (!r.ok || !Array.isArray(j)) throw 0;
+          sendI(200, { iceServers: j, demo: false });
+        } catch (e) { sendI(200, { iceServers: fallback, demo: true }); }
+      })();
+      return;
+    }
     if (cm && (req.method === 'GET' || req.method === 'POST')) {
       const sendC = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
       const tid = cm[1]; const t = trips.get(tid);
