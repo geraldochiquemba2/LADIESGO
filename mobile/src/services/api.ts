@@ -62,7 +62,14 @@ export const driversApi = {
   getStatus: () => api.get('/drivers/status'),
   toggleOnline: (isOnline: boolean) => api.put('/drivers/toggle-online', { isOnline }),
   updateLocation: (lat: number, lng: number) => api.put('/drivers/location', { lat, lng }),
-  getNearby: (lat: number, lng: number) => api.get(`/drivers/nearby?lat=${lat}&lng=${lng}`),
+  // Aceita os dois formatos: {drivers:[...]} (web/LadiesGo) ou [...] (legado).
+  // Normaliza sempre para array com currentLat/currentLng.
+  getNearby: async (lat: number, lng: number) => {
+    const res = await api.get(`/drivers/nearby?lat=${lat}&lng=${lng}`);
+    const raw = ((res.data as any)?.drivers ?? res.data ?? []) as any[];
+    res.data = raw.map((d) => ({ ...d, currentLat: d.currentLat ?? d.lat, currentLng: d.currentLng ?? d.lng }));
+    return res;
+  },
   getEarnings: (page = 1) => api.get(`/drivers/earnings?page=${page}`),
 };
 

@@ -110,8 +110,15 @@ export class AuthService implements OnModuleInit {
     return this.config.get<string>('DRIVER_DEFAULT_PASSWORD', '') || '0987654321';
   }
 
-  // Admin cria conta de motorista: nome + número.
-  async adminCreateDriver(phone: string, name?: string) {
+  // Admin cria conta de motorista: nome + número (+ documentos da viatura).
+  // Com carta + matrícula, cria logo o perfil APROVADO (o admin verificou
+  // os documentos) — a motorista entra direta, sem "em análise".
+  // Sem documentos, cria só a conta e ela completa o registo na página.
+  async adminCreateDriver(
+    phone: string,
+    name?: string,
+    docs?: { licenseNumber?: string; carPlate?: string; carMake?: string; carModel?: string; carYear?: number; carColor?: string },
+  ) {
     const digits = (phone || '').replace(/\D/g, '');
     const local = digits.startsWith('244') ? digits.slice(3) : digits;
     if (!/^9[123459]\d{7}$/.test(local)) {
@@ -132,6 +139,33 @@ export class AuthService implements OnModuleInit {
         mustChangePassword: true,
       },
     });
+    const lic = (docs?.licenseNumber || '').trim().slice(0, 30);
+    const plate = (docs?.carPlate || '').trim().slice(0, 12);
+    if (lic && plate) {
+      const year = docs?.carYear;
+      if (year !== undefined && (!Number.isInteger(year) || year < 1990 || year > new Date().getFullYear() + 1)) {
+        throw new BadRequestException('Ano da viatura inválido.');
+      }
+      try {
+        await this.prisma.driver.create({
+          data: {
+            userId: user.id,
+            licenseNumber: lic,
+            carPlate: plate,
+            carMake: (docs?.carMake || '').trim().slice(0, 40) || null,
+            carModel: (docs?.carModel || '').trim().slice(0, 40) || null,
+            carYear: year ?? null,
+            carColor: (docs?.carColor || '').trim().slice(0, 20) || null,
+            status: 'APPROVED',
+          },
+        });
+      } catch (e: any) {
+        if (e?.code === 'P2002') {
+          throw new ConflictException('Conta criada, mas carta ou matrícula já registadas.');
+        }
+        throw e;
+      }
+    }
     return { user: this.withoutHash(user) };
   }
 

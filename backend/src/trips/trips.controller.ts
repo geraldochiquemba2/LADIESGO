@@ -1,5 +1,6 @@
 import { Controller, Post, Get, Put, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { TripsService } from './trips.service';
+import { WebTripsService } from './web-trips.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequestTripDto, EstimateFareDto } from './dto/request-trip.dto';
@@ -7,7 +8,7 @@ import { RequestTripDto, EstimateFareDto } from './dto/request-trip.dto';
 @UseGuards(JwtAuthGuard)
 @Controller('trips')
 export class TripsController {
-  constructor(private trips: TripsService) {}
+  constructor(private trips: TripsService, private webTrips: WebTripsService) {}
 
   @Post('estimate')
   estimate(@Body() dto: EstimateFareDto) {
@@ -25,7 +26,8 @@ export class TripsController {
   }
 
   @Get(':id')
-  getTrip(@Param('id') tripId: string, @CurrentUser('id') userId: string) {
+  getTrip(@Param('id') tripId: string, @CurrentUser('id') userId: string, @Query('view') view?: string) {
+    if (view === 'web') return this.webTrips.getWebTrip(tripId, userId);
     return this.trips.getTrip(tripId, userId);
   }
 

@@ -1,9 +1,12 @@
 import { Controller, Post, Get, Put, Body, Query, ParseFloatPipe, DefaultValuePipe, ParseIntPipe, UseGuards } from '@nestjs/common';
 import { DriversService } from './drivers.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RegisterDriverDto } from './dto/register-driver.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
+import { PositionDto } from './dto/position.dto';
+import { UpdateVehicleDto } from './dto/vehicle.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('drivers')
@@ -30,11 +33,23 @@ export class DriversController {
     return this.drivers.updateLocation(userId, dto);
   }
 
+  @Put('vehicle')
+  updateVehicle(@CurrentUser('id') userId: string, @Body() dto: UpdateVehicleDto) {
+    return this.drivers.updateVehicle(userId, dto);
+  }
+
+  @Public()
+  @Post('position')
+  updatePosition(@Body() dto: PositionDto) {
+    return this.drivers.updatePosition(dto);
+  }
+
+  @Public()
   @Get('nearby')
   getNearby(
     @Query('lat', ParseFloatPipe) lat: number,
     @Query('lng', ParseFloatPipe) lng: number,
-    @Query('radius', new DefaultValuePipe(5), ParseFloatPipe) radius: number,
+    @Query('radius', new DefaultValuePipe(25), ParseFloatPipe) radius: number,
   ) {
     return this.drivers.getNearbyDrivers(lat, lng, radius);
   }

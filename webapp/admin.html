@@ -97,8 +97,10 @@
   </section>
   <section id="sec-new" style="display:none">
     <h2>Registar motorista</h2>
-    <p class="mut">A conta entra com a senha padrão <b>0987654321</b> e troca no primeiro login.</p>
+    <p class="mut">A conta entra com a senha padrão <b>0987654321</b> e troca no primeiro login. Com carta + matrícula, a viatura fica <b>aprovada de imediato</b> (sem "em análise").</p>
     <div class="filters"><input id="ndName" placeholder="Nome da motorista" autocomplete="off"><input id="ndPhone" placeholder="9XX XXX XXX" inputmode="tel" autocomplete="off"></div>
+    <div class="filters"><input id="ndLic" placeholder="Nº carta de condução *" autocomplete="off"><input id="ndPlate" placeholder="Matrícula *" autocomplete="off"></div>
+    <div class="filters"><input id="ndMake" placeholder="Marca (ex: Toyota)" autocomplete="off"><input id="ndModel" placeholder="Modelo (ex: Corolla)" autocomplete="off"><input id="ndYear" placeholder="Ano" inputmode="numeric" autocomplete="off"><input id="ndColor" placeholder="Cor" autocomplete="off"></div>
     <div class="mut sm" id="ndCheck" style="margin:2px 0 8px"></div>
     <button data-a="mkdrv" style="height:48px;border:0;border-radius:14px;background:linear-gradient(135deg,#a45bf5,#6a2bd6);color:#fff;font:inherit;font-weight:800;font-size:15px;padding:0 26px;cursor:pointer">Criar conta de motorista</button>
     <p class="mut" id="ndMsg" style="margin-top:10px"></p>
@@ -228,12 +230,22 @@ async function mkDriver(){
   const m=$('ndMsg');if(m)m.textContent='';
   const nm=(($('ndName')||{}).value||'').trim(),ph=(($('ndPhone')||{}).value||'').trim();
   if(nm.length<2){if(m)m.textContent='Escreve o nome.';return}
+  const gv=id=>((($(id)||{}).value||'').trim());
+  const lic=gv('ndLic'),plate=gv('ndPlate'),make=gv('ndMake'),model=gv('ndModel'),color=gv('ndColor'),yearS=gv('ndYear');
+  const body={phone:ph,name:nm};
+  if(lic||plate||make||model||yearS||color){
+    if(lic.length<3){if(m)m.textContent='Nº da carta inválido.';return}
+    if(plate.length<4){if(m)m.textContent='Matrícula inválida.';return}
+    body.licenseNumber=lic;body.carPlate=plate;
+    if(make)body.carMake=make;if(model)body.carModel=model;if(color)body.carColor=color;
+    if(yearS){const year=parseInt(yearS,10);if(!Number.isInteger(year)||year<1990||year>new Date().getFullYear()+1){if(m)m.textContent='Ano inválido.';return}body.carYear=year;}
+  }
   try{
-    const r=await fetch('/api/v1/admin/drivers/create',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({phone:ph,name:nm})});
+    const r=await fetch('/api/v1/admin/drivers/create',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body)});
     const j=await r.json();
     if(!r.ok)throw new Error(j.message||'Falhou.');
-    if(m)m.textContent='✓ Conta criada para '+nm+' — senha padrão 0987654321.';
-    $('ndName').value='';$('ndPhone').value='';load();
+    if(m)m.textContent='✓ Conta criada para '+nm+' — senha padrão 0987654321.'+((lic&&plate)?' Viatura aprovada de imediato.':'');
+    ['ndName','ndPhone','ndLic','ndPlate','ndMake','ndModel','ndYear','ndColor'].forEach(id=>{try{$(id).value=''}catch(_){}});load();
   }catch(e){if(m)m.textContent='Erro: '+((e&&e.message)||e)}
 }
 const card=(l,v,f)=>'<div class="card'+(mapFilter===f&&f?' sel':'')+'"'+(f?(' data-f="'+f+'"'):'')+'><small>'+l+'</small><b>'+v+'</b></div>';

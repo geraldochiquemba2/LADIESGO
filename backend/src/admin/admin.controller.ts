@@ -42,8 +42,8 @@ export class AdminController {
   }
 
   @Post('drivers/create')
-  createDriver(@Body('phone') phone: string, @Body('name') name?: string) {
-    return this.auth.adminCreateDriver(phone, name);
+  createDriver(@Body('phone') phone: string, @Body('name') name?: string, @Body() docs?: any) {
+    return this.auth.adminCreateDriver(phone, name, docs);
   }
 
   @Post('users/:id/reset-password')

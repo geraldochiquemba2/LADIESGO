@@ -1,11 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { LiveDriversService, KNOWN_CATS } from './live-drivers.service';
+import { PositionDto } from './dto/position.dto';
+import { UpdateVehicleDto } from './dto/vehicle.dto';
 import { RegisterDriverDto } from './dto/register-driver.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
 
 @Injectable()
 export class DriversService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private live: LiveDriversService) {}
 
   async register(userId: string, dto: RegisterDriverDto) {
     const existing = await this.prisma.driver.findUnique({ where: { userId } });
@@ -52,21 +55,106 @@ export class DriversService {
     });
   }
 
-  async getNearbyDrivers(lat: number, lng: number, radiusKm = 5) {
-    const drivers = await this.prisma.driver.findMany({
+  // A própria motorista atualiza os dados da viatura (ecrã Viaturas).
+  async updateVehicle(userId: string, dto: UpdateVehicleDto) {
+    const driver = await this.prisma.driver.findUnique({ where: { userId } });
+    if (!driver) throw new NotFoundException('Driver not found');
+    const data: any = {};
+    for (const k of ['carMake', 'carModel', 'carColor'] as const) {
+      const v = (dto as any)[k];
+      if (v !== undefined) data[k] = String(v).slice(0, 40);
+    }
+    if (dto.carYear !== undefined) data.carYear = dto.carYear;
+    if (dto.carPlate !== undefined) {
+      const plate = dto.carPlate.trim().slice(0, 12);
+      if (!plate) throw new BadRequestException('Matrícula inválida.');
+      const clash = await this.prisma.driver.findUnique({ where: { carPlate: plate } });
+      if (clash && clash.id !== driver.id) {
+        throw new ConflictException('Matrícula já usada noutra viatura.');
+      }
+      data.carPlate = plate;
+    }
+    if (!Object.keys(data).length) throw new BadRequestException('Nada para guardar.');
+    return this.prisma.driver.update({ where: { userId }, data });
+  }
+
+  // Posição em tempo real (página web da motorista): guarda em memória
+  // com expiração (TTL 45s). Se já houver registo na BD, espelha isOnline
+  // e a posição (painel admin fica verdadeiro). Sem erro se não houver.
+  async updatePosition(dto: PositionDto) {
+    if (dto.offline) {
+      this.live.remove(dto.id);
+    } else {
+      this.live.upsert({
+        id: dto.id,
+        name: dto.name || 'Motorista',
+        lat: dto.lat,
+        lng: dto.lng,
+        cats: dto.cats ?? [],
+        carMake: dto.carMake,
+        carPlate: dto.carPlate,
+      });
+    }
+    try {
+      const row = await this.prisma.driver.findUnique({ where: { userId: dto.id } });
+      if (row) {
+        await this.prisma.driver.update({
+          where: { userId: dto.id },
+          data: dto.offline
+            ? { isOnline: false }
+            : { isOnline: true, currentLat: dto.lat, currentLng: dto.lng },
+        });
+      }
+    } catch {}
+    return { ok: true };
+  }
+
+  async getNearbyDrivers(lat: number, lng: number, radiusKm = 25) {
+    const live = this.live
+      .list()
+      .filter((d) => this.haversine(lat, lng, d.lat, d.lng) <= radiusKm)
+      .map((d) => ({
+        id: d.id,
+        userId: d.id,
+        lat: d.lat,
+        lng: d.lng,
+        currentLat: d.lat,
+        currentLng: d.lng,
+        name: d.name,
+        cats: d.cats,
+        carMake: d.carMake,
+        carPlate: d.carPlate,
+        distanceKm: this.haversine(lat, lng, d.lat, d.lng),
+        source: 'live',
+      }));
+
+    const dbDrivers = await this.prisma.driver.findMany({
       where: { isOnline: true, status: 'APPROVED', currentLat: { not: null }, currentLng: { not: null } },
       include: { user: { select: { name: true, profilePhoto: true } } },
     });
 
-    return drivers
-      .filter((d) => {
-        const dist = this.haversine(lat, lng, d.currentLat!, d.currentLng!);
-        return dist <= radiusKm;
-      })
+    const seen = new Set(live.map((d) => d.userId));
+    const db = dbDrivers
+      .filter((d) => this.haversine(lat, lng, d.currentLat!, d.currentLng!) <= radiusKm)
+      .filter((d) => !seen.has(d.userId))
       .map((d) => ({
-        ...d,
+        id: d.id,
+        userId: d.userId,
+        lat: d.currentLat!,
+        lng: d.currentLng!,
+        currentLat: d.currentLat!,
+        currentLng: d.currentLng!,
+        name: d.user?.name ?? 'Motorista',
+        cats: [...KNOWN_CATS],
+        carMake: d.carMake ?? undefined,
+        carPlate: d.carPlate ?? undefined,
+        rating: d.rating,
         distanceKm: this.haversine(lat, lng, d.currentLat!, d.currentLng!),
+        source: 'db',
       }));
+
+    // Formato {drivers:[...]} — é o que a página web (/home) espera.
+    return { drivers: [...live, ...db] };
   }
 
   async getEarnings(userId: string, page = 1, limit = 10) {

@@ -6,72 +6,21 @@ datasource db {
   provider = "postgresql"
 }
 
-enum Role {
-  PASSENGER
-  DRIVER
-  ADMIN
-}
-
-enum DriverStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  SUSPENDED
-}
-
-enum TripStatus {
-  REQUESTED
-  ACCEPTED
-  DRIVER_ARRIVED
-  IN_PROGRESS
-  COMPLETED
-  CANCELLED
-}
-
-enum PaymentMethod {
-  CASH
-  CARD
-}
-
-enum RideType {
-  ECONOMY
-  COMFORT
-  PREMIUM
-}
-
-enum TripType {
-  RIDE
-  DELIVERY
-}
-
-enum PaymentStatus {
-  PENDING
-  PAID
-  FAILED
-  REFUNDED
-}
-
-enum NotificationType {
-  TRIP_REQUEST
-  TRIP_ACCEPTED
-  DRIVER_ARRIVED
-  TRIP_STARTED
-  TRIP_COMPLETED
-  TRIP_CANCELLED
-  PAYMENT
-  GENERAL
-}
+// NOTA DEV LOCAL: SQLite não suporta enums — usam-se Strings com os mesmos
+// valores do schema.postgres.prisma (produção). Não mudar os valores.
 
 model User {
   id             String   @id @default(cuid())
   phone          String   @unique
+  passwordHash   String?
   name           String?
   email          String?  @unique
-  role           Role     @default(PASSENGER)
+  role           String   @default("PASSENGER")
   profilePhoto   String?
   fcmToken       String?
   isActive       Boolean  @default(true)
   isVerified     Boolean  @default(false)
+  mustChangePassword Boolean @default(false)
   referralCode   String?  @unique
   referralCount  Int      @default(0)
   walletBalance  Float    @default(0)
@@ -114,7 +63,7 @@ model Driver {
   carColor      String?
   carPlate      String       @unique
   carPhoto      String?
-  status        DriverStatus @default(PENDING)
+  status        String @default("PENDING")
   isOnline      Boolean      @default(false)
   currentLat    Float?
   currentLng    Float?
@@ -140,9 +89,9 @@ model Trip {
   dropoffAddress String
   dropoffLat     Float
   dropoffLng     Float
-  status         TripStatus    @default(REQUESTED)
-  rideType       RideType      @default(ECONOMY)
-  tripType       TripType      @default(RIDE)
+  status         String        @default("REQUESTED")
+  rideType       String        @default("ECONOMY")
+  tripType       String        @default("RIDE")
   packageDescription String?
   receiverName   String?
   receiverPhone  String?
@@ -151,13 +100,15 @@ model Trip {
   discount       Float         @default(0)
   distanceKm     Float?
   durationMin    Int?
-  paymentMethod  PaymentMethod @default(CASH)
-  paymentStatus  PaymentStatus @default(PENDING)
+  paymentMethod  String @default("CASH")
+  paymentStatus  String @default("PENDING")
   promoCodeId    String?
   scheduledAt    DateTime?
+  stops          Json?
   cancelledBy    String?
   cancelReason   String?
-  createdAt      DateTime      @default(now())
+  viewedBy       Json?
+  createdAt      DateTime @default(now())
   acceptedAt     DateTime?
   arrivedAt      DateTime?
   startedAt      DateTime?
@@ -171,6 +122,18 @@ model Trip {
   ratings   Rating[]
 
   @@map("trips")
+}
+
+model ChatMessage {
+  id         String   @id @default(cuid())
+  tripId     String
+  senderId   String?
+  senderName String?
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([tripId, createdAt])
+  @@map("chat_messages")
 }
 
 model Rating {
@@ -195,8 +158,8 @@ model Payment {
   tripId             String        @unique
   amount             Float
   currency           String        @default("SAR")
-  method             PaymentMethod
-  status             PaymentStatus @default(PENDING)
+  method             String
+  status             String @default("PENDING")
   stripePaymentId    String?
   stripeClientSecret String?
   createdAt          DateTime      @default(now())
@@ -212,7 +175,7 @@ model Notification {
   userId    String
   title     String
   body      String
-  type      NotificationType @default(GENERAL)
+  type           String           @default("GENERAL")
   isRead    Boolean          @default(false)
   data      Json?
   createdAt DateTime         @default(now())

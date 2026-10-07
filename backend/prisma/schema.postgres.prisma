@@ -160,7 +160,8 @@ model Trip {
   stops          Json?
   cancelledBy    String?
   cancelReason   String?
-  createdAt      DateTime      @default(now())
+  viewedBy       Json?
+  createdAt      DateTime @default(now())
   acceptedAt     DateTime?
   arrivedAt      DateTime?
   startedAt      DateTime?
@@ -174,6 +175,18 @@ model Trip {
   ratings   Rating[]
 
   @@map("trips")
+}
+
+model ChatMessage {
+  id         String   @id @default(cuid())
+  tripId     String
+  senderId   String?
+  senderName String?
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([tripId, createdAt])
+  @@map("chat_messages")
 }
 
 model Rating {
