@@ -17,7 +17,7 @@ const FALLBACK_ICE = [
   },
 ];
 
-// Quota grátis partilhada: 500MB trial ≈ 0,6 MB/min de voz → ~800 min/mês.
+// Quota grátis partilhada: 300MB ≈ 0,6 MB/min de voz → 500 min/mês.
 // Cada chamada limitada a 2 min (120s) no frontend.
 const MB_PER_MIN = 0.6;
 const PER_CALL_SEC = 120;
@@ -65,7 +65,7 @@ export class TurnController {
   }
 
   private budgetSec(): number {
-    const mb = Number(this.config.get('METERED_FREE_MB')) || 500;
+    const mb = Number(this.config.get('METERED_FREE_MB')) || 300;
     return Math.floor((mb / MB_PER_MIN) * 60);
   }
 

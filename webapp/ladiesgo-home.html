@@ -427,7 +427,7 @@ function __callEnd(post,how){
   try{
     if(post)__sigPost(how==='reject'?'reject':'end',null);
   }catch(e){}
-  try{var lgD=__call.acceptT?Math.floor((Date.now()-__call.acceptT)/1000):0;var lgT=__call.trip;if(lgD>0&&lgT){var lh=__callH();lh['Content-Type']='application/json';fetch('/api/v1/turn/log',{method:'POST',headers:lh,body:JSON.stringify({tripId:lgT,durationSec:lgD})}).then(function(){try{__quotaFetch();}catch(e){}}).catch(function(){});}__call.acceptT=0;}catch(e){}
+  try{var lgD=__call.acceptT?Math.floor((Date.now()-__call.acceptT)/1000):0;var lgT=__call.trip;var lgCaller=!__call.offer;if(lgD>0&&lgT&&lgCaller){var lh=__callH();lh['Content-Type']='application/json';fetch('/api/v1/turn/log',{method:'POST',headers:lh,body:JSON.stringify({tripId:lgT,durationSec:lgD})}).then(function(){try{__quotaFetch();}catch(e){}}).catch(function(){});}__call.acceptT=0;}catch(e){}
   try{if(__call.tickT){clearInterval(__call.tickT);__call.tickT=null;}}catch(e){}
   try{if(__call.mic){(__call.mic.getTracks()||[]).forEach(function(tr){try{tr.stop();}catch(e){}});}}catch(e){}
   try{if(__call.pc){__call.pc.close();}}catch(e){}
