@@ -390,6 +390,19 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Ficheiros estaticos locais (logo.jpg, etc.)
+  if (req.method === 'GET' && /^\/[A-Za-z0-9_.-]+\.(jpg|jpeg|png|gif|svg|ico|webp)$/.test(req.url.split('?')[0])) {
+    const fp = path.join(__dirname, path.basename(req.url.split('?')[0]));
+    const ext = path.extname(fp).toLowerCase();
+    const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webp': 'image/webp' }[ext] || 'application/octet-stream';
+    fs.readFile(fp, (err, data) => {
+      if (err) { res.writeHead(404); res.end(''); return; }
+      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
+      res.end(data);
+    });
+    return;
+  }
+
   // LadiesGo: boas-vindas em /, login animado em /app, home pós-login em /home, demo em /demo
   let page = 'ladiesgo.html';
   if (req.url === '/app' || req.url.startsWith('/app?')) page = 'ladiesgo-login.html';

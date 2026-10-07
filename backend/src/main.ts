@@ -127,6 +127,15 @@ async function bootstrap() {
   httpAdapter.get('/app', (_req: any, res: any) => sendWeb(res, 'ladiesgo-login.html'));
   httpAdapter.get('/home', (_req: any, res: any) => sendWeb(res, 'ladiesgo-home.html'));
   httpAdapter.get('/t', (_req: any, res: any) => sendWeb(res, 'track.html')); // acompanhamento público (sem login)
+  httpAdapter.get('/logo.jpg', (_req: any, res: any) => {
+    try {
+      const f = resolveWebFile('logo.jpg');
+      if (!f) { res.status(404).send(''); return; }
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      fs.createReadStream(f).pipe(res);
+    } catch { res.status(404).send(''); }
+  });
   httpAdapter.get('/admin', (_req: any, res: any) => sendWeb(res, 'admin.html'));
   httpAdapter.get('/historia', (_req: any, res: any) => sendWeb(res, 'ladiesgo.html'));
   httpAdapter.get('/privacidade', (_req: any, res: any) => sendWeb(res, 'privacidade.html'));
