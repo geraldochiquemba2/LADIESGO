@@ -350,10 +350,12 @@ function __callTick(){
 }
 async function __sigPost(type,payload){
   try{
-    var tid=__call.trip;if(!tid)return;
+    var tid=__call.trip;if(!tid)return false;
     var h=__callH();h['Content-Type']='application/json';
-    await fetch('/api/v1/trips/'+tid+'/call/signal',{method:'POST',headers:h,body:JSON.stringify({type:type,payload:payload||null})});
-  }catch(e){}
+    var r=await fetch('/api/v1/trips/'+tid+'/call/signal',{method:'POST',headers:h,body:JSON.stringify({type:type,payload:payload||null})});
+    try{__call.lastPost=r.status;}catch(e){}
+    return r.ok;
+  }catch(e){return false;}
 }
 async function __pcSetup(){
   if(typeof RTCPeerConnection==='undefined')throw new Error('no-webrtc');
@@ -394,7 +396,8 @@ async function startNativeCall(){
   try{
     var offer=await s.pc.createOffer({offerToReceiveAudio:true});
     await s.pc.setLocalDescription(offer);
-    await __sigPost('offer',{sdp:s.pc.localDescription});
+    var posted=await __sigPost('offer',{sdp:s.pc.localDescription});
+    if(!posted){__callEnd(false);__callUI('failed','Sem avisar a outra parte ('+(__call.lastPost||'rede')+'). A viagem foi aceite? Tens sessão?');return;}
   }catch(e){__callEnd(false);__callUI('failed','Falhou a ligar.');return;}
   setTimeout(function(){if(__call.state==='calling'){__sigPost('end',null);__callEnd(false);__callUI('failed','Sem resposta. Tenta de novo ou usa a chamada normal.');}},45000);
 }
