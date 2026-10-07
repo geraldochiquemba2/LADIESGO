@@ -109,6 +109,8 @@ model Trip {
   cancelledBy    String?
   cancelReason   String?
   viewedBy       Json?
+  vehicleLabel   String?
+  vehiclePlate   String?
   createdAt      DateTime @default(now())
   acceptedAt     DateTime?
   arrivedAt      DateTime?

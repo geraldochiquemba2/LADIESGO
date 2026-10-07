@@ -170,9 +170,17 @@ export class TripsService {
     if (!driver) throw new ForbiddenException('Not a driver');
 
     // Atomic: only one driver can flip REQUESTED → ACCEPTED, even on simultaneous taps
+    // Snapshot da viatura (o painel admin mostra com que carro foi feita a viagem).
+    const vehicleLabel = [driver.carMake, driver.carModel, driver.carColor].filter(Boolean).join(' ');
     const updated = await this.prisma.trip.updateMany({
       where: { id: tripId, status: 'REQUESTED' },
-      data: { driverId: driver.id, status: 'ACCEPTED', acceptedAt: new Date() },
+      data: {
+        driverId: driver.id,
+        status: 'ACCEPTED',
+        acceptedAt: new Date(),
+        vehicleLabel: vehicleLabel || null,
+        vehiclePlate: driver.carPlate || null,
+      },
     });
     if (updated.count === 0) throw new BadRequestException('Trip not available');
 

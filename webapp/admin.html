@@ -85,13 +85,13 @@
   <section id="sec-trips" style="display:none">
     <h2>Histórico de viagens</h2>
     <div class="filters"><input id="fText" placeholder="Pesquisar passageira, motorista ou local…"><select id="fStatus"><option value="">Todos os estados</option><option>pending</option><option>accepted</option><option>arrived</option><option>in_progress</option><option>completed</option><option>cancelled</option></select></div>
-    <table><thead><tr><th>Quando</th><th>Passageira</th><th>De → Para</th><th>Cat.</th><th>Preço</th><th>Estado</th><th>Quem cancelou</th><th>Motivo</th><th>Motorista</th></tr></thead><tbody id="trips"><tr><td colspan="9" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Quando</th><th>Passageira</th><th>De → Para</th><th>Cat.</th><th>Preço</th><th>Estado</th><th>Quem cancelou</th><th>Motivo</th><th>Motorista</th><th>Viatura</th></tr></thead><tbody id="trips"><tr><td colspan="10" class="mut">A carregar…</td></tr></tbody></table>
   </section>
   <section id="sec-drivers" style="display:none">
     <h2>Aprovações pendentes</h2>
     <table><thead><tr><th>Motorista</th><th>Licença</th><th>Viatura</th><th>Desde</th><th>Decisão</th></tr></thead><tbody id="pending"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
     <h2>Motoristas online agora</h2>
-    <table><thead><tr><th>Nome</th><th>Categorias</th><th>Posição</th><th>Atualizado</th></tr></thead><tbody id="drivers"><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Nome</th><th>Viatura</th><th>Categorias</th><th>Posição</th><th>Atualizado</th></tr></thead><tbody id="drivers"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
     <h2>Histórico por motorista</h2>
     <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Ganhos</th></tr></thead><tbody id="drvHist"></tbody></table>
   </section>
@@ -124,7 +124,7 @@ let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadL
 var STM_R={pending:'REQUESTED',accepted:'ACCEPTED',arrived:'DRIVER_ARRIVED',in_progress:'IN_PROGRESS',completed:'COMPLETED',cancelled:'CANCELLED'};
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
 var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
-function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[])}}
+function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[]),vehicle:[t.vehicleLabel,t.vehiclePlate].filter(Boolean).join(' · ')}}
 function stopsHtml(x){const s=x.stops||[];if(!s.length)return '';return '<br><span class="mut">+ '+s.length+' '+(s.length===1?'paragem':'paragens')+': '+s.map(p=>esc((p&&(p.n||p.a))||((p&&p.lat!=null)?(p.lat+', '+p.lng):''))).join(' › ')+'</span>'}
 function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);c.age=(d.updated!=null?d.updated:null);c.cats=d.cats||[];return c}
 function matchDrv(x){const q=mapQuery;if(!q)return true;return ((x.name||'')+' '+(x.phone||'')+' '+(x.carPlate||'')+' '+(x.carMake||'')+' '+(x.cats||[]).join(' ')).toLowerCase().indexOf(q)>=0}
@@ -320,11 +320,11 @@ function renderActive(){
 const row6=x=>'<tr class="pick'+(x.id===selTrip?' sel':'')+'" data-id="'+x.id+'"><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td><td>'+esc(x.driver||'—')+'</td></tr>';
 function renderTrips(){
   const q=($('fText').value||'').toLowerCase(),st=$('fStatus').value;
-  const list=ALL.filter(x=>(!st||x.status===st)&&(!q||(x.passenger+' '+x.driver+' '+x.from+' '+x.to).toLowerCase().indexOf(q)>=0));
-  $('trips').innerHTML=list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+'</td></tr>').join('')||'<tr><td colspan="9" class="mut">Sem resultados.</td></tr>';
+  const list=ALL.filter(x=>(!st||x.status===st)&&(!q||(x.passenger+' '+x.driver+' '+x.from+' '+x.to+' '+(x.vehicle||'')).toLowerCase().indexOf(q)>=0));
+  $('trips').innerHTML=list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b></td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+'</td><td>'+esc(x.vehicle||'—')+'</td></tr>').join('')||'<tr><td colspan="10" class="mut">Sem resultados.</td></tr>';
 }
 function renderDrivers(){
-  $('drivers').innerHTML=DRV.map(x=>'<tr data-drvrow="'+x.id+'" class="pick'+(x.id===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b></td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td></tr>').join('')||'<tr><td colspan="4" class="mut">Nenhuma motorista online.</td></tr>';
+  $('drivers').innerHTML=DRV.map(x=>'<tr data-drvrow="'+x.id+'" class="pick'+(x.id===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b></td><td>'+esc(([x.carMake,x.carPlate].filter(Boolean).join(' · '))||'—')+'</td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td></tr>').join('')||'<tr><td colspan="5" class="mut">Nenhuma motorista online.</td></tr>';
 }
 function agg(key){
   const m={};
