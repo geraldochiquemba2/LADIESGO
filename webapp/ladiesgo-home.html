@@ -310,9 +310,12 @@ function __callPeer(){
   var d=t&&t.driver;
   return{name:((d&&(d.name||''))||'Motorista')};
 }
+var __ringT=null,__ringCtx=null;
+function __ringStart(){__ringStop();try{if(navigator.vibrate)navigator.vibrate([500,300,500,300,800]);}catch(e){}try{var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;__ringCtx=new AC();try{__ringCtx.resume();}catch(e){}var n=0;__ringT=setInterval(function(){try{n++;if(n>25||!__ringCtx){__ringStop();return;}var o=__ringCtx.createOscillator(),g=__ringCtx.createGain();o.connect(g);g.connect(__ringCtx.destination);o.frequency.value=440;g.gain.setValueAtTime(0.0001,__ringCtx.currentTime);g.gain.exponentialRampToValueAtTime(0.25,__ringCtx.currentTime+0.05);g.gain.exponentialRampToValueAtTime(0.0001,__ringCtx.currentTime+0.8);o.start();o.stop(__ringCtx.currentTime+0.9);}catch(e){}},1000);}catch(e){}}
+function __ringStop(){try{if(__ringT){clearInterval(__ringT);__ringT=null;}}catch(e){}try{if(__ringCtx){__ringCtx.close();__ringCtx=null;}}catch(e){}try{if(navigator.vibrate)navigator.vibrate(0);}catch(e){}}
 function __callUI(state,sub){
   var back=document.getElementById('callback');
-  if(state==='close'){if(back)back.remove();return;}
+  if(state==='close'){try{__ringStop();}catch(e){}if(back)back.remove();return;}
   if(!back){back=document.createElement('div');back.id='callback';back.className='pwback';document.body.appendChild(back);}
   var nm='';try{nm=esc(__call.peerName||'');}catch(e){nm=__call.peerName||'';}
   var h='<div class="pwbox" style="text-align:center"><div style="font-size:44px">📞</div>';
@@ -330,7 +333,7 @@ function __callUI(state,sub){
   on('callOk',function(){__callAccept();});
   on('callMute',function(){try{__call.muted=!__call.muted;(__call.mic.getTracks()||[]).forEach(function(tr){tr.enabled=!__call.muted;});var b=document.getElementById('callMute');if(b)b.textContent=__call.muted?'🔈 Ativar som':'🔇 Silenciar';}catch(e){}});
   on('callTel3',function(){try{var ph2=__call.lastPhone||'';if(ph2)window.location.href='tel:+' + ph2.replace(/\D/g,'');}catch(e){}});
-  if(state==='ringing'){try{if(navigator.vibrate)navigator.vibrate(300);}catch(e){}}
+  if(state==='ringing'){try{__ringStart();}catch(e){}}else{try{__ringStop();}catch(e){}}
   try{__callNet();}catch(e){}
 }
 function __callNet(){
