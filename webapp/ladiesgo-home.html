@@ -534,6 +534,14 @@ function __onIncoming(list){
     var fresh=ids.filter(function(id){return __lastIncIds.indexOf(id)<0;});
     __lastIncIds=ids;
     var on=false;try{on=(typeof online!=='undefined')?!!online:false;}catch(e){}
+    try{
+      var btn=document.getElementById('onBtn');
+      if(btn){
+        var n=on?(list||[]).length:0, s=btn.querySelector('.chatBdg');
+        if(n>0){if(!s){s=document.createElement('span');s.className='chatBdg';btn.appendChild(s);}s.textContent=n>9?'9+':String(n);btn.classList.remove('ring');void btn.offsetWidth;btn.classList.add('ring');}
+        else{if(s)s.remove();btn.classList.remove('ring');}
+      }
+    }catch(e){}
     if(fresh.length&&on){
       __beep();
       try{lte('🔔 Novo pedido! ('+fresh.length+')');}catch(e){}
