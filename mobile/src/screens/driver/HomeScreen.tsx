@@ -373,6 +373,11 @@ export default function DriverHomeScreen({ navigation }: any) {
                   <Text style={styles.addrValue} numberOfLines={2}>
                     {tripRequest?.trip?.pickupAddress}
                   </Text>
+                  {tripRequest?.trip?.pickupRef ? (
+                    <Text style={styles.addrRef} numberOfLines={2}>
+                      🏢 {tripRequest.trip.pickupRef}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
               <View style={styles.addrDivider} />
@@ -383,6 +388,11 @@ export default function DriverHomeScreen({ navigation }: any) {
                   <Text style={styles.addrValue} numberOfLines={2}>
                     {tripRequest?.trip?.dropoffAddress}
                   </Text>
+                  {tripRequest?.trip?.dropoffRef ? (
+                    <Text style={styles.addrRef} numberOfLines={2}>
+                      🏢 {tripRequest.trip.dropoffRef}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
             </View>
@@ -571,6 +581,10 @@ const styles = StyleSheet.create({
   addrTexts: { flex: 1 },
   addrLabel: { color: '#999', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
   addrValue: { color: '#1a1a2e', fontSize: 14, fontWeight: '500', marginTop: 2 },
+  addrRef: {
+    color: '#61188E', fontSize: 13, fontWeight: '700', marginTop: 4,
+    backgroundColor: '#faf5ff', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
+  },
   addrDivider: { height: 1, backgroundColor: '#e5e5e5', marginVertical: 10 },
 
   fareRow: {

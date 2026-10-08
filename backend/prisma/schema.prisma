@@ -77,6 +77,7 @@ model Driver {
   user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   trips Trip[]
 
+  @@index([isOnline])
   @@map("drivers")
 }
 
@@ -90,6 +91,8 @@ model Trip {
   dropoffAddress String
   dropoffLat     Float
   dropoffLng     Float
+  pickupRef      String?
+  dropoffRef     String?
   status         String        @default("REQUESTED")
   rideType       String        @default("ECONOMY")
   tripType       String        @default("RIDE")
@@ -124,6 +127,9 @@ model Trip {
   payment   Payment?
   ratings   Rating[]
 
+  @@index([passengerId, status])
+  @@index([driverId, status])
+  @@index([status, createdAt])
   @@map("trips")
 }
 
@@ -209,5 +215,6 @@ model Notification {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, isRead])
   @@map("notifications")
 }

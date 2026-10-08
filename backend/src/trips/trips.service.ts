@@ -102,6 +102,8 @@ export class TripsService {
         dropoffAddress: dto.dropoffAddress,
         dropoffLat: dto.dropoffLat,
         dropoffLng: dto.dropoffLng,
+        pickupRef: dto.pickupRef ?? null,
+        dropoffRef: dto.dropoffRef ?? null,
         rideType,
         tripType: dto.tripType ?? TripType.RIDE,
         packageDescription: dto.packageDescription ?? null,

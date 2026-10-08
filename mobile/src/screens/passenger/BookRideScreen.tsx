@@ -20,7 +20,15 @@ import {
   type CameraRef,
   type PressEvent,
 } from '@maplibre/maplibre-react-native';
-import { MAP_STYLE, fitCoordinates, lineBetween } from '../../components/appMap';
+import { MAP_STYLE, fitCoordinates } from '../../components/appMap';
+import {
+  curvePath,
+  fetchRoute,
+  fetchZone,
+  searchPlaces,
+  toGeoJSONLine,
+  type PlaceHit,
+} from '../../services/geo';
 import MapAttribution from '../../components/MapAttribution';
 import * as Location from 'expo-location';
 import { useDispatch, useSelector } from 'react-redux';
@@ -28,9 +36,9 @@ import { estimateFare, requestTrip } from '../../store/slices/tripSlice';
 import { AppDispatch, RootState } from '../../store';
 
 const RIDE_TYPES = [
-  { key: 'ECONOMY', label: 'Economy', icon: '🚗', desc: 'Affordable · 3–5 min' },
-  { key: 'COMFORT', label: 'Comfort', icon: '🚙', desc: 'Newer cars · 4–6 min' },
-  { key: 'PREMIUM', label: 'Premium', icon: '🚘', desc: 'Luxury · 5–8 min' },
+  { key: 'ECONOMY', label: 'Económico', icon: '🚗', desc: 'Acessível · 3–5 min' },
+  { key: 'COMFORT', label: 'Conforto', icon: '🚙', desc: 'Carros novos · 4–6 min' },
+  { key: 'PREMIUM', label: 'Família', icon: '🚘', desc: 'Espaçoso · 5–8 min' },
 ] as const;
 
 type Step = 'map' | 'choose';
@@ -52,6 +60,75 @@ export default function BookRideScreen({ navigation, route }: any) {
   const [packageDescription, setPackageDescription] = useState('');
   const [receiverName, setReceiverName] = useState('');
 
+  // Referência de prédio/porta (ex: Kilamba Bloco D, prédio K12, porta 3)
+  const [pickupRef, setPickupRef] = useState('');
+  const [dropoffRef, setDropoffRef] = useState('');
+
+  // Rota: curva imediata + substituição pela rota real (estratégia da web)
+  const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
+  const [routeMeta, setRouteMeta] = useState<{ distanceKm: number | null; durationMin: number | null; real: boolean } | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const routeSeq = useRef(0);
+
+  // Pesquisa de destino (Nominatim, limitada a Luanda)
+  const [search, setSearch] = useState('');
+  const [hits, setHits] = useState<PlaceHit[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const SAVED = [
+    { key: 'Casa', label: '🏠 Casa', lat: -8.8572, lng: 13.2765 },
+    { key: 'Trabalho', label: '💼 Trabalho', lat: -8.8136, lng: 13.2889 },
+    { key: 'Shopping', label: '🛍️ Shopping', lat: -8.9225, lng: 13.18 },
+  ] as const;
+
+  const loadRoute = async (to: { latitude: number; longitude: number }) => {
+    const my = ++routeSeq.current;
+    const fromLL: [number, number] = [location.latitude, location.longitude];
+    const toLL: [number, number] = [to.latitude, to.longitude];
+    // Desenho imediato (curva) para não deixar o mapa vazio
+    setRoutePoints(curvePath(fromLL, toLL));
+    setRouteMeta(null);
+    setRouteLoading(true);
+    const info = await fetchRoute(fromLL, toLL);
+    if (routeSeq.current !== my) return;
+    setRoutePoints(info.points);
+    setRouteMeta({ distanceKm: info.distanceKm, durationMin: info.durationMin, real: info.real });
+    setRouteLoading(false);
+  };
+
+  const pickDropoff = async (coord: { latitude: number; longitude: number }, label?: string) => {
+    setDropoff(coord);
+    setDropoffLabel(label ?? `${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)}`);
+    setHits([]);
+    setSearch('');
+    fitCoordinates(
+      cameraRef.current,
+      [[location.longitude, location.latitude], [coord.longitude, coord.latitude]],
+      { top: 80, right: 60, bottom: 340, left: 60 },
+    );
+    loadRoute(coord);
+    // Nome legível da zona (backend /api/zone, como na web)
+    try {
+      const zone = await fetchZone(coord.latitude, coord.longitude);
+      if (zone && !label) setDropoffLabel(zone);
+    } catch {}
+  };
+
+  // Pesquisa com debounce (500 ms)
+  React.useEffect(() => {
+    if (search.trim().length < 3) {
+      setHits([]);
+      return;
+    }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      const res = await searchPlaces(search, location);
+      setHits(res);
+      setSearching(false);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [search]);
+
   // Resolve pickup address once on mount
   React.useEffect(() => {
     Location.reverseGeocodeAsync({ latitude: location.latitude, longitude: location.longitude })
@@ -66,22 +143,7 @@ export default function BookRideScreen({ navigation, route }: any) {
 
   const handleMapPress = async (e: NativeSyntheticEvent<PressEvent>) => {
     const [lng, lat] = e.nativeEvent.lngLat;
-    const coord = { latitude: lat, longitude: lng };
-    setDropoff(coord);
-    setDropoffLabel(`${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)}`);
-    fitCoordinates(
-      cameraRef.current,
-      [[location.longitude, location.latitude], [coord.longitude, coord.latitude]],
-      { top: 80, right: 60, bottom: 340, left: 60 },
-    );
-    // Reverse geocode to get readable address
-    try {
-      const [place] = await Location.reverseGeocodeAsync(coord);
-      if (place) {
-        const parts = [place.name, place.street, place.district, place.city].filter(Boolean);
-        if (parts.length > 0) setDropoffLabel(parts.join(', '));
-      }
-    } catch {}
+    pickDropoff({ latitude: lat, longitude: lng });
   };
 
   const handleEstimate = async () => {
@@ -110,8 +172,10 @@ export default function BookRideScreen({ navigation, route }: any) {
       await dispatch(requestTrip({
         pickupAddress: pickupLabel,
         pickupLat: location.latitude, pickupLng: location.longitude,
+        pickupRef: pickupRef.trim() || undefined,
         dropoffAddress: dropoffLabel,
         dropoffLat: dropoff.latitude, dropoffLng: dropoff.longitude,
+        dropoffRef: dropoffRef.trim() || undefined,
         paymentMethod,
         rideType: isDelivery ? 'ECONOMY' : selectedType,
         ...(isDelivery && {
@@ -150,22 +214,19 @@ export default function BookRideScreen({ navigation, route }: any) {
         <Marker lngLat={[location.longitude, location.latitude]} anchor="center">
           <View style={styles.pickupDot}><View style={styles.pickupInner} /></View>
         </Marker>
-        {dropoff && (
+        {dropoff && routePoints.length > 0 && (
           <>
             <Marker lngLat={[dropoff.longitude, dropoff.latitude]} anchor="bottom">
               <Text style={styles.dropoffPinText}>📍</Text>
             </Marker>
             <GeoJSONSource
               id="routeSource"
-              data={lineBetween(
-                [location.longitude, location.latitude],
-                [dropoff.longitude, dropoff.latitude],
-              )}
+              data={toGeoJSONLine(routePoints)}
             >
               <Layer
                 id="routeLine"
                 type="line"
-                style={{ lineColor: '#FFD700', lineWidth: 3, lineDasharray: [2, 1.5] }}
+                style={{ lineColor: '#61188E', lineWidth: 5, lineOpacity: 0.9 }}
               />
             </GeoJSONSource>
           </>
@@ -188,20 +249,84 @@ export default function BookRideScreen({ navigation, route }: any) {
           </View>
           <View style={styles.dashedLine} />
 
+          <TextInput
+            style={styles.refInput}
+            placeholder="🏢 Prédio/porta na origem (ex: Bloco D, K12)"
+            placeholderTextColor="#bbb"
+            value={pickupRef}
+            onChangeText={setPickupRef}
+            maxLength={120}
+          />
+
           <View style={styles.locationRow}>
             <View style={styles.dotBlack} />
             <View style={styles.locationTexts}>
-              <Text style={styles.locationLabel}>Destination</Text>
+              <Text style={styles.locationLabel}>Destino</Text>
               <Text style={[styles.locationValue, !dropoff && styles.placeholder]}>
-                {dropoff ? dropoffLabel : 'Tap map to set destination'}
+                {dropoff ? dropoffLabel : 'Pesquisa ou toca no mapa'}
               </Text>
             </View>
             {dropoff && (
-              <TouchableOpacity onPress={() => { setDropoff(null); setDropoffLabel(''); }}>
+              <TouchableOpacity onPress={() => { setDropoff(null); setDropoffLabel(''); setRoutePoints([]); setRouteMeta(null); }}>
                 <Text style={styles.clearX}>✕</Text>
               </TouchableOpacity>
             )}
           </View>
+
+          {/* Pesquisa de destino (como na web: texto + pontos guardados + mapa) */}
+          <TextInput
+            style={styles.labelInput}
+            placeholder="🔍 Pesquisar destino em Luanda..."
+            placeholderTextColor="#bbb"
+            value={search}
+            onChangeText={setSearch}
+          />
+          {searching && <Text style={styles.searchHint}>A procurar...</Text>}
+          {hits.map((h, i) => (
+            <TouchableOpacity
+              key={`${h.lat},${h.lng},${i}`}
+              style={styles.hitRow}
+              onPress={() => pickDropoff({ latitude: h.lat, longitude: h.lng }, h.name)}
+            >
+              <Text style={styles.hitIcon}>📍</Text>
+              <Text style={styles.hitText} numberOfLines={1}>{h.name}</Text>
+            </TouchableOpacity>
+          ))}
+
+          <View style={styles.savedRow}>
+            {SAVED.map((s) => (
+              <TouchableOpacity
+                key={s.key}
+                style={styles.savedBtn}
+                onPress={() => pickDropoff({ latitude: s.lat, longitude: s.lng }, s.key)}
+              >
+                <Text style={styles.savedText}>{s.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {dropoff && (
+            <TextInput
+              style={styles.refInput}
+              placeholder="🏢 Prédio/porta no destino (ex: Bloco J, P4)"
+              placeholderTextColor="#bbb"
+              value={dropoffRef}
+              onChangeText={setDropoffRef}
+              maxLength={120}
+            />
+          )}
+
+          {/* Distância/tempo reais pela estrada (OSRM) */}
+          {dropoff && routeMeta?.distanceKm != null && (
+            <Text style={styles.routeInfo}>
+              🛣️ {routeMeta.distanceKm.toFixed(1).replace('.', ',')} km
+              {routeMeta.durationMin != null && ` · ~${Math.max(1, Math.round(routeMeta.durationMin))} min`}
+              {!routeMeta.real && ' · estimado'}
+            </Text>
+          )}
+          {dropoff && routeLoading && !routeMeta && (
+            <Text style={styles.routeInfo}>A calcular rota...</Text>
+          )}
 
           {dropoff && (
             <TextInput
@@ -234,8 +359,8 @@ export default function BookRideScreen({ navigation, route }: any) {
             <View style={styles.surgeBanner}>
               <Text style={styles.surgeIcon}>⚡</Text>
               <View>
-                <Text style={styles.surgeTitle}>High demand · {surgeMultiplier.toFixed(1)}x</Text>
-                <Text style={styles.surgeDesc}>Prices slightly higher right now</Text>
+                <Text style={styles.surgeTitle}>Muita procura · {surgeMultiplier.toFixed(1)}x</Text>
+                <Text style={styles.surgeDesc}>Preços um pouco mais altos agora</Text>
               </View>
             </View>
           )}
@@ -263,7 +388,7 @@ export default function BookRideScreen({ navigation, route }: any) {
                 </View>
                 <View style={styles.ridePriceCol}>
                   <Text style={[styles.ridePrice, styles.ridePriceActive]}>
-                    {fareEstimate.options?.find((o: any) => o.type === 'ECONOMY')?.fare ?? fareEstimate.estimatedFare} SAR
+                    {fareEstimate.options?.find((o: any) => o.type === 'ECONOMY')?.fare ?? fareEstimate.estimatedFare} Kz
                   </Text>
                 </View>
               </View>
@@ -286,7 +411,7 @@ export default function BookRideScreen({ navigation, route }: any) {
             </>
           ) : (
             <>
-          <Text style={styles.sectionLabel}>Choose ride</Text>
+          <Text style={styles.sectionLabel}>Escolhe a viagem</Text>
           {RIDE_TYPES.map((rt) => {
             const opt = fareEstimate.options?.find((o: any) => o.type === rt.key);
             const rtFare = opt?.fare ?? fareEstimate.estimatedFare;
@@ -303,7 +428,7 @@ export default function BookRideScreen({ navigation, route }: any) {
                   <Text style={styles.rideDesc}>{rt.desc}</Text>
                 </View>
                 <View style={styles.ridePriceCol}>
-                  <Text style={[styles.ridePrice, active && styles.ridePriceActive]}>{rtFare} SAR</Text>
+                  <Text style={[styles.ridePrice, active && styles.ridePriceActive]}>{rtFare} Kz</Text>
                   {active && <View style={styles.selectedCheck}><Text style={styles.checkText}>✓</Text></View>}
                 </View>
               </TouchableOpacity>
@@ -312,7 +437,7 @@ export default function BookRideScreen({ navigation, route }: any) {
             </>
           )}
 
-          <Text style={styles.sectionLabel}>Payment</Text>
+          <Text style={styles.sectionLabel}>Pagamento</Text>
           <View style={styles.payRow}>
             {(['CASH', 'CARD'] as const).map((m) => (
               <TouchableOpacity
@@ -322,7 +447,7 @@ export default function BookRideScreen({ navigation, route }: any) {
               >
                 <Text style={styles.payIcon}>{m === 'CASH' ? '💵' : '💳'}</Text>
                 <Text style={[styles.payBtnText, paymentMethod === m && styles.payBtnTextActive]}>
-                  {m === 'CASH' ? 'Cash' : 'Card'}
+                  {m === 'CASH' ? 'Numerário' : 'Cartão'}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -343,7 +468,7 @@ export default function BookRideScreen({ navigation, route }: any) {
                   <Text style={styles.bookBtnSub}>
                     {isDelivery
                       ? (fareEstimate.options?.find((o: any) => o.type === 'ECONOMY')?.fare ?? fareEstimate.estimatedFare)
-                      : fare} SAR
+                      : fare} Kz
                   </Text>
                 </View>
               )}
@@ -405,6 +530,28 @@ const styles = StyleSheet.create({
   labelInput: {
     marginHorizontal: 20, marginTop: 8, borderWidth: 1.5, borderColor: '#e5e5e5',
     borderRadius: 12, padding: 12, fontSize: 14, color: '#1a1a2e', backgroundColor: '#f9f9f9',
+  },
+  refInput: {
+    marginHorizontal: 20, marginTop: 8, borderWidth: 1.5, borderColor: '#61188E',
+    borderRadius: 12, padding: 12, fontSize: 14, color: '#1a1a2e', backgroundColor: '#faf5ff',
+  },
+  searchHint: { color: '#aaa', fontSize: 12, paddingHorizontal: 24, marginTop: 6 },
+  hitRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 20, marginTop: 6, padding: 10,
+    backgroundColor: '#f6f4fa', borderRadius: 10,
+  },
+  hitIcon: { fontSize: 14 },
+  hitText: { flex: 1, color: '#1a1a2e', fontSize: 13 },
+  savedRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, marginTop: 10 },
+  savedBtn: {
+    flex: 1, borderWidth: 1.5, borderColor: '#e5e5e5', borderRadius: 12,
+    paddingVertical: 10, alignItems: 'center', backgroundColor: '#fafafa',
+  },
+  savedText: { color: '#1a1a2e', fontWeight: '700', fontSize: 13 },
+  routeInfo: {
+    color: '#61188E', fontSize: 13, fontWeight: '700',
+    paddingHorizontal: 20, marginTop: 10, marginBottom: 4,
   },
   packageInput: {
     borderWidth: 1.5, borderColor: '#e5e5e5', borderRadius: 12, padding: 13,

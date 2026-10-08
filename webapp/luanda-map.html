@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LadiesGo — Captar Luanda (Overpass)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+body{margin:0;background:#1a0b2e;color:#fff;font-family:Inter,Arial,sans-serif}
+#map{position:fixed;top:0;left:0;right:0;bottom:0}
+#p{position:fixed;top:10px;left:10px;z-index:9999;background:rgba(26,11,46,.95);border:1px solid #61188E;border-radius:10px;padding:14px;width:360px;max-height:95vh;overflow-y:auto}
+h2{margin:0 0 6px;color:#c084fc;font-size:14px}
+p{margin:0 0 4px;color:#a78bca;font-size:11px}
+.bar{background:#3b2358;height:6px;border-radius:3px;margin-bottom:6px}
+.fill{background:linear-gradient(90deg,#61188E,#e879f9);height:6px;border-radius:3px;width:0%;transition:width .3s}
+.g{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px;margin-bottom:8px}
+.g div{background:#2a1445;padding:6px;border-radius:4px;text-align:center}
+.g b{display:block;font-size:16px;color:#e879f9}
+.g small{color:#a78bca;font-size:9px}
+input[type=text]{width:100%;padding:8px;border:1px solid #61188E;border-radius:6px;background:#2a1445;color:#fff;font-size:12px;margin-bottom:6px;box-sizing:border-box}
+select{width:100%;padding:8px;border:1px solid #61188E;border-radius:6px;background:#2a1445;color:#fff;font-size:12px;margin-bottom:6px}
+button{display:block;width:100%;padding:10px;border:none;border-radius:6px;font-size:12px;font-weight:bold;cursor:pointer;margin-bottom:4px}
+#b1{background:linear-gradient(135deg,#61188E,#e879f9);color:#fff}
+#b2{background:#22c55e;color:#000}
+#b3{background:#38bdf8;color:#000}
+#b4{background:#e879f9;color:#1a0b2e}
+button:disabled{opacity:.3}
+#lg{font-size:9px;color:#a78bca;margin-top:6px;max-height:120px;overflow-y:auto}
+.er{color:#f87171}.ok{color:#4ade80}.warn{color:#facc15}
+.leaflet-popup-content{max-width:280px;font-size:11px}
+.leaflet-popup-content b{font-size:13px;color:#333}
+.legend{position:fixed;bottom:10px;right:10px;z-index:9999;background:rgba(26,11,46,.92);border:1px solid #61188E;border-radius:8px;padding:10px;font-size:10px}
+.legend div{margin:2px 0;display:flex;align-items:center;gap:6px}
+.legend span{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="p">
+<h2>🦋 LADIESGO — CAPTAR LUANDA</h2>
+<p>Extração directa do Overpass API (pontos para a app)</p>
+<div class="bar"><div class="fill" id="pb"></div></div>
+<div id="st">Pronto — carrega para extrair</div>
+<div class="g">
+<div><b id="v1">0</b><small>Total</small></div>
+<div><b id="v2">0/23</b><small>Queries</small></div>
+<div><b id="v3">0</b><small>Municípios</small></div>
+<div><b id="v4">0m</b><small>Tempo</small></div>
+</div>
+<input type="text" id="search" placeholder="Pesquisar nome, rua, tipo..." oninput="filter()">
+<select id="muni" onchange="filter()"><option value="">Todos os Municípios</option></select>
+<select id="cat" onchange="filter()"><option value="">Todas as Categorias</option></select>
+<button id="b1" onclick="go()">EXTRAIR LUANDA (OVERPASS)</button>
+<button id="b2" onclick="loadFile()" disabled>Carregar JSON Local</button>
+<button id="b3" onclick="dlJSON()" disabled>Download JSON (app)</button>
+<button id="b4" onclick="dlFiltered()" disabled>Download Filtrado (CSV)</button>
+<button id="b5" onclick="loadTop()">Juntar Top LadiesGo (56)</button>
+<button id="b6" onclick="retryFailed()">Repetir falhadas</button>
+<div id="lg"></div>
+</div>
+<div class="legend">
+<div><span style="background:#e74c3c"></span>Saúde</div>
+<div><span style="background:#3498db"></span>Educação</div>
+<div><span style="background:#2ecc71"></span>Gastronomia</div>
+<div><span style="background:#f39c12"></span>Comércio</div>
+<div><span style="background:#9b59b6"></span>Finanças</div>
+<div><span style="background:#1abc9c"></span>Turismo</div>
+<div><span style="background:#e67e22"></span>Edifícios</div>
+<div><span style="background:#95a5a6"></span>Serviços Púb.</div>
+<div><span style="background:#ff6b9d"></span>Escritórios</div>
+<div><span style="background:#f1c40f"></span>Lazer/Desporto</div>
+<div><span style="background:#b71c1c"></span>Bairros</div>
+<div><span style="background:#888"></span>Ruas</div>
+<div><span style="background:#ff9800"></span>Infraestrutura</div>
+<div><span style="background:#8e44ad"></span>Artesanato</div>
+<div><span style="background:#f6b"></span>Outros</div>
+</div>
+<script>
+var mp=L.map('map').setView([-8.839,13.2894],12);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(mp);
+mp.attributionControl.setPrefix('© OpenStreetMap');
+var mg=L.layerGroup().addTo(mp);
+var pm=[];
+var all=[],filtered=[],se={};
+var st,go_=0,tq=0,tot=0;
+var API='https://maps.mail.ru/osm/tools/overpass/api/interpreter';
+var BBOX={s:-9.65,w:13.0,n:-8.55,e:13.55};
+var R=3,D=1500;
+
+// Municípios/distritos de Luanda (para atribuir cada ponto ao mais próximo)
+var MV=[
+  {n:'Ingombota',lat:-8.815,lng:13.235},
+  {n:'Sambizanga',lat:-8.810,lng:13.270},
+  {n:'Rangel',lat:-8.830,lng:13.250},
+  {n:'Maianga',lat:-8.850,lng:13.240},
+  {n:'Samba',lat:-8.870,lng:13.220},
+  {n:'Cazenga',lat:-8.850,lng:13.290},
+  {n:'Kilamba Kiaxi',lat:-8.920,lng:13.280},
+  {n:'Talatona',lat:-8.930,lng:13.180},
+  {n:'Belas',lat:-8.990,lng:13.180},
+  {n:'Viana',lat:-8.900,lng:13.370},
+  {n:'Cacuaco',lat:-8.780,lng:13.370}
+];
+
+function clr(t){
+  if(!t) return '#f6b';
+  var c=t.toLowerCase();
+  if(c.match(/hospital|clinic|pharmacy|doctor|dentist|veterinary|health|nursing|blood|maternity/)) return '#e74c3c';
+  if(c.match(/school|university|college|academy|kindergarten|library|training|childcare|nursery/)) return '#3498db';
+  if(c.match(/restaurant|bar|cafe|fast_food|pub|ice_cream|nightclub|bakery|biergarten|food/)) return '#2ecc71';
+  if(c.match(/shop|supermarket|convenience|clothes|shoes|jewel|cosmetic|furniture|hardware|electronic|mobile|car_repair|car_parts|hairdresser|beauty|market|mall|doityourself/)) return '#f39c12';
+  if(c.match(/bank|atm|money|finance|bureau_de_change/)) return '#9b59b6';
+  if(c.match(/hotel|museum|tourism|hostel|guest|motel|camp|gallery|spa/)) return '#1abc9c';
+  if(c.match(/building|apart|residential|commercial|retail|industrial|house|yes|construction|detached|terrace/)) return '#e67e22';
+  if(c.match(/fuel|police|fire|post|embassy|townhall|worship|bus_station|parking|toilet|community|government|administrative|marketplace|fountain|palace|assembly|parliament|ministry/)) return '#95a5a6';
+  if(c.match(/office|company|lawyer|insurance|consulting|logistics|manufacturer|ngo|government/)) return '#ff6b9d';
+  if(c.match(/park|playground|stadium|pitch|swimming|fitness|gym|cinema|theatre|leisure|sport|dance/)) return '#f1c40f';
+  if(c.match(/place|neighbourhood|suburb|quarter|locality|city|town|village|hamlet|centralidade|condom|urbaniz|residencial/)) return '#b71c1c';
+  if(c.match(/church|mosque|cathedral|chapel/)) return '#6d28d9';
+  if(c.match(/airport|aerodrome|station|halt|port|ferry/)) return '#00bcd4';
+  if(c.match(/stadium|beach|viewpoint/)) return '#f1c40f';
+  if(c.match(/tertiary|secondary|primary|residential|unclassified|service|highway|motorway|trunk|living_street|pedestrian/)) return '#888';
+  if(c.match(/craft|brewery|carpenter|electrician|painter|plumber|tailor|photographer/)) return '#8e44ad';
+  if(c.match(/natural|water|river|stream|landuse|forest|wetland/)) return '#2c3e50';
+  if(c.match(/historic|memorial|monument|ruins|castle|fort|tower/)) return '#7f8c8d';
+  if(c.match(/emergency|ambulance|rescue|defibrillator/)) return '#e91e63';
+  if(c.match(/military|barracks|naval|base/)) return '#455a64';
+  if(c.match(/power|mast|antenna|windmill|pipeline|factory|man_made|street_lamp/)) return '#ff9800';
+  if(c.match(/transport|public_transport|bus_stop|railway|aeroway/)) return '#00bcd4';
+  return '#f6b';
+}
+
+function S(v){document.getElementById('st').textContent=v}
+function P(v){document.getElementById('pb').style.width=v+'%'}
+function Lg(s,c){var e=document.getElementById('lg');e.innerHTML='<div class="'+c+'">'+new Date().toLocaleTimeString()+' '+s+'</div>'+e.innerHTML}
+function Us(){
+  document.getElementById('v1').textContent=tot;
+  document.getElementById('v2').textContent=go_+'/'+tq;
+  document.getElementById('v4').textContent=((Date.now()-st)/60000).toFixed(1)+'m';
+}
+function dk(a,b){return a.toFixed(4)+','+b.toFixed(4)}
+
+function flush(){
+  if(pm.length===0) return;
+  var bg=L.layerGroup();
+  for(var i=0;i<pm.length;i++){
+    var p=pm[i];
+    L.circleMarker([p[0],p[1]],{radius:3.5,fillColor:p[2],color:'#111',weight:0.4,fillOpacity:0.85})
+      .bindPopup('<b>'+p[3]+'</b><br><small>'+p[4]+'</small>')
+      .addTo(bg);
+  }
+  bg.addTo(mg);
+  pm=[];
+}
+
+function add(el,cat,prov){
+  var lat=el.lat||(el.center&&el.center.lat);
+  var lon=el.lon||(el.center&&el.center.lon);
+  if(!lat||!lon) return 0;
+  if(lat<BBOX.s||lat>BBOX.n||lon<BBOX.w||lon>BBOX.e) return 0;
+  var k=dk(lat,lon);
+  if(se[k]) return 0;
+  var t=el.tags||{};
+  var nm=t.name||t['name:pt']||t['name:en']||t.brand||t.operator||'';
+  if(!nm){
+    var fb=[t.amenity,t.shop,t.office,t.tourism,t.building,t.place,t.landuse,t.healthcare]
+      .filter(Boolean).map(function(s){return s.replace(/_/g,' ');});
+    nm=fb.join(' ')||'';
+  }
+  if(!nm) return 0;
+  var tp=t.amenity||t.shop||t.office||t.tourism||t.leisure||t.healthcare||t.craft||t.building||t.landuse||t.highway||t.public_transport||t.man_made||t.power||t.military||t.emergency||t.historic||t.sport||t.natural||t.place||cat;
+
+  var muni='';
+  var bd=Infinity;
+  for(var i=0;i<MV.length;i++){
+    var d=Math.sqrt(Math.pow(MV[i].lat-lat,2)+Math.pow(MV[i].lng-lon,2));
+    if(d<bd){bd=d;muni=MV[i].n;}
+  }
+
+  se[k]=1;
+  var phone=t.phone||t['contact:phone']||'';
+  var hours=t.opening_hours||'';
+  all.push([nm,lat,lon,'Luanda',muni,tp,{phone:phone,hours:hours}]);
+  tot++;
+  pm.push([lat,lon,clr(tp),nm,tp]);
+  return 1;
+}
+
+async function fq(q){
+  for(var i=0;i<=R;i++){
+    try{
+      var body='data='+encodeURIComponent(q);
+      var r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body,signal:AbortSignal.timeout(200000)});
+      if(r.status===429){await new Promise(function(rs){setTimeout(rs,30000*(i+1))});continue;}
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return await r.json();
+    }catch(e){
+      if(i<R) await new Promise(function(rs){setTimeout(rs,D*(i+1))});
+      else throw e;
+    }
+  }
+}
+
+var QS=[
+  {n:'Amenity',q:function(b){return'[out:json][timeout:180];(node["amenity"]('+b+');way["amenity"]('+b+');relation["amenity"]('+b+'););out center body;'}},
+  {n:'Shop',q:function(b){return'[out:json][timeout:180];(node["shop"]('+b+');way["shop"]('+b+');relation["shop"]('+b+'););out center body;'}},
+  {n:'Office',q:function(b){return'[out:json][timeout:180];(node["office"]('+b+');way["office"]('+b+');relation["office"]('+b+'););out center body;'}},
+  {n:'Tourism+Leisure',q:function(b){return'[out:json][timeout:180];(node["tourism"]('+b+');way["tourism"]('+b+');relation["tourism"]('+b+');node["leisure"]('+b+');way["leisure"]('+b+'););out center body;'}},
+  {n:'Healthcare+Craft',q:function(b){return'[out:json][timeout:180];(node["healthcare"]('+b+');way["healthcare"]('+b+');node["craft"]('+b+');way["craft"]('+b+'););out center body;'}},
+  {n:'Building Named',q:function(b){return'[out:json][timeout:180];(way["name"]["building"]('+b+');relation["name"]["building"]('+b+');node["building"="yes"]('+b+'););out center body;'}},
+  {n:'Places+Landuse',q:function(b){return'[out:json][timeout:180];(node["place"]('+b+');way["landuse"]('+b+');relation["landuse"]('+b+');way["residential"]('+b+');relation["residential"]('+b+'););out center body;'}},
+  {n:'Roads Named',q:function(b){return'[out:json][timeout:180];(way["name"]["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|service|living_street|pedestrian"]('+b+'););out center body;'}},
+  {n:'Addresses',q:function(b){return'[out:json][timeout:180];(node["addr:street"]('+b+');way["addr:street"]('+b+');node["addr:housenumber"]('+b+'););out center body;'}},
+  {n:'Transport',q:function(b){return'[out:json][timeout:180];(node["public_transport"]('+b+');node["highway"="bus_stop"]('+b+');way["public_transport"]('+b+'););out center body;'}},
+  {n:'Infrastructure',q:function(b){return'[out:json][timeout:180];(node["man_made"]('+b+');way["man_made"]('+b+');node["power"]('+b+');way["power"]('+b+');node["military"]('+b+');way["military"]('+b+');node["emergency"]('+b+'););out center body;'}},
+  {n:'Historic+Sport',q:function(b){return'[out:json][timeout:180];(node["historic"]('+b+');way["historic"]('+b+');node["sport"]('+b+');node["natural"="water"]('+b+');way["natural"="water"]('+b+'););out center body;'}},
+  {n:'Named Nodes',q:function(b){return'[out:json][timeout:180];(node["name"]('+b+'););out body;'}},
+  {n:'Seguranca SOS',q:function(b){return'[out:json][timeout:180];(node["amenity"~"police|fire_station"]('+b+');way["amenity"~"police|fire_station"]('+b+');relation["amenity"~"police|fire_station"]('+b+');node["emergency"]('+b+');way["emergency"]('+b+');node["amenity"="pharmacy"]["opening_hours"~"24"]('+b+'););out center body;'}},
+  {n:'Culto+Mercados',q:function(b){return'[out:json][timeout:180];(node["amenity"~"place_of_worship|marketplace"]('+b+');way["amenity"~"place_of_worship|marketplace"]('+b+');relation["amenity"~"place_of_worship|marketplace"]('+b+'););out center body;'}},
+  {n:'Governo',q:function(b){return'[out:json][timeout:180];(node["office"="government"]('+b+');way["office"="government"]('+b+');relation["office"]('+b+'););out center body;'}},
+  {n:'Embaixadas',q:function(b){return'[out:json][timeout:180];(node["amenity"~"townhall|embassy"]('+b+');way["amenity"~"townhall|embassy"]('+b+'););out center body;'}},
+  {n:'Motoristas',q:function(b){return'[out:json][timeout:180];(node["amenity"~"fuel|car_wash|car_rental|parking"]('+b+');way["amenity"~"fuel|car_wash|car_rental|parking"]('+b+');node["shop"~"car_repair|car_parts|car|tyres"]('+b+');way["shop"~"car_repair|car_parts|car|tyres"]('+b+'););out center body;'}},
+  {n:'Taxi+Aeroporto',q:function(b){return'[out:json][timeout:180];(node["amenity"="taxi"]('+b+');node["aeroway"]('+b+');way["aeroway"="aerodrome"]('+b+');node["amenity"="ferry_terminal"]('+b+');way["amenity"="ferry_terminal"]('+b+'););out center body;'}},
+  {n:'Bairros Limites',q:function(b){return'[out:json][timeout:180];(relation["boundary"="administrative"]["admin_level"~"7|8|9|10"]('+b+');way["boundary"="administrative"]["admin_level"~"7|8|9|10"]('+b+'););out center body;'}},
+  {n:'Contactos',q:function(b){return'[out:json][timeout:180];(node["phone"]('+b+');way["phone"]('+b+');node["contact:phone"]('+b+');way["contact:phone"]('+b+'););out center body;'}},
+  {n:'Condominios+Extras',q:function(b){return'[out:json][timeout:180];(node["name"~"condom",i]('+b+');way["name"~"condom",i]('+b+');relation["name"~"condom",i]('+b+');node["name"~"urbaniz",i]('+b+');way["name"~"urbaniz",i]('+b+');relation["name"~"urbaniz",i]('+b+');node["name"~"centralidade",i]('+b+');way["name"~"centralidade",i]('+b+');relation["name"~"centralidade",i]('+b+');node["name"~"residencial|bairro|vila",i]('+b+');way["name"~"residencial|bairro|vila",i]('+b+');relation["name"~"residencial|bairro|vila",i]('+b+');node["landuse"="cemetery"]('+b+');way["landuse"="cemetery"]('+b+');node["amenity"="grave_yard"]('+b+');way["amenity"="grave_yard"]('+b+');way["leisure"]('+b+');relation["leisure"]('+b+'););out center body;'}},
+  {n:'Redes Finais',q:function(b){return'[out:json][timeout:180];(way["place"]('+b+');relation["place"]('+b+');node["landuse"]('+b+');way["healthcare"]('+b+');way["craft"]('+b+');node["railway"~"station|halt"]('+b+');way["railway"~"station|halt"]('+b+');way["aeroway"]('+b+');relation["man_made"]('+b+');relation["power"]('+b+');relation["military"]('+b+');relation["emergency"]('+b+');relation["office"]('+b+');relation["shop"]('+b+');way["addr:housenumber"]('+b+');relation["boundary"="administrative"]["admin_level"~"4|5|6"]('+b+');relation["route"~"bus|share_taxi|minibus"]('+b+'););out center body;'}},
+];
+
+var failed=[];
+
+async function go(){
+  document.getElementById('b1').disabled=true;
+  all=[];se={};st=Date.now();go_=0;tot=0;pm=[];failed=[];
+  mg.clearLayers();
+  tq=QS.length;
+  var bb=BBOX.s+','+BBOX.w+','+BBOX.n+','+BBOX.e;
+  S('A iniciar '+QS.length+' queries sobre Luanda...');
+  Lg('BBOX: '+bb,'ok');
+  var ft=setInterval(flush,1500);
+
+  for(var i=0;i<QS.length;i++){
+    var qs=QS[i];
+    S('['+(i+1)+'/'+QS.length+'] '+qs.n+'...');
+    document.getElementById('v2').textContent=(i+1)+'/'+QS.length;
+    P(((i)/QS.length*100).toFixed(0));
+    try{
+      var d=await fq(qs.q(bb));
+      var c=0;
+      for(var j=0;j<d.elements.length;j++){
+        c+=add(d.elements[j],qs.n,'Luanda');
+      }
+      if(pm.length>=200) flush();
+      go_++;Us();
+      Lg(qs.n+': +'+c+' (total: '+tot+')',c>0?'ok':'warn');
+    }catch(e){
+      go_++;Us();
+      failed.push(qs.n);
+      Lg('ERRO '+qs.n+': '+e.message,'er');
+    }
+    await new Promise(function(r){setTimeout(r,2000)});
+  }
+
+  clearInterval(ft);flush();
+  P(100);
+  S('CONCLUÍDO! '+tot+' locais em '+((Date.now()-st)/60000).toFixed(1)+'min');
+  Lg('TOTAL: '+tot+' locais únicos','ok');
+  document.getElementById('b1').disabled=false;
+  document.getElementById('b2').disabled=false;
+  document.getElementById('b3').disabled=false;
+  document.getElementById('b4').disabled=false;
+  populate();
+}
+
+// Repete só as queries que falharam (ex. 504) e funde sem duplicar.
+async function retryFailed(){
+  // Após reload a lista de falhas esvazia: nestes casos vai buscar as
+  // 3 queries grandes que costumam falhar (a dedup evita duplicados).
+  if(!failed.length && all.length===0){
+    failed=['Motoristas','Governo+Embaixadas','Culto+Mercados'];
+  }
+  if(!failed.length){S('Sem falhas — está tudo extraído');return;}
+  var bb=BBOX.s+','+BBOX.w+','+BBOX.n+','+BBOX.e;
+  var todo=failed.slice();failed=[];
+  // A query antiga pesada foi dividida em duas: mapear o nome antigo.
+  var todo2=[];
+  todo.forEach(function(nm){
+    if(nm==='Governo+Embaixadas'){todo2.push('Governo','Embaixadas');}
+    else{todo2.push(nm);}
+  });
+  todo=todo2;
+  S('A repetir '+todo.length+' queries...');
+  for(var i=0;i<todo.length;i++){
+    var nm=todo[i];
+    var qs=null;
+    for(var j=0;j<QS.length;j++){if(QS[j].n===nm){qs=QS[j];break;}}
+    if(!qs)continue;
+    try{
+      var d=await fq(qs.q(bb));
+      var c=0;
+      for(var k=0;k<d.elements.length;k++){c+=add(d.elements[k],qs.n,'Luanda');}
+      flush();go_++;Us();
+      Lg('REPETIR '+qs.n+': +'+c+' (total: '+tot+')',c>0?'ok':'warn');
+    }catch(e){
+      failed.push(qs.n);
+      Lg('ERRO outra vez '+qs.n+': '+e.message,'er');
+    }
+    await new Promise(function(r){setTimeout(r,2000)});
+  }
+  populate();
+  if(failed.length){S('Faltam '+failed.length+': '+failed.join(', '));}
+  else{S('TUDO COMPLETO! '+tot+' locais');Lg('TOTAL FINAL: '+tot+' locais únicos','ok');}
+}
+
+function populate(){
+  var munis={},cats={};
+  all.forEach(function(loc){
+    if(loc[4]) munis[loc[4]]=(munis[loc[4]]||0)+1;
+    if(loc[5]) cats[loc[5]]=(cats[loc[5]]||0)+1;
+  });
+  var ms=document.getElementById('muni');ms.innerHTML='<option value="">Todos os Municípios</option>';
+  Object.keys(munis).sort(function(a,b){return munis[b]-munis[a]}).forEach(function(m){
+    var o=document.createElement('option');o.value=m;o.textContent=m+' ('+munis[m]+')';ms.appendChild(o);
+  });
+  var cs=document.getElementById('cat');cs.innerHTML='<option value="">Todas as Categorias</option>';
+  Object.keys(cats).sort(function(a,b){return cats[b]-cats[a]}).forEach(function(c){
+    var o=document.createElement('option');o.value=c;o.textContent=c+' ('+cats[c]+')';cs.appendChild(o);
+  });
+  document.getElementById('v3').textContent=Object.keys(munis).length;
+  filtered=all;render();
+}
+
+function render(){
+  mg.clearLayers();
+  var vis=0;
+  filtered.forEach(function(loc){
+    var c=clr(loc[5]);
+    var m=L.circleMarker([loc[1],loc[2]],{radius:4,fillColor:c,color:'#222',weight:0.3,fillOpacity:0.85});
+    m.bindPopup('<b>'+loc[0]+'</b><br><small>'+loc[4]+' | '+loc[3]+'</small><br><small>Tipo: '+loc[5]+'</small><br><small>'+loc[1].toFixed(5)+', '+loc[2].toFixed(5)+'</small>');
+    m.addTo(mg);
+    vis++;
+  });
+  document.getElementById('v1').textContent=vis;
+}
+
+function filter(){
+  var q=(document.getElementById('search').value||'').toLowerCase();
+  var m=document.getElementById('muni').value;
+  var c=document.getElementById('cat').value;
+  filtered=all.filter(function(loc){
+    if(m&&loc[4]!==m) return false;
+    if(c&&loc[5]!==c) return false;
+    if(q){var s=(loc[0]+' '+loc[4]+' '+loc[5]+' '+loc[3]).toLowerCase();return s.indexOf(q)>=0;}
+    return true;
+  });
+  render();
+}
+
+function loadFile(){
+  var inp=document.createElement('input');inp.type='file';inp.accept='.json';
+  inp.onchange=function(e){
+    var f=e.target.files[0];if(!f) return;
+    var r=new FileReader();
+    r.onload=function(ev){
+      try{
+        var d=JSON.parse(ev.target.result);
+        var raw=d.places||d.d||d;
+        var c=0;
+        raw.forEach(function(p){
+          if(Array.isArray(p)){
+            if(!isFinite(p[1])||!isFinite(p[2]))return;
+            var ka=dk(p[1],p[2]);if(se[ka])return;se[ka]=1;
+            all.push(p);pm.push([p[1],p[2],clr(p[5]||''),p[0],p[5]||'']);c++;
+          }else{
+            if(!isFinite(p.lat)||!isFinite(p.lng))return;
+            var kb=dk(p.lat,p.lng);if(se[kb])return;se[kb]=1;
+            all.push([p.name,p.lat,p.lng,p.province||'Luanda',p.municipality||'',p.type||'',{phone:p.phone||'',hours:p.hours||''}]);
+            pm.push([p.lat,p.lng,clr(p.type||''),p.name,p.type||'']);c++;
+          }
+        });
+        tot=all.length;flush();populate();
+        Lg('Ficheiro: +'+c+' novos ('+raw.length+' no ficheiro, total '+tot+')',c>0?'ok':'warn');
+      }catch(e){alert('JSON inválido');}
+    };
+    r.readAsText(f);
+  };
+  inp.click();
+}
+
+// JSON pronto para a app: {places:[{name,lat,lng,province,municipality,type}]}
+function dlJSON(){
+  if(!all.length) return;
+  var places=all.map(function(l){
+    var x={name:l[0],lat:l[1],lng:l[2],province:l[3],municipality:l[4],type:l[5]};
+    if(l[6]&&l[6].phone) x.phone=l[6].phone;
+    if(l[6]&&l[6].hours) x.hours=l[6].hours;
+    return x;
+  });
+  var b=new Blob([JSON.stringify({places:places})],{type:'application/json'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(b);
+  a.download='ladiesgo-luanda-'+all.length+'.json';a.click();
+  Lg('JSON app descarregado: ladiesgo-luanda-'+all.length+'.json','ok');
+}
+
+// Top LadiesGo: 56 locais verificados (OSM quando existe, manual quando não).
+// Funde com o que já foi extraído, sem duplicar.
+function loadTop(){
+  S('A carregar Top LadiesGo...');
+  fetch('luanda-top.json').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(d){
+    var raw=d.places||[];var c=0;
+    raw.forEach(function(p){
+      if(p==null||!isFinite(p.lat)||!isFinite(p.lng))return;
+      var k=dk(p.lat,p.lng);if(se[k])return;se[k]=1;
+      all.push([p.name,p.lat,p.lng,p.province||'Luanda',p.municipality||'',p.type||'',{phone:p.phone||'',hours:p.hours||''}]);
+      pm.push([p.lat,p.lng,clr(p.type||''),p.name,p.type||'']);c++;
+    });
+    tot=all.length;flush();populate();
+    Lg('Top LadiesGo: +'+c+' locais ('+raw.length+' no ficheiro)',c>0?'ok':'warn');
+    S('Top fundido: +'+c+' locais');
+  }).catch(function(e){Lg('Erro Top: '+e.message,'er');S('Erro a carregar Top');});
+}
+
+function dlFiltered(){
+  if(!filtered.length) return;
+  var h='name,lat,lng,province,municipality,type,phone,hours\n';
+  var r=filtered.map(function(l){return'"'+(l[0]||'').replace(/"/g,'""')+'",'+l[1]+','+l[2]+',"'+l[3]+'","'+l[4]+'","'+l[5]+'","'+((l[6]&&l[6].phone)||'').replace(/"/g,'""')+'","'+((l[6]&&l[6].hours)||'').replace(/"/g,'""')+'"';}).join('\n');
+  var b=new Blob([h+r],{type:'text/csv'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='ladiesgo-luanda-filtrado-'+filtered.length+'.csv';a.click();
+}
+</script>
+</body>
+</html>

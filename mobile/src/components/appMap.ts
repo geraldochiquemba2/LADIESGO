@@ -1,9 +1,9 @@
 import type { CameraRef } from '@maplibre/maplibre-react-native';
 
-// Free CARTO "Dark Matter" vector style (midnight blue/dark theme) rendered by
-// MapLibre — real map with streets and labels, no Google Maps API key needed.
+// Estilo claro CARTO "Positron" (bom contraste de dia em Luanda, mesma
+// estratégia da web que usa OSM standard + fallback CARTO light).
 // Attribution "© OpenStreetMap © CARTO" is shown via <MapAttribution />.
-export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
 
 // Fit the camera around a set of [lng, lat] coordinates (replaces
 // react-native-maps fitToCoordinates). Padding is in screen points.

@@ -11,7 +11,15 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       const adapter = new PrismaBetterSqlite3({ url: process.env.DATABASE_URL });
       super({ adapter }); // SQLite local
     } else {
-      const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+      // Pool pequeno: 1 instância Render free + Neon free. Poucas ligações
+      // + idle curto ajudam a BD a adormecer (scale-to-zero) fora dos picos.
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        max: 5,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+      });
+      pool.on('error', (e) => console.warn('pg pool:', e.message?.slice(0, 120)));
       const adapter = new PrismaPg(pool);
       super({ adapter });
     }

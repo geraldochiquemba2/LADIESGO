@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsEnum, IsOptional, IsArray, ValidateNested, ArrayMaxSize, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsEnum, IsOptional, IsArray, ValidateNested, ArrayMaxSize, Min, Max, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 
 // Local: o schema SQLite usa String em vez de enum (valores iguais aos de produção)
@@ -97,6 +97,16 @@ export class RequestTripDto {
   @IsOptional()
   @IsString()
   receiverPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  pickupRef?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  dropoffRef?: string;
 
   @IsOptional()
   @IsArray()

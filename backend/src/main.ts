@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import * as path from 'path';
 import * as fs from 'fs';
+import compression from 'compression';
 
 function resolveWebFile(page: string): string | null {
   const candidates = [
@@ -34,6 +35,9 @@ function sendWeb(res: any, page: string) {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Gzip: menos banda nos 100GB do Render free (JSON + HTML comprimem ~70%).
+  app.use(compression());
 
   // Behind Railway's proxy, X-Forwarded-For is "<real client>, <edge>" and the
   // edge IP ROTATES every request. `trust proxy: 1` keyed the rate limiter on
@@ -67,6 +71,121 @@ async function bootstrap() {
     res.json({ ok: true, ts: Date.now(), keepAlive });
   });
 
+  // Cache em memória (poupa Nominatim/OSRM + banda no Render free).
+  // zone: nomes de bairro quase não mudam (24h); route: trânsito muda (10min).
+  const tinyCache = new Map<string, { exp: number; body: any }>();
+  function cacheGet(key: string): any | null {
+    const e = tinyCache.get(key);
+    if (!e) return null;
+    if (Date.now() > e.exp) {
+      tinyCache.delete(key);
+      return null;
+    }
+    return e.body;
+  }
+  function cacheSet(key: string, body: any, ttlMs: number) {
+    if (tinyCache.size > 2000) tinyCache.clear();
+    tinyCache.set(key, { exp: Date.now() + ttlMs, body });
+  }
+
+  // Índice de locais LadiesGo (23k+ Luanda) em memória: pesquisa instantânea
+  // sem gastar BD (0 CU) e sem depender do Nominatim. Carregado do JSON
+  // gerado pelo extrator (webapp/ladiesgo-luanda-final.json).
+  type PlaceEntry = { n: string; lat: number; lng: number; t: string; m: string };
+  let placesIdx: PlaceEntry[] = [];
+  let placesNorm: string[] = [];
+  const norm = (s: string) =>
+    (s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  function loadPlaces() {
+    try {
+      const f = resolveWebFile('ladiesgo-luanda-final.json');
+      if (!f) return;
+      const raw = JSON.parse(fs.readFileSync(f, 'utf8'));
+      const arr = raw.places || raw.d || [];
+      placesIdx = [];
+      placesNorm = [];
+      for (const p of arr) {
+        const lat = Array.isArray(p) ? p[1] : p.lat;
+        const lng = Array.isArray(p) ? p[2] : p.lng;
+        const name = Array.isArray(p) ? p[0] : p.name;
+        if (typeof name !== 'string' || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        placesIdx.push({
+          n: name,
+          lat,
+          lng,
+          t: String(Array.isArray(p) ? p[5] || '' : p.type || ''),
+          m: String(Array.isArray(p) ? p[4] || '' : p.municipality || ''),
+        });
+        placesNorm.push(norm(name));
+      }
+      console.log(`Places index: ${placesIdx.length} locais`);
+    } catch (e) {
+      console.warn('Places index em falta:', (e as Error).message?.slice(0, 100));
+    }
+  }
+  loadPlaces();
+
+  // Pesquisa de destinos LadiesGo — sem auth (como zone/route)
+  httpAdapter.get('/api/places/search', (req: any, res: any) => {
+    try {
+      const q = norm(String(req.query?.q || '').slice(0, 60));
+      if (q.length < 2) {
+        res.json({ places: [] });
+        return;
+      }
+      const lat = Number(req.query?.lat);
+      const lng = Number(req.query?.lng);
+      const hasLoc = Number.isFinite(lat) && Number.isFinite(lng);
+      const out: any[] = [];
+      for (let i = 0; i < placesIdx.length && out.length < 200; i++) {
+        const name = placesNorm[i];
+        let score = -1;
+        if (name.startsWith(q)) score = 0;
+        else if (name.split(/[\s,\-]+/).some((w) => w.startsWith(q))) score = 1;
+        else if (name.includes(q)) score = 2;
+        if (score < 0) continue;
+        let dist = 0;
+        if (hasLoc) {
+          const dLa = placesIdx[i].lat - lat;
+          const dLo = placesIdx[i].lng - lng;
+          dist = Math.sqrt(dLa * dLa + dLo * dLo);
+        }
+        out.push({ i, score, dist });
+      }
+      out.sort((a, b) => a.score - b.score || a.dist - b.dist);
+      // Anti-duplicados: mesmo nome a <200m conta como um (entradas/saídas).
+      const picked: number[] = [];
+      for (const c of out) {
+        if (picked.length >= 8) break;
+        const p = placesIdx[c.i];
+        const dupe = picked.some((j) => {
+          const k = placesIdx[j];
+          return (
+            placesNorm[j] === placesNorm[c.i] &&
+            Math.abs(k.lat - p.lat) < 0.002 &&
+            Math.abs(k.lng - p.lng) < 0.002
+          );
+        });
+        if (dupe) continue;
+        picked.push(c.i);
+      }
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.json({
+        places: picked.map((i) => ({
+          name: placesIdx[i].n,
+          lat: placesIdx[i].lat,
+          lng: placesIdx[i].lng,
+          type: placesIdx[i].t,
+          municipality: placesIdx[i].m,
+        })),
+      });
+    } catch {
+      res.status(400).json({ message: 'Pedido inválido.' });
+    }
+  });
   // Proxy zona por coordenadas (Nominatim + BigDataCloud fallback) — sem auth
   httpAdapter.get('/api/zone', async (req: any, res: any) => {
     try {
@@ -74,6 +193,13 @@ async function bootstrap() {
       const lo = Number(req.query?.lng);
       if (!Number.isFinite(la) || !Number.isFinite(lo)) {
         res.status(400).json({ message: 'Pedido inválido.' });
+        return;
+      }
+      const ck = `z:${la.toFixed(3)},${lo.toFixed(3)}`;
+      const hit = cacheGet(ck);
+      if (hit) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.json(hit);
         return;
       }
       let z = '';
@@ -86,8 +212,10 @@ async function bootstrap() {
         const a = (j && j.address) || {};
         z = a.suburb || a.neighbourhood || a.quarter || a.city_district || a.town || a.city || '';
       } catch {}
-      res.setHeader('Cache-Control', 'no-store');
-      res.json({ zone: z });
+      const body = { zone: z };
+      cacheSet(ck, body, 24 * 3600 * 1000);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.json(body);
     } catch {
       res.status(400).json({ message: 'Pedido inválido.' });
     }
@@ -102,6 +230,13 @@ async function bootstrap() {
         res.status(400).json({ message: 'Pedido inválido.' });
         return;
       }
+      const ck = `r:${from[0].toFixed(4)},${from[1].toFixed(4)}:${to[0].toFixed(4)},${to[1].toFixed(4)}`;
+      const hit = cacheGet(ck);
+      if (hit) {
+        res.setHeader('Cache-Control', 'public, max-age=600');
+        res.json(hit);
+        return;
+      }
       const q = `${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`;
       const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${q}`, {
         signal: AbortSignal.timeout(9000),
@@ -112,12 +247,14 @@ async function bootstrap() {
         res.status(502).json({ message: 'Sem rota de momento.' });
         return;
       }
-      res.setHeader('Cache-Control', 'no-store');
-      res.json({
+      const body = {
         points: g.map((p: number[]) => [p[1], p[0]]),
         distance_m: j.routes[0].distance,
         duration_s: j.routes[0].duration,
-      });
+      };
+      cacheSet(ck, body, 10 * 60 * 1000);
+      res.setHeader('Cache-Control', 'public, max-age=600');
+      res.json(body);
     } catch {
       res.status(502).json({ message: 'Sem rota de momento.' });
     }
@@ -139,6 +276,7 @@ async function bootstrap() {
   httpAdapter.get('/admin', (_req: any, res: any) => sendWeb(res, 'admin.html'));
   httpAdapter.get('/historia', (_req: any, res: any) => sendWeb(res, 'ladiesgo.html'));
   httpAdapter.get('/privacidade', (_req: any, res: any) => sendWeb(res, 'privacidade.html'));
+  httpAdapter.get('/luanda-map', (_req: any, res: any) => sendWeb(res, 'luanda-map.html')); // extrator Overpass (captar Luanda)
 
   // Info da API (JSON) em /api — landing / passa a servir o LadiesGo!
   httpAdapter.get('/api', (_req: any, res: any) => {
