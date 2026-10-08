@@ -165,41 +165,65 @@ async function bootstrap() {
       const lat = Number(req.query?.lat);
       const lng = Number(req.query?.lng);
       const hasLoc = Number.isFinite(lat) && Number.isFinite(lng);
-      const out: any[] = [];
-      for (let i = 0; i < placesIdx.length && out.length < 300; i++) {
-        const name = placesNorm[i];
-        const full = placesFull[i];
-        let startsFuzzy = false;
-        if (full.startsWith(q)) {
-          // 0: frase exata no início
-        } else {
-          const words = full.split(/[\s,\-]+/);
-          let ok = true;
-          let fuzzy = false;
-          for (const t of toks) {
-            if (full.includes(t)) continue;
-            // Tolerância a 1 erro em palavras com 4+ letras
-            if (
-              t.length >= 4 &&
-              words.some((w) => w.length >= 4 && lev1(t, w) <= 1)
-            ) {
-              fuzzy = true;
-              continue;
+      const matchTokens = (tt: string[]) => {
+        const out: any[] = [];
+        for (let i = 0; i < placesIdx.length && out.length < 300; i++) {
+          const full = placesFull[i];
+          let startsFuzzy = false;
+          if (full.startsWith(tt.join(' '))) {
+            // 0: frase exata no início
+          } else {
+            const words = full.split(/[\s,\-]+/);
+            let ok = true;
+            let fuzzy = false;
+            for (const t of tt) {
+              if (full.includes(t)) continue;
+              // Tolerância a 1 erro em palavras com 4+ letras
+              if (
+                t.length >= 4 &&
+                words.some((w) => w.length >= 4 && lev1(t, w) <= 1)
+              ) {
+                fuzzy = true;
+                continue;
+              }
+              ok = false;
+              break;
             }
-            ok = false;
+            if (!ok) continue;
+            if (fuzzy) startsFuzzy = true;
+          }
+          const startsFull = full.startsWith(tt.join(' ')) ? 0 : startsFuzzy ? 2 : 1;
+          let dist = 0;
+          if (hasLoc) {
+            const dLa = placesIdx[i].lat - lat;
+            const dLo = placesIdx[i].lng - lng;
+            dist = Math.sqrt(dLa * dLa + dLo * dLo);
+          }
+          out.push({ i, score: startsFull, dist });
+        }
+        return out;
+      };
+      let out = matchTokens(toks);
+      let relaxed = false;
+      // Fallback: se nada bate ("bloco a23 kilamba"), larga a palavra mais
+      // restritiva (primeiro as com dígitos) e tenta de novo.
+      if (!out.length && toks.length > 1) {
+        const order = toks
+          .map((t, idx) => ({ t, idx }))
+          .sort((a, b) => {
+            const da = /\d/.test(a.t) ? 0 : 1;
+            const db = /\d/.test(b.t) ? 0 : 1;
+            return da - db || b.t.length - a.t.length;
+          });
+        for (const drop of order) {
+          const rest = toks.filter((_, idx) => idx !== drop.idx);
+          const retry = matchTokens(rest);
+          if (retry.length) {
+            out = retry;
+            relaxed = true;
             break;
           }
-          if (!ok) continue;
-          if (fuzzy) startsFuzzy = true;
         }
-        const startsFull = full.startsWith(q) ? 0 : startsFuzzy ? 2 : 1;
-        let dist = 0;
-        if (hasLoc) {
-          const dLa = placesIdx[i].lat - lat;
-          const dLo = placesIdx[i].lng - lng;
-          dist = Math.sqrt(dLa * dLa + dLo * dLo);
-        }
-        out.push({ i, score: startsFull, dist });
       }
       out.sort((a, b) => a.score - b.score || a.dist - b.dist);
       // Anti-duplicados: mesmo nome a <200m conta como um (entradas/saídas).
@@ -220,6 +244,7 @@ async function bootstrap() {
       }
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.json({
+        relaxed,
         places: picked.map((i) => ({
           name: placesIdx[i].n,
           lat: placesIdx[i].lat,
