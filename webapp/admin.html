@@ -7,10 +7,10 @@
 <title>LadiesGo! – Painel Admin</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
-  :root{--b:#5b21c9;--b2:#7c3aed;--ink:#15111f;--mut:#6c6680;--ln:#ebe7f3;--bg:#f6f4fa;--ok:#12a150;--warn:#b45309;--red:#d92d4b}
+  :root{--b:#5b21c9;--b2:#61188E;--ink:#15111f;--mut:#6c6680;--ln:#ebe7f3;--bg:#f6f4fa;--ok:#12a150;--warn:#b45309;--red:#d92d4b}
   *{margin:0;box-sizing:border-box}
   body{background:var(--bg);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);font-size:14px}
-  header{position:sticky;top:0;z-index:500;background:linear-gradient(135deg,#7c3aed,#4a17a8);color:#fff;padding:14px 24px;display:flex;align-items:center;gap:10px}
+  header{position:sticky;top:0;z-index:500;background:linear-gradient(135deg,#61188E,#4a17a8);color:#fff;padding:14px 24px;display:flex;align-items:center;gap:10px}
   header b{font-size:19px}header span{opacity:.75;font-size:12.5px;margin-left:8px}
   header button{margin-left:auto;background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:10px;padding:8px 14px;font:inherit;font-weight:700;cursor:pointer}
   .wrap{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
@@ -22,9 +22,9 @@
   .umodal{position:fixed;inset:0;z-index:600;background:rgba(20,0,50,.6);display:none;align-items:center;justify-content:center;padding:18px}
   .umodal.on{display:flex}
   .ubox{position:relative;background:#fff;border-radius:20px;padding:22px 18px;max-width:480px;width:100%;max-height:86vh;overflow-y:auto}
-  .ux{position:absolute;top:8px;right:10px;width:34px;height:34px;border-radius:50%;border:0;background:#f3e6ff;color:#6a2bd6;font-weight:800;font-size:15px;cursor:pointer}
+  .ux{position:absolute;top:8px;right:10px;width:34px;height:34px;border-radius:50%;border:0;background:#f3e6ff;color:#61188E;font-weight:800;font-size:15px;cursor:pointer}
   .urow{display:flex;gap:12px;align-items:center}
-  .uav{flex:none;width:58px;height:58px;border-radius:50%;background:#f3e6ff;display:grid;place-items:center;font-size:24px;font-weight:800;color:#6a2bd6;overflow:hidden}
+  .uav{flex:none;width:58px;height:58px;border-radius:50%;background:#f3e6ff;display:grid;place-items:center;font-size:24px;font-weight:800;color:#61188E;overflow:hidden}
   .tabs{display:flex;gap:8px;margin:4px 0 14px;flex-wrap:wrap}
   .tabs button{border:1.5px solid var(--ln);background:#fff;border-radius:99px;padding:8px 18px;font:inherit;font-weight:700;color:var(--mut);cursor:pointer}
   .tabs button.sel{border-color:var(--b);background:#ede9fe;color:var(--b)}
@@ -49,7 +49,7 @@
   #login h1{font-size:22px;margin-bottom:4px}#login p{color:var(--mut);font-size:13.5px;margin-bottom:14px}
   #login label{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
   #login input{display:block;width:100%;border:1.5px solid var(--ln);border-radius:12px;padding:12px;margin:6px 0 12px;font:inherit;font-size:16px}
-  #login button{width:100%;height:50px;border:0;border-radius:14px;background:linear-gradient(135deg,#a45bf5,#6a2bd6);color:#fff;font:inherit;font-weight:800;font-size:16px;cursor:pointer}
+  #login button{width:100%;height:50px;border:0;border-radius:14px;background:linear-gradient(135deg,#61188E,#61188E);color:#fff;font:inherit;font-weight:800;font-size:16px;cursor:pointer}
   #loginErr{min-height:20px;color:#c2185b;font-size:13px;font-weight:700;text-align:center;margin-bottom:8px}
   @media(max-width:640px){table,thead,tbody,th,td,tr{display:block}thead{display:none}td{border:0;padding:4px 14px}tr{border-bottom:1px solid var(--ln);padding:6px 0}#map{height:300px}}
 </style>
@@ -79,7 +79,7 @@
   <section id="sec-monitor">
     <div class="filters"><input id="mSearch" placeholder="Pesquisar motorista, matrícula, passageira ou local…"></div>
     <div id="map"></div>
-    <div class="legend"><span><i style="background:#2563eb"></i>passageiro</span><span><i style="background:#12a150"></i>online</span><span><i style="background:#eab308"></i>a caminho</span><span><i style="background:#5b21c9"></i>pedido</span><span><i style="background:#f59e0b"></i>aceite</span><span><i style="background:#f97316"></i>chegou</span><span><i style="background:#7c3aed"></i>em viagem</span><span><i style="background:#0d9488"></i>concluída</span><span><i style="background:#d92d4b"></i>cancelada</span></div>
+    <div class="legend"><span><i style="background:#2563eb"></i>passageiro</span><span><i style="background:#12a150"></i>online</span><span><i style="background:#eab308"></i>a caminho</span><span><i style="background:#5b21c9"></i>pedido</span><span><i style="background:#f59e0b"></i>aceite</span><span><i style="background:#f97316"></i>chegou</span><span><i style="background:#61188E"></i>em viagem</span><span><i style="background:#0d9488"></i>concluída</span><span><i style="background:#d92d4b"></i>cancelada</span></div>
     <h2>Ativas agora (clica para ver no mapa)</h2>
     <table><thead><tr><th>Passageira</th><th>De → Para</th><th>Cat.</th><th>Preço</th><th>Estado</th><th>Motorista</th></tr></thead><tbody id="active"><tr><td colspan="6" class="mut">Sem viagens ativas.</td></tr></tbody></table>
   </section>
@@ -104,7 +104,7 @@
     <div class="filters"><input id="ndLic" placeholder="Nº carta de condução *" autocomplete="off"><input id="ndPlate" placeholder="Matrícula *" autocomplete="off"></div>
     <div class="filters"><input id="ndMake" placeholder="Marca (ex: Toyota)" autocomplete="off"><input id="ndModel" placeholder="Modelo (ex: Corolla)" autocomplete="off"><input id="ndYear" placeholder="Ano" inputmode="numeric" autocomplete="off"><input id="ndColor" placeholder="Cor" autocomplete="off"></div>
     <div class="mut sm" id="ndCheck" style="margin:2px 0 8px"></div>
-    <button data-a="mkdrv" style="height:48px;border:0;border-radius:14px;background:linear-gradient(135deg,#a45bf5,#6a2bd6);color:#fff;font:inherit;font-weight:800;font-size:15px;padding:0 26px;cursor:pointer">Criar conta de motorista</button>
+    <button data-a="mkdrv" style="height:48px;border:0;border-radius:14px;background:linear-gradient(135deg,#61188E,#61188E);color:#fff;font:inherit;font-weight:800;font-size:15px;padding:0 26px;cursor:pointer">Criar conta de motorista</button>
     <p class="mut" id="ndMsg" style="margin-top:10px"></p>
   </section>
   <section id="sec-clients" style="display:none">
@@ -131,7 +131,7 @@ function stopsHtml(x){const s=x.stops||[];if(!s.length)return '';return '<br><sp
 function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);c.age=(d.updated!=null?d.updated:null);c.cats=d.cats||[];return c}
 function matchDrv(x){const q=mapQuery;if(!q)return true;return ((x.name||'')+' '+(x.phone||'')+' '+(x.carPlate||'')+' '+(x.carMake||'')+' '+(x.cats||[]).join(' ')).toLowerCase().indexOf(q)>=0}
 function matchTrip(t){const q=mapQuery;if(!q)return true;return ((t.passenger||'')+' '+(t.driver||'')+' '+(t.from||'')+' '+(t.to||'')+' '+((t.stops||[]).map(p=>p.n||p.a||'').join(' '))).toLowerCase().indexOf(q)>=0}
-const stColor={pending:'#5b21c9',accepted:'#f59e0b',arrived:'#f97316',in_progress:'#7c3aed',completed:'#0d9488',cancelled:'#d92d4b'};
+const stColor={pending:'#5b21c9',accepted:'#f59e0b',arrived:'#f97316',in_progress:'#61188E',completed:'#0d9488',cancelled:'#d92d4b'};
 var STM_PT={pending:'Pendente',accepted:'Aceite',arrived:'Chegou',in_progress:'Em viagem',completed:'Concluída',cancelled:'Cancelada'};
 var CAT_PT={ECONOMY:'Económico',COMFORT:'Conforto',PREMIUM:'Premium'};
 
