@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Provider, useDispatch } from 'react-redux';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { store } from './src/store';
 import { AppDispatch } from './src/store';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -11,9 +12,8 @@ import { registerForPushNotifications } from './src/services/notifications';
 import { checkForUpdate } from './src/services/updateCheck';
 import ConnectingScreen from './src/screens/shared/ConnectingScreen';
 
-// Guest auto-login has no user input to fall back on, so a failed attempt
-// (server unreachable, cold start, no network yet) just means "try again" —
-// never a phone number prompt. See project memory: no registration flow.
+// Sessão guardada é restaurada com retries; sem sessão o utilizador
+// vê a tela de Login (nome + telemóvel, ou convidado).
 const RETRY_DELAYS_MS = [2000, 4000, 8000, 15000];
 
 function Root() {
@@ -28,6 +28,14 @@ function Root() {
     const tryInit = async () => {
       setFailed(false);
       try {
+        // Sem sessão guardada vai direto para a tela de Login
+        // (sem criar convidado automático).
+        const stored = await AsyncStorage.getItem('accessToken');
+        if (!stored) {
+          if (cancelled) return;
+          setReady(true);
+          return;
+        }
         const action: any = await dispatch(initAuth()).unwrap();
         if (cancelled) return;
         if (action?.activeTrip) {

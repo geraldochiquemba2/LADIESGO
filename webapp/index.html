@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>TaxiApp</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,600;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -26,13 +27,27 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .spinner{width:36px;height:36px;border:3px solid #333;border-top-color:#FFD700;border-radius:50%;animation:spin .8s linear infinite;margin-top:32px}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* ── auth ── */
-#screen-auth{background:#fff;justify-content:center;padding:28px}
-.auth-logo{font-size:48px;text-align:center;margin-bottom:8px}
-.auth-title{font-size:24px;font-weight:700;color:#1a1a2e;text-align:center;margin-bottom:4px}
-.auth-sub{color:#888;text-align:center;font-size:14px;margin-bottom:32px}
-.auth-step{display:none;flex-direction:column;gap:12px}
+/* ── auth · LadiesGo ── */
+#screen-auth{background:linear-gradient(#0b0420,#1d0a45 60%,#3a1170);justify-content:center;padding:28px;position:relative;overflow:hidden}
+#screen-auth::before{content:'';position:absolute;width:220px;height:220px;right:-70px;top:-70px;border-radius:50%;background:radial-gradient(circle,#f3dcff,rgba(243,220,255,0) 70%);opacity:.25}
+.auth-logo{font-size:52px;text-align:center;margin-bottom:8px;filter:drop-shadow(0 0 18px rgba(255,95,200,.6));animation:lgFloat 2.4s ease-in-out infinite}
+@keyframes lgFloat{50%{transform:translateY(-10px)}}
+.auth-title{font-family:Fraunces,Georgia,serif;font-size:36px;color:#fff;text-align:center;margin-bottom:6px;letter-spacing:-.02em}
+.auth-title em{font-style:italic;color:#ffb3e6}
+.auth-sub{color:#e3d0ff;text-align:center;font-size:14px;margin-bottom:32px}
+.auth-step{display:none;flex-direction:column;gap:12px;position:relative;z-index:1}
 .auth-step.active{display:flex}
+#screen-auth label{font-size:13px;color:#ffb3e6;font-weight:600}
+#screen-auth input,#screen-auth select{border:1.5px solid rgba(255,255,255,.25);border-radius:12px;padding:14px 16px;font-size:16px;width:100%;outline:none;color:#fff;background:rgba(255,255,255,.08);transition:border-color .2s}
+#screen-auth input:focus,#screen-auth select:focus{border-color:#ff8fe0}
+#screen-auth select option{color:#1a1a2e}
+#screen-auth .btn{background:#fff;color:#4a17a8;border:none;border-radius:14px;padding:16px;font-size:17px;font-weight:700;cursor:pointer;width:100%;transition:opacity .15s}
+#screen-auth .btn:active{opacity:.85}
+.auth-stars{position:absolute;inset:0;pointer-events:none;z-index:0}
+.auth-stars span{position:absolute;color:#fff;font-size:13px;animation:lgTw 2.6s ease-in-out infinite}
+@keyframes lgTw{50%{opacity:.15}}
+.auth-taxi{position:absolute;bottom:24px;left:0;font-size:44px;z-index:0;animation:lgDrive 9s linear infinite}
+@keyframes lgDrive{from{transform:translateX(-70px)}to{transform:translateX(110vw)}}
 label{font-size:13px;color:#666;font-weight:500}
 input,select{border:1.5px solid #e0e0e0;border-radius:12px;padding:14px 16px;font-size:16px;width:100%;outline:none;color:#1a1a2e;background:#fff;transition:border-color .2s}
 input:focus,select:focus{border-color:#FFD700}
@@ -157,23 +172,25 @@ input:focus,select:focus{border-color:#FFD700}
 
 <!-- AUTH -->
 <div id="screen-auth" class="screen">
-  <div class="auth-logo">🚖</div>
-  <div class="auth-title">Welcome</div>
-  <div class="auth-sub">Enter your phone to continue</div>
+  <div class="auth-stars" aria-hidden="true"><span style="top:12%;left:18%">✦</span><span style="top:22%;left:76%;animation-delay:.7s">✦</span><span style="top:34%;left:38%;animation-delay:1.3s">✦</span><span style="top:8%;left:55%;animation-delay:1.9s">✦</span></div>
+  <div class="auth-taxi" aria-hidden="true">🚕</div>
+  <div class="auth-logo">🦋</div>
+  <div class="auth-title">Ladies<em>Go!</em></div>
+  <div class="auth-sub">Chega em casa. Sempre.</div>
 
   <div id="step-phone" class="auth-step active">
     <div>
-      <label>Phone Number</label>
-      <input id="phone-input" type="tel" value="+966" placeholder="+966501234567">
+      <label>Telemóvel</label>
+      <input id="phone-input" type="tel" value="+244" placeholder="+244923123456">
     </div>
     <div>
-      <label>I am a</label>
+      <label>Sou</label>
       <select id="role-select">
-        <option value="PASSENGER">🧑 Passenger</option>
-        <option value="DRIVER">🚗 Driver</option>
+        <option value="PASSENGER">🧑 Passageira</option>
+        <option value="DRIVER">🚗 Motorista</option>
       </select>
     </div>
-    <button class="btn" onclick="login()">Continue</button>
+    <button class="btn" onclick="login()">Continuar →</button>
   </div>
 </div>
 
@@ -217,7 +234,7 @@ input:focus,select:focus{border-color:#FFD700}
     <div id="fare-section" style="display:none">
       <div class="fare-card">
         <div class="fare-label">Estimated Fare</div>
-        <div class="fare-amount" id="fare-amount">— SAR</div>
+        <div class="fare-amount" id="fare-amount">— AOA</div>
         <div class="fare-km" id="fare-km"></div>
       </div>
       <div class="pay-row">
@@ -273,7 +290,7 @@ input:focus,select:focus{border-color:#FFD700}
     <div class="sum-card">
       <div class="sum-title">Fare</div>
       <div style="text-align:center;margin-bottom:16px">
-        <div style="font-size:48px;font-weight:700;color:#1a1a2e" id="final-fare">— SAR</div>
+        <div style="font-size:48px;font-weight:700;color:#1a1a2e" id="final-fare">— AOA</div>
         <div style="color:#888;font-size:13px" id="pay-method">Cash</div>
       </div>
       <div class="divider"></div>
@@ -318,10 +335,10 @@ input:focus,select:focus{border-color:#FFD700}
 <div class="toast" id="toast"></div>
 
 <script>
-const API = 'https://taxiapp-api-production.up.railway.app/api/v1';
+const API = 'http://localhost:3000/api/v1';
 let token = localStorage.getItem('taxi_token');
 let user = JSON.parse(localStorage.getItem('taxi_user') || 'null');
-let myLat = 24.7136, myLng = 46.6753; // Riyadh default
+let myLat = -8.8390, myLng = 13.2894; // Luanda default
 let dropoffLat = null, dropoffLng = null;
 let paymentMethod = 'CASH';
 let currentTrip = null;
@@ -377,12 +394,16 @@ window.addEventListener('load', async () => {
 async function login() {
   const phone = document.getElementById('phone-input').value.trim();
   const role = document.getElementById('role-select').value;
-  if (phone.length < 10) return toast('Enter a valid phone number');
+  if (phone.replace(/\D/g, '').length < 12) return toast('Número angolano inválido (+2449XXXXXXXX)');
   try {
-    const data = await api('POST', '/auth/login', { phone, role });
+    // Backend só tem /auth/guest (cria conta; nome = telefone).
+    // O papel DRIVER é tratado depois no registo de motorista.
+    const data = await api('POST', '/auth/guest', { name: phone });
     if (data.accessToken) {
       token = data.accessToken;
       user = data.user;
+      user.phone = phone;
+      if (role === 'DRIVER') user.intendedRole = 'DRIVER';
       localStorage.setItem('taxi_token', token);
       localStorage.setItem('taxi_user', JSON.stringify(user));
       showHome();
@@ -489,13 +510,13 @@ async function estimateFare() {
     });
     const fare = data.fareEstimate || data.fare || Math.round(Math.random() * 20 + 10);
     const km = data.distanceKm || (Math.random() * 10 + 2).toFixed(1);
-    document.getElementById('fare-amount').textContent = fare + ' SAR';
+    document.getElementById('fare-amount').textContent = fare + ' AOA';
     document.getElementById('fare-km').textContent = `${km} km • ~${Math.round(km * 2)} min`;
     document.getElementById('fare-section').style.display = 'block';
     currentTrip = { fareEstimate: fare, distanceKm: km };
   } catch {
     const fare = Math.round(Math.random() * 20 + 10);
-    document.getElementById('fare-amount').textContent = fare + ' SAR';
+    document.getElementById('fare-amount').textContent = fare + ' AOA';
     document.getElementById('fare-section').style.display = 'block';
     currentTrip = { fareEstimate: fare };
   }
@@ -626,7 +647,7 @@ function completeTrip() {
   stopTracking();
   const fare = currentTrip?.fareEstimate || 25;
   const km = currentTrip?.distanceKm || '8.2';
-  document.getElementById('final-fare').textContent = fare + ' SAR';
+  document.getElementById('final-fare').textContent = fare + ' AOA';
   document.getElementById('pay-method').textContent = paymentMethod === 'CASH' ? '💵 Paid in Cash' : '💳 Charged to Card';
   document.getElementById('final-km').textContent = km + ' km';
   document.getElementById('final-pickup').textContent = 'Current Location';
@@ -679,7 +700,7 @@ async function showHistory() {
       <div class="hist-date">${t.date || 'Recent'}</div>
       <div class="hist-addr">📍 ${t.pickup} → 🏁 ${t.dropoff}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
-        <div class="hist-fare">${t.fare} SAR</div>
+        <div class="hist-fare">${t.fare} AOA</div>
         <div class="hist-status">Completed</div>
       </div>
     </div>`;
@@ -690,7 +711,7 @@ async function showHistory() {
       <div class="hist-date">${new Date(t.createdAt || Date.now()).toLocaleString()}</div>
       <div class="hist-addr">📍 ${t.pickupAddress || 'Pickup'} → 🏁 ${t.dropoffAddress || 'Dropoff'}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
-        <div class="hist-fare">${t.finalFare || t.fareEstimate || '—'} SAR</div>
+        <div class="hist-fare">${t.finalFare || t.fareEstimate || '—'} AOA</div>
         <div class="hist-status">${t.status || 'Completed'}</div>
       </div>
     </div>`;

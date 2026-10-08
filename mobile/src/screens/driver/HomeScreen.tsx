@@ -19,6 +19,7 @@ import {
 import { MAP_STYLE } from '../../components/appMap';
 import MapAttribution from '../../components/MapAttribution';
 import * as Location from 'expo-location';
+import { startDriverBgTracking, stopDriverBgTracking, ensureDriverBgTracking } from '../../services/driverBgLocation';
 import { driversApi, tripsApi } from '../../services/api';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
@@ -50,6 +51,8 @@ export default function DriverHomeScreen({ navigation }: any) {
         const driver = await driversApi.getStatus();
         setIsOnline(driver.data.isOnline);
         setEarnings(driver.data.totalEarnings);
+        // Se já estava online (app reaberta), retomar tracking em fundo sem chatear
+        if (driver.data.isOnline) ensureDriverBgTracking().catch(() => {});
       } catch {
         // driver not registered yet
       }
@@ -142,7 +145,33 @@ export default function DriverHomeScreen({ navigation }: any) {
     try {
       await driversApi.toggleOnline(value);
       setIsOnline(value);
-      if (!value) setTripRequest(null);
+      if (value) {
+        // Fundo: continua a partilhar posição mesmo com o Waze aberto
+        try {
+          await startDriverBgTracking();
+        } catch (e: any) {
+          const m = e?.message;
+          if (m === 'precise-denied') {
+            Alert.alert(
+              'Localização exata',
+              'Ativa a "Localização exata" para o LadiesGo nas definições do iPhone (Privacidade > Localização). Sem isso a posição não chega.',
+            );
+          } else if (m === 'background-denied') {
+            Alert.alert(
+              'Localização em fundo',
+              'Para continuares online com outra app aberta, permite a posição "Sempre" nas definições do telemóvel.',
+            );
+          } else if (m !== 'foreground-denied') {
+            Alert.alert(
+              'Localização em fundo',
+              'Não foi possível ligar o tracking em fundo. Com outra app aberta, volta aqui para atualizares a posição.',
+            );
+          }
+        }
+      } else {
+        setTripRequest(null);
+        await stopDriverBgTracking();
+      }
     } catch (e: any) {
       Alert.alert('Error', e.response?.data?.message || 'Cannot change status');
     }
