@@ -100,6 +100,22 @@ async function bootstrap() {
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '');
+  // Levenshtein curto com corte: tolera 1 erro ("kilmaba"→"kilamba").
+  // Devolve >1 cedo para não pesar no índice em memória.
+  function lev1(a: string, b: string): number {
+    if (a === b) return 0;
+    const la = a.length;
+    const lb = b.length;
+    if (Math.abs(la - lb) > 1) return 2;
+    let i = 0;
+    while (i < la && i < lb && a[i] === b[i]) i++;
+    if (i === la && i === lb) return 0;
+    // substituição / inserção / remoção de 1 char
+    if (la === lb && a.slice(i + 1) === b.slice(i + 1)) return 1;
+    if (la + 1 === lb && a.slice(i) === b.slice(i + 1)) return 1;
+    if (lb + 1 === la && a.slice(i + 1) === b.slice(i)) return 1;
+    return 2;
+  }
   function loadPlaces() {
     try {
       const f = resolveWebFile('ladiesgo-luanda-final.json');
@@ -153,20 +169,30 @@ async function bootstrap() {
       for (let i = 0; i < placesIdx.length && out.length < 300; i++) {
         const name = placesNorm[i];
         const full = placesFull[i];
+        let startsFuzzy = false;
         if (full.startsWith(q)) {
           // 0: frase exata no início
         } else {
           const words = full.split(/[\s,\-]+/);
           let ok = true;
+          let fuzzy = false;
           for (const t of toks) {
-            if (!full.includes(t)) {
-              ok = false;
-              break;
+            if (full.includes(t)) continue;
+            // Tolerância a 1 erro em palavras com 4+ letras
+            if (
+              t.length >= 4 &&
+              words.some((w) => w.length >= 4 && lev1(t, w) <= 1)
+            ) {
+              fuzzy = true;
+              continue;
             }
+            ok = false;
+            break;
           }
           if (!ok) continue;
+          if (fuzzy) startsFuzzy = true;
         }
-        const startsFull = full.startsWith(q) ? 0 : 1;
+        const startsFull = full.startsWith(q) ? 0 : startsFuzzy ? 2 : 1;
         let dist = 0;
         if (hasLoc) {
           const dLa = placesIdx[i].lat - lat;

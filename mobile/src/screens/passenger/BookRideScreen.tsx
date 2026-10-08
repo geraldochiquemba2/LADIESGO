@@ -31,6 +31,7 @@ import {
 } from '../../services/geo';
 import MapAttribution from '../../components/MapAttribution';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useDispatch, useSelector } from 'react-redux';
 import { estimateFare, requestTrip } from '../../store/slices/tripSlice';
 import { AppDispatch, RootState } from '../../store';
@@ -75,6 +76,30 @@ export default function BookRideScreen({ navigation, route }: any) {
   const [hits, setHits] = useState<PlaceHit[]>([]);
   const [searching, setSearching] = useState(false);
 
+  // Recentes (últimos 5 destinos, como Uber/Bolt)
+  const [recents, setRecents] = useState<PlaceHit[]>([]);
+  React.useEffect(() => {
+    AsyncStorage.getItem('recentDestinations')
+      .then((s) => {
+        if (s) setRecents(JSON.parse(s));
+      })
+      .catch(() => {});
+  }, []);
+  const saveRecent = (coord: { latitude: number; longitude: number }, label: string) => {
+    const entry = { name: label, lat: coord.latitude, lng: coord.longitude };
+    setRecents((prev) => {
+      const next = [
+        entry,
+        ...prev.filter(
+          (r) =>
+            Math.abs(r.lat - entry.lat) > 0.0005 || Math.abs(r.lng - entry.lng) > 0.0005,
+        ),
+      ].slice(0, 5);
+      AsyncStorage.setItem('recentDestinations', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   const SAVED = [
     { key: 'Casa', label: '🏠 Casa', lat: -8.8572, lng: 13.2765 },
     { key: 'Trabalho', label: '💼 Trabalho', lat: -8.8136, lng: 13.2889 },
@@ -101,6 +126,7 @@ export default function BookRideScreen({ navigation, route }: any) {
     setDropoffLabel(label ?? `${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)}`);
     setHits([]);
     setSearch('');
+    saveRecent(coord, label ?? dropoffLabel);
     fitCoordinates(
       cameraRef.current,
       [[location.longitude, location.latitude], [coord.longitude, coord.latitude]],
@@ -282,6 +308,21 @@ export default function BookRideScreen({ navigation, route }: any) {
             onChangeText={setSearch}
           />
           {searching && <Text style={styles.searchHint}>A procurar...</Text>}
+          {search.trim() === '' && recents.length > 0 && (
+            <>
+              <Text style={styles.sectionLabel}>🕐 Recentes</Text>
+              {recents.map((h, i) => (
+                <TouchableOpacity
+                  key={`r${h.lat},${h.lng},${i}`}
+                  style={styles.hitRow}
+                  onPress={() => pickDropoff({ latitude: h.lat, longitude: h.lng }, h.name)}
+                >
+                  <Text style={styles.hitIcon}>🕐</Text>
+                  <Text style={styles.hitText} numberOfLines={1}>{h.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </>
+          )}
           {hits.map((h, i) => (
             <TouchableOpacity
               key={`${h.lat},${h.lng},${i}`}
