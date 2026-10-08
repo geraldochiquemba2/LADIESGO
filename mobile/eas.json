@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 10.0.0"
+    "version": ">= 10.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -37,7 +38,10 @@
       "ios": {
         "appleId": "chiquembaines@gmail.com",
         "ascAppId": "6820322547",
-        "appleTeamId": "4ZQGZ9N775"
+        "appleTeamId": "4ZQGZ9N775",
+        "ascApiKeyPath": "./asc-key.p8",
+        "ascApiKeyIssuerId": "92705617-9a5f-4c92-8656-d810930fc323",
+        "ascApiKeyId": "6CQX832WVJ"
       }
     }
   }
