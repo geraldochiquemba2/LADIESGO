@@ -116,6 +116,31 @@ async function bootstrap() {
     if (lb + 1 === la && a.slice(i + 1) === b.slice(i)) return 1;
     return 2;
   }
+  // Intenções por categoria: "condominio" acha residenciais mesmo sem a
+  // palavra no nome; "centralidade" acha Zango/Kilamba/Sequele; etc.
+  // (chaves já normalizadas, sem acentos).
+  const INTENTS: { keys: string[]; test: (e: PlaceEntry, n: string) => boolean }[] = [
+    { keys: ['condominio', 'condominios'], test: (e, n) => n.includes('condom') || n.includes('residencial') || ['residential', 'apartments', 'apartment'].includes(e.t) },
+    { keys: ['centralidade', 'centralidades'], test: (e, n) => e.t === 'centralidade' || n.includes('centralidade') || n.includes('zango') || n.includes('sequele') || n.includes('kilamba') },
+    { keys: ['urbanizacao', 'urbanizacoes', 'urbanizao'], test: (e, n) => n.includes('urbaniz') || e.t === 'centralidade' },
+    { keys: ['farmacia', 'farmacias'], test: (e, n) => e.t === 'pharmacy' || n.includes('farmacia') },
+    { keys: ['hospital', 'hospitais', 'clinica', 'hospitalar'], test: (e, n) => ['hospital', 'clinic', 'doctors', 'dentist'].includes(e.t) || n.includes('hospital') || n.includes('clinic') },
+    { keys: ['escola', 'escolas', 'colegio', 'universidade'], test: (e, n) => ['school', 'university', 'college', 'kindergarten'].includes(e.t) || n.includes('escola') || n.includes('universidade') },
+    { keys: ['banco', 'bancos', 'multicaixa', 'atm'], test: (e, n) => ['bank', 'atm'].includes(e.t) || n.includes('banco') },
+    { keys: ['mercado', 'mercados', 'feira', 'praca'], test: (e, n) => ['marketplace', 'market'].includes(e.t) || e.t.startsWith('shop') || n.includes('mercado') },
+    { keys: ['igreja', 'igrejas', 'culto'], test: (e, n) => e.t === 'place_of_worship' || n.includes('igreja') },
+    { keys: ['hotel', 'hoteis', 'hospedagem'], test: (e, n) => ['hotel', 'hostel', 'guest_house'].includes(e.t) || n.includes('hotel') },
+    { keys: ['restaurante', 'restaurantes', 'comer'], test: (e, n) => ['restaurant', 'fast_food', 'cafe', 'bar'].includes(e.t) },
+    { keys: ['bomba', 'bombas', 'combustivel', 'gasolina'], test: (e) => e.t === 'fuel' },
+    { keys: ['aeroporto'], test: (e, n) => e.t === 'airport' || n.includes('aeroporto') },
+    { keys: ['paragem', 'paragens', 'taxi', 'candongueiro'], test: (e, n) => ['taxi', 'bus_stop'].includes(e.t) },
+  ];
+  function intentHit(t: string, e: PlaceEntry, n: string): boolean {
+    for (const it of INTENTS) {
+      if (it.keys.includes(t)) return it.test(e, n);
+    }
+    return false;
+  }
   function loadPlaces() {
     try {
       const f = resolveWebFile('ladiesgo-luanda-final.json');
@@ -176,8 +201,14 @@ async function bootstrap() {
             const words = full.split(/[\s,\-]+/);
             let ok = true;
             let fuzzy = false;
-            for (const t of tt) {
-              if (full.includes(t)) continue;
+          for (const t of tt) {
+            if (full.includes(t)) continue;
+            // Intenção por categoria ("condominio"→residenciais, etc.)
+            // Testa no nome+município+tipo para apanhar "Zango"/"Kilamba".
+            if (intentHit(t, placesIdx[i], full)) {
+              fuzzy = true;
+              continue;
+            }
               // Tolerância a 1 erro em palavras com 4+ letras
               if (
                 t.length >= 4 &&
