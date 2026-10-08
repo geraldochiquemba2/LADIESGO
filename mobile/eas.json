@@ -25,7 +25,7 @@
         "EXPO_PUBLIC_API_URL": "https://ladiesgo.onrender.com/api/v1"
       },
       "android": {
-        "buildType": "aab"
+        "buildType": "app-bundle"
       },
       "ios": {
         "resourceClass": "m-medium"

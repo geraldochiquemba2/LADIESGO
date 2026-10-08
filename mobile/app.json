@@ -28,6 +28,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.ladiesgo.app",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "A LadiesGo precisa da câmara para foto de perfil e documentos da motorista.",
         "NSPhotoLibraryUsageDescription": "A LadiesGo precisa da galeria para escolher foto de perfil e documentos.",
         "NSLocationWhenInUseUsageDescription": "A LadiesGo precisa da tua posição para mostrar motoristas perto de ti.",
@@ -48,12 +49,22 @@
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION"
+        "ACCESS_BACKGROUND_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {}
+    "extra": {
+      "eas": {
+        "projectId": "ec5885e0-c677-4023-b65a-6642fe20f3fd"
+      }
+    },
+    "owner": "geraldo3"
   }
 }
