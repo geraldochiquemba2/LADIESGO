@@ -1,0 +1,87 @@
+LADIESGO! — FICHA DE LOJA (Play Store + App Store)
+==================================================
+Pacote/Bundle: com.ladiesgo.app
+Nome: LadiesGo!
+Versão: 1.0.0 (versionCode 1, autoIncrement no EAS production)
+API produção: https://ladiesgo.onrender.com/api/v1
+Cor marca: #61188E
+
+TÍTULO CURTO (30 chars)
+LadiesGo! Táxi p/ Mulheres
+
+DESCRIÇÃO CURTA (80 chars Play / 170 App Store subtitle)
+Play: Táxi só com motoristas mulheres em Luanda. Segura, rápido e feminino.
+App Store subtitle: Mobilidade feminina segura em Luanda.
+
+DESCRIÇÃO LONGA (PT)
+🦋 LadiesGo! — Mobilidade Feminina Segura em Luanda.
+
+Só passageiras e só motoristas mulheres verificadas.
+Pede em segundos, acompanha a motorista no mapa em tempo real,
+partilha a rota com 2 contactos, fala por chat e chamada, paga em
+Kwanza e avalia cada viagem.
+
+• Categorias: Económico, Conforto, Família (cadeirinha)
+• SOS e partilha de rota em tempo real
+• Chat + chamada com a motorista
+• Histórico, recibos e suporte em português
+• Pagamento em numerário
+
+Só maiores de 18 anos. Feito em Angola, para mulheres.
+
+PALAVRAS-CHAVE App Store (100 chars, sem espaços a mais)
+taxi,mulheres,luanda,angola,ladiesgo,motorista,viagem,segura,transporte
+
+CATEGORIA
+Play: Mapas e navegação. App Store: Viagens / Navigation.
+Classificação conteúdo: 4+ / PEGI 3. Sem conteúdo adulto.
+
+URL PRIVACIDADE (obrigatório nas 2 lojas)
+Publicar webapp/privacidade.html e colar aqui o URL público, ex:
+https://ladiesgo.onrender.com/privacidade
+Texto já conforme Lei 22/11 Angola (APDP).
+
+SEGURANÇA DOS DADOS (Play Data Safety) — declarar:
+- Localização precisa: funcionalidade (mostrar motoristas, navegação, tracking)
+- Nome, telefone, foto: conta + verificação 18+
+- Viagens: histórico e segurança
+- Não vende dados. Encriptado em trânsito.
+
+PERMISSÕES SENSÍVEIS — justificação pronta a colar:
+1) Localização EM FUNDO (Android + iOS Always):
+"A motorista continua online e a partilhar posição com a passageira
+mesmo com outra app de navegação aberta (ex. Waze). Sem fundo, o
+pedido perde-se e a passageira fica sem tracking/SOS. Só ativa quando
+a motorista liga o botão Online, e desliga no Offline."
+Juntar vídeo de 30s a mostrar: Online -> abrir Waze -> posição continua.
+
+2) Câmara/Galeria: "foto de perfil e documentos da motorista para verificação."
+
+3) Notificações: "motorista encontrada, chegada e conclusão."
+
+CONTA DE TESTE PARA REVISORES (criar no backend antes de submeter)
+Passageira: +244900000001 / senha 1234
+Motorista:  +244900000002 / senha 1234
+Admin:      +244999999999 / 1234567890 (demo local)
+Instruções: entrar, pedir viagem Casa->Trabalho, aceitar como motorista.
+
+PLAY CONSOLE — checklist:
+[ ] Conta $25 criada, app com pacote com.ladiesgo.app
+[ ] AAB de: eas build --platform android --profile production
+[ ] Teste interno com 1 email, depois teste fechado 12 testadores/14 dias (conta nova)
+[ ] Ficha: ícone 512, feature graphic 1024x500, 2+ screenshots telefone
+[ ] Sem REQUEST_INSTALL_PACKAGES (já removido) — updates só pela Play
+
+APP STORE CONNECT — checklist:
+[ ] Conta $99, Bundle com.ladiesgo.app registado
+[ ] App criada, ascAppId colado no eas.json submit.production.ios
+[ ] IPA de: eas build --platform ios --profile production
+[ ] eas submit --platform ios
+[ ] TestFlight interno, depois revisão com conta de teste acima
+
+COMANDOS
+eas login
+eas build --platform android --profile production
+eas build --platform ios --profile production
+eas submit --platform android --profile production
+eas submit --platform ios --profile production

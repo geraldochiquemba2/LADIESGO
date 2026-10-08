@@ -9,7 +9,6 @@ import AppNavigator from './src/navigation/AppNavigator';
 import { initAuth } from './src/store/slices/authSlice';
 import { setCurrentTrip } from './src/store/slices/tripSlice';
 import { registerForPushNotifications } from './src/services/notifications';
-import { checkForUpdate } from './src/services/updateCheck';
 import ConnectingScreen from './src/screens/shared/ConnectingScreen';
 
 // Sessão guardada é restaurada com retries; sem sessão o utilizador
@@ -43,7 +42,8 @@ function Root() {
         }
         registerForPushNotifications();
         setReady(true);
-        checkForUpdate(true);
+        // Self-update via APK desativado na versão das lojas (Play/App Store
+        // proíbem instalação fora da loja). Atualizações via loja apenas.
       } catch {
         if (cancelled) return;
         if (attempt < RETRY_DELAYS_MS.length) {
@@ -67,10 +67,10 @@ function Root() {
   if (!ready) {
     return (
       <View style={splash.container}>
-        <Text style={splash.logo}>🚖</Text>
-        <Text style={splash.name}>TaxiApp</Text>
-        <Text style={splash.tagline}>Your ride, on demand</Text>
-        <ActivityIndicator color="#FFD700" style={{ marginTop: 48 }} />
+        <Text style={splash.logo}>🦋</Text>
+        <Text style={splash.name}>LadiesGo!</Text>
+        <Text style={splash.tagline}>Mobilidade Feminina Segura</Text>
+        <ActivityIndicator color="#fff" style={{ marginTop: 48 }} />
       </View>
     );
   }
@@ -94,11 +94,11 @@ export default function App() {
 const splash = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#61188E',
     justifyContent: 'center',
     alignItems: 'center',
   },
   logo: { fontSize: 72, marginBottom: 16 },
-  name: { fontSize: 36, fontWeight: 'bold', color: '#FFD700', letterSpacing: 1 },
-  tagline: { color: '#aaa', fontSize: 16, marginTop: 6 },
+  name: { fontSize: 36, fontWeight: 'bold', color: '#fff', letterSpacing: 1 },
+  tagline: { color: '#e3d0ff', fontSize: 16, marginTop: 6 },
 });
