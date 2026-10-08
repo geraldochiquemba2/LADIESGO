@@ -69,7 +69,7 @@
   .login-wrap{display:flex;flex-direction:column;justify-content:flex-start;min-height:100%}
   .cta-ghost{background:#fff;color:#61188E;border:2px solid #e3d0f8;box-shadow:none;margin-top:10px;animation:none}
   .splash{position:absolute;inset:0;z-index:20;background:#61188E;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;transition:opacity .7s,visibility .7s}
-  .splash.off{opacity:0;visibility:hidden}.splash svg{width:120px;animation:hov 2s ease-in-out infinite}
+  .splash.off{opacity:0;visibility:hidden}.splash svg{width:120px;animation:hov 2s ease-in-out infinite}.splash img{width:280px;max-width:80%;border-radius:24px;box-shadow:0 12px 40px rgba(0,0,0,.45);animation:hov 2s ease-in-out infinite}
   .splash h1{font-size:54px;font-weight:800;-webkit-text-stroke:3px #4a1a8f;paint-order:stroke fill}
   @keyframes hov{50%{transform:translateY(-10px)}}
   .modal{position:absolute;inset:0;z-index:15;background:rgba(20,0,50,.6);display:none;align-items:flex-end}.modal.on{display:flex}
@@ -121,7 +121,7 @@
     <button class="cta red" style="margin-bottom:8px">Ligar para a emergência</button>
     <button class="cta" style="margin-bottom:8px">Alertar contactos de confiança</button>
     <button class="chip" data-a="close" style="width:100%;height:42px">Estou bem, voltar</button></div></div>
-  <div class="splash" id="splash"><div id="sl" style="width:120px"></div><h1>LadiesGo!</h1><p>Mobilidade Feminina Segura</p></div>
+  <div class="splash" id="splash"><img src="logo.jpg" alt="LadiesGo! – Mobilidade Feminina Segura"></div>
 </div>
 
 <script>
@@ -129,7 +129,7 @@ const $=id=>document.getElementById(id),lerp=(a,b,k)=>a+(b-a)*k;
 let seed=7;const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
 const wing='M20 14C15 2 3 2 3 9C3 15 11 18 20 17ZM20 18C13 19 9 24 12 27C15 30 19 25 20 22Z';
 const bf=c=>`<svg viewBox="0 0 40 30"><g class="wl"><path d="${wing}" fill="${c}" stroke="#fff" stroke-width="1.2"/></g><g class="wr"><path transform="translate(40 0) scale(-1 1)" d="${wing}" fill="${c}" stroke="#fff" stroke-width="1.2"/></g><rect x="19" y="10" width="2" height="16" rx="1" fill="#3a1470"/></svg>`;
-$('logo').innerHTML='<img src="logo.jpg" alt="LadiesGo!" style="height:46px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)">';$('sl').innerHTML=bf('#d9a8ff');
+$('logo').innerHTML='<img src="logo.jpg" alt="LadiesGo!" style="height:46px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)">';
 setTimeout(()=>$('splash').classList.add('off'),2400);
 [['#ff9ad5',22,'26%',0],['#d9a8ff',30,'40%',-7],['#ffd0f0',18,'14%',-12]].forEach(([c,w,top,d])=>{const e=document.createElement('div');e.className='fly';e.style.cssText=`width:${w}px;top:${top};animation-delay:${d}s;animation-duration:${16+w/3}s`;e.innerHTML=bf(c);$('sceneBox').appendChild(e)});
 
