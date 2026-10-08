@@ -94,6 +94,7 @@ async function bootstrap() {
   type PlaceEntry = { n: string; lat: number; lng: number; t: string; m: string };
   let placesIdx: PlaceEntry[] = [];
   let placesNorm: string[] = [];
+  let placesFull: string[] = [];
   const norm = (s: string) =>
     (s || '')
       .toLowerCase()
@@ -107,6 +108,7 @@ async function bootstrap() {
       const arr = raw.places || raw.d || [];
       placesIdx = [];
       placesNorm = [];
+      placesFull = [];
       for (const p of arr) {
         const lat = Array.isArray(p) ? p[1] : p.lat;
         const lng = Array.isArray(p) ? p[2] : p.lng;
@@ -120,6 +122,7 @@ async function bootstrap() {
           m: String(Array.isArray(p) ? p[4] || '' : p.municipality || ''),
         });
         placesNorm.push(norm(name));
+        placesFull.push(norm(name + ' ' + placesIdx[placesIdx.length - 1].m + ' ' + placesIdx[placesIdx.length - 1].t));
       }
       console.log(`Places index: ${placesIdx.length} locais`);
     } catch (e) {
@@ -136,24 +139,41 @@ async function bootstrap() {
         res.json({ places: [] });
         return;
       }
+      // Todas as palavras, em qualquer ordem ("kilamba bloco" acha
+      // "Escola Bloco D" no Kilamba). Palavras de 1 letra são ignoradas.
+      const toks = q.split(/\s+/).filter((t) => t.length >= 2);
+      if (!toks.length) {
+        res.json({ places: [] });
+        return;
+      }
       const lat = Number(req.query?.lat);
       const lng = Number(req.query?.lng);
       const hasLoc = Number.isFinite(lat) && Number.isFinite(lng);
       const out: any[] = [];
-      for (let i = 0; i < placesIdx.length && out.length < 200; i++) {
+      for (let i = 0; i < placesIdx.length && out.length < 300; i++) {
         const name = placesNorm[i];
-        let score = -1;
-        if (name.startsWith(q)) score = 0;
-        else if (name.split(/[\s,\-]+/).some((w) => w.startsWith(q))) score = 1;
-        else if (name.includes(q)) score = 2;
-        if (score < 0) continue;
+        const full = placesFull[i];
+        if (full.startsWith(q)) {
+          // 0: frase exata no início
+        } else {
+          const words = full.split(/[\s,\-]+/);
+          let ok = true;
+          for (const t of toks) {
+            if (!full.includes(t)) {
+              ok = false;
+              break;
+            }
+          }
+          if (!ok) continue;
+        }
+        const startsFull = full.startsWith(q) ? 0 : 1;
         let dist = 0;
         if (hasLoc) {
           const dLa = placesIdx[i].lat - lat;
           const dLo = placesIdx[i].lng - lng;
           dist = Math.sqrt(dLa * dLa + dLo * dLo);
         }
-        out.push({ i, score, dist });
+        out.push({ i, score: startsFull, dist });
       }
       out.sort((a, b) => a.score - b.score || a.dist - b.dist);
       // Anti-duplicados: mesmo nome a <200m conta como um (entradas/saídas).
