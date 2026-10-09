@@ -65,7 +65,7 @@ export const driversApi = {
   getStatus: () => api.get('/drivers/status'),
   toggleOnline: (isOnline: boolean) => api.put('/drivers/toggle-online', { isOnline }),
   updateLocation: (lat: number, lng: number) => api.put('/drivers/location', { lat, lng }),
-  // Aceita os dois formatos: {drivers:[...]} (web/LadiesGo) ou [...] (legado).
+  // Aceita os dois formatos: {drivers:[...]} (web/SenhorasVa) ou [...] (legado).
   // Normaliza sempre para array com currentLat/currentLng.
   getNearby: async (lat: number, lng: number) => {
     const res = await api.get(`/drivers/nearby?lat=${lat}&lng=${lng}`);

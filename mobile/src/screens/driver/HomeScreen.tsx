@@ -154,7 +154,7 @@ export default function DriverHomeScreen({ navigation }: any) {
           if (m === 'precise-denied') {
             Alert.alert(
               'Localização exata',
-              'Ativa a "Localização exata" para o LadiesGo nas definições do iPhone (Privacidade > Localização). Sem isso a posição não chega.',
+              'Ativa a "Localização exata" para o SenhorasVa nas definições do iPhone (Privacidade > Localização). Sem isso a posição não chega.',
             );
           } else if (m === 'background-denied') {
             Alert.alert(

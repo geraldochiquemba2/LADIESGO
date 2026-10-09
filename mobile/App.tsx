@@ -68,7 +68,7 @@ function Root() {
     return (
       <View style={splash.container}>
         <Text style={splash.logo}>🦋</Text>
-        <Text style={splash.name}>LadiesGo!</Text>
+        <Text style={splash.name}>SenhorasVa!</Text>
         <Text style={splash.tagline}>Mobilidade Feminina Segura</Text>
         <ActivityIndicator color="#fff" style={{ marginTop: 48 }} />
       </View>

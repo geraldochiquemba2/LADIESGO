@@ -1,20 +1,20 @@
-LADIESGO! — FICHA DE LOJA (Play Store + App Store)
+SENHORASVA! — FICHA DE LOJA (Play Store + App Store)
 ==================================================
-Pacote/Bundle: com.ladiesgo.app
-Nome: LadiesGo!
-Versão: 1.0.0 (versionCode 1, autoIncrement no EAS production)
+Pacote/Bundle: com.ladiesgo.app (slug/scheme ladiesgo — não mudar)
+Nome loja + binário: SenhorasVa!
+Versão: 1.0.0 (build iOS 5 via EAS, autoIncrement no EAS production)
 API produção: https://ladiesgo.onrender.com/api/v1
 Cor marca: #61188E
 
 TÍTULO CURTO (30 chars)
-LadiesGo! Táxi p/ Mulheres
+SenhorasVa! Táxi p/ Mulheres
 
 DESCRIÇÃO CURTA (80 chars Play / 170 App Store subtitle)
 Play: Táxi só com motoristas mulheres em Luanda. Segura, rápido e feminino.
 App Store subtitle: Mobilidade feminina segura em Luanda.
 
 DESCRIÇÃO LONGA (PT)
-🦋 LadiesGo! — Mobilidade Feminina Segura em Luanda.
+🦋 SenhorasVa! — Mobilidade Feminina Segura em Luanda.
 
 Só passageiras e só motoristas mulheres verificadas.
 Pede em segundos, acompanha a motorista no mapa em tempo real,
@@ -30,7 +30,7 @@ Kwanza e avalia cada viagem.
 Só maiores de 18 anos. Feito em Angola, para mulheres.
 
 PALAVRAS-CHAVE App Store (100 chars, sem espaços a mais)
-taxi,mulheres,luanda,angola,ladiesgo,motorista,viagem,segura,transporte
+taxi,mulheres,luanda,angola,senhorasva,motorista,viagem,segura,transporte
 
 CATEGORIA
 Play: Mapas e navegação. App Store: Viagens / Navigation.

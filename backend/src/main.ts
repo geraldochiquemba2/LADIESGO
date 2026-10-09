@@ -282,6 +282,14 @@ async function bootstrap() {
           lng: placesIdx[i].lng,
           type: placesIdx[i].t,
           municipality: placesIdx[i].m,
+          distanceKm:
+            hasLoc && Number.isFinite(lat) && Number.isFinite(lng)
+              ? Math.round(
+                  Math.sqrt(
+                    (placesIdx[i].lat - lat) ** 2 + (placesIdx[i].lng - lng) ** 2,
+                  ) * 111 * 10,
+                ) / 10
+              : null,
         })),
       });
     } catch {
@@ -383,7 +391,7 @@ async function bootstrap() {
   // Info da API (JSON) em /api — landing / passa a servir o LadiesGo!
   httpAdapter.get('/api', (_req: any, res: any) => {
     res.json({
-      name: 'LadiesGo! API',
+      name: 'SenhorasVa! API',
       version: 'v1',
       status: 'online',
       description: 'Táxi para mulheres 🇦🇴',

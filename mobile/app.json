@@ -17,8 +17,8 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "A LadiesGo precisa da tua posição para mostrar viagens perto de ti.",
-          "locationAlwaysAndWhenInUsePermission": "A LadiesGo precisa da tua posição sempre para continuares online e receberes pedidos mesmo com o Waze aberto.",
+          "locationWhenInUsePermission": "A SenhorasVa precisa da tua posição para mostrar viagens perto de ti.",
+          "locationAlwaysAndWhenInUsePermission": "A SenhorasVa precisa da tua posição sempre para continuares online e receberes pedidos mesmo com o Waze aberto.",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true
         }
@@ -29,11 +29,11 @@
       "bundleIdentifier": "com.ladiesgo.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "A LadiesGo precisa da câmara para foto de perfil e documentos da motorista.",
-        "NSPhotoLibraryUsageDescription": "A LadiesGo precisa da galeria para escolher foto de perfil e documentos.",
-        "NSLocationWhenInUseUsageDescription": "A LadiesGo precisa da tua posição para mostrar motoristas perto de ti.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "A LadiesGo precisa da tua posição sempre para continuares online e receberes pedidos.",
-        "NSUserNotificationsUsageDescription": "A LadiesGo envia alertas de viagem: motorista encontrada, chegada e conclusão."
+        "NSCameraUsageDescription": "A SenhorasVa precisa da câmara para foto de perfil e documentos da motorista.",
+        "NSPhotoLibraryUsageDescription": "A SenhorasVa precisa da galeria para escolher foto de perfil e documentos.",
+        "NSLocationWhenInUseUsageDescription": "A SenhorasVa precisa da tua posição para mostrar motoristas perto de ti.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "A SenhorasVa precisa da tua posição sempre para continuares online e receberes pedidos.",
+        "NSUserNotificationsUsageDescription": "A SenhorasVa envia alertas de viagem: motorista encontrada, chegada e conclusão."
       }
     },
     "android": {
