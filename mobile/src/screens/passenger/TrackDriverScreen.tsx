@@ -118,7 +118,7 @@ export default function TrackDriverScreen({ navigation }: any) {
           navigation.replace('TripComplete', { trip: { ...currentTrip, finalFare: data.finalFare } });
         }
         if (data.status === 'CANCELLED') {
-          Alert.alert('Trip Cancelled', 'The trip was cancelled.', [
+          Alert.alert('Viagem cancelada', 'A viagem foi cancelada.', [
             { text: 'OK', onPress: () => navigation.replace('PassengerHome') },
           ]);
         }
@@ -137,7 +137,7 @@ export default function TrackDriverScreen({ navigation }: any) {
 
   const handleCancel = () => {
     if (!currentTrip) return;
-    Alert.alert('Cancel Trip', 'Are you sure you want to cancel?', [
+    Alert.alert('Cancelar viagem', 'Tens a certeza que queres cancelar?', [
       { text: 'No', style: 'cancel' },
       {
         text: 'Yes, Cancel',
@@ -155,7 +155,7 @@ export default function TrackDriverScreen({ navigation }: any) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="large" color="#FFD700" />
-        <Text style={styles.loadingText}>Getting your location...</Text>
+        <Text style={styles.loadingText}>A obter a tua localização...</Text>
       </View>
     );
   }
@@ -164,9 +164,10 @@ export default function TrackDriverScreen({ navigation }: any) {
   const isArrived = tripStatus === 'DRIVER_ARRIVED';
 
   const handleSOS = () => {
-    Alert.alert('Emergency', 'Call emergency services?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') },
+    Alert.alert('Emergência', 'Ligar para emergência em Angola?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Polícia 113', style: 'destructive', onPress: () => Linking.openURL('tel:113') },
+      { text: 'Bombeiros 115', onPress: () => Linking.openURL('tel:115') },
     ]);
   };
 
@@ -174,7 +175,8 @@ export default function TrackDriverScreen({ navigation }: any) {
     if (!currentTrip) return;
     navigation.navigate('Chat', {
       tripId: currentTrip.id,
-      otherName: driver?.user?.name || 'Driver',
+      otherName: driver?.user?.name || 'Motorista',
+      otherUserId: driver?.userId || driver?.user?.id,
     });
   };
   const carRotation = driverHeading >= 0 ? driverHeading : 0;
@@ -315,7 +317,7 @@ export default function TrackDriverScreen({ navigation }: any) {
 
         {tripStatus === 'ACCEPTED' && (
           <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
-            <Text style={styles.cancelText}>Cancel Trip</Text>
+            <Text style={styles.cancelText}>Cancelar viagem</Text>
           </TouchableOpacity>
         )}
       </View>

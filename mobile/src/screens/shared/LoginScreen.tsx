@@ -108,6 +108,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ageOk, setAgeOk] = useState(false);
 
   const doLogin = async (asGuest: boolean) => {
     setError(null);
@@ -120,6 +121,10 @@ export default function LoginScreen() {
       }
       if (!normalizePhone(phone)) {
         setError('Escreve um número angolano válido: 9XX XXX XXX (Unitel, Movicel ou Africell).');
+        return;
+      }
+      if (!ageOk) {
+        setError('Para usar a SenhorasVa! tens de confirmar que tens 18 anos ou mais.');
         return;
       }
     }
@@ -233,6 +238,13 @@ export default function LoginScreen() {
             : <Text style={styles.ctaText}>Entrar com senha</Text>}
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.ageRow} onPress={() => setAgeOk((v) => !v)}>
+          <View style={[styles.checkbox, ageOk && styles.checkboxOn]}>
+            {ageOk ? <Text style={styles.checkMark}>✓</Text> : null}
+          </View>
+          <Text style={styles.ageText}>Confirmo que tenho 18 anos ou mais e aceito a Política de Privacidade</Text>
+        </TouchableOpacity>
+
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <TouchableOpacity
@@ -317,4 +329,12 @@ const styles = StyleSheet.create({
   ctaText: { color: '#fff', fontWeight: '800', fontSize: 18 },
   passCta: { marginTop: 10 },
   guestLink: { color: '#6a2bd6', textAlign: 'center', fontSize: 15, fontWeight: '600', padding: 8 },
+  ageRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 12, marginBottom: 4 },
+  checkbox: {
+    width: 24, height: 24, borderRadius: 8, borderWidth: 2, borderColor: '#6a2bd6',
+    backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginTop: 1,
+  },
+  checkboxOn: { backgroundColor: '#6a2bd6' },
+  checkMark: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  ageText: { flex: 1, color: '#4a2a7a', fontSize: 13, lineHeight: 18 },
 });

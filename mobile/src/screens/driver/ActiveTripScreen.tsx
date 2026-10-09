@@ -94,7 +94,7 @@ export default function ActiveTripScreen({ navigation, route }: any) {
       });
 
       socketService.on('server:trip-cancelled', () => {
-        Alert.alert('Trip Cancelled', 'The passenger has cancelled the trip.', [
+        Alert.alert('Viagem cancelada', 'A passageira cancelou a viagem.', [
           { text: 'OK', onPress: () => navigation.replace('DriverHome') },
         ]);
       });
@@ -148,9 +148,10 @@ export default function ActiveTripScreen({ navigation, route }: any) {
   const carRotation = heading >= 0 ? heading : 0;
 
   const handleSOS = () => {
-    Alert.alert('Emergency', 'Call emergency services?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') },
+    Alert.alert('Emergência', 'Ligar para emergência em Angola?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Polícia 113', style: 'destructive', onPress: () => Linking.openURL('tel:113') },
+      { text: 'Bombeiros 115', onPress: () => Linking.openURL('tel:115') },
     ]);
   };
 
@@ -168,7 +169,8 @@ export default function ActiveTripScreen({ navigation, route }: any) {
   const handleChat = () => {
     navigation.navigate('Chat', {
       tripId: trip.id,
-      otherName: passenger?.name || 'Passenger',
+      otherName: passenger?.name || 'Passageira',
+      otherUserId: trip.passengerId || passenger?.id,
     });
   };
 

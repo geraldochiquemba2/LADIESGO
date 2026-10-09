@@ -77,7 +77,7 @@ export default function ProfileScreen() {
   };
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
+    Alert.alert('Terminar sessão', 'Tens a certeza que queres sair?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Logout',
@@ -87,8 +87,8 @@ export default function ProfileScreen() {
     ]);
   };
 
-  const roleLabel = user?.role === 'DRIVER' ? 'Driver' : 'Passenger';
-  const roleIcon = user?.role === 'DRIVER' ? '🚗' : '👤';
+  const roleLabel = user?.role === 'DRIVER' ? 'Motorista' : 'Passageira';
+  const roleIcon = user?.role === 'DRIVER' ? '🚗' : '🦋';
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -155,7 +155,7 @@ export default function ProfileScreen() {
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statValue}>{Number(driverInfo.totalEarnings).toFixed(0)}</Text>
-              <Text style={styles.statLabel}>SAR Earned</Text>
+              <Text style={styles.statLabel}>Kz ganhos</Text>
             </View>
           </View>
 
@@ -207,13 +207,13 @@ export default function ProfileScreen() {
           onPress={() => {
             const code = user?.id?.slice(-6).toUpperCase() ?? 'TAXI00';
             Share.share({
-              message: `Use my TaxiApp code ${code} and get 20% off your first ride! Download: taxiapp.sa`,
+              message: `Usa o meu código LadiesGo ${code} e ganha desconto na 1ª viagem!`,
             });
           }}
         >
           <View style={styles.referralLeft}>
             <Text style={styles.referralCode}>{user?.id?.slice(-6).toUpperCase() ?? 'TAXI00'}</Text>
-            <Text style={styles.referralDesc}>Share & earn 10 SAR per friend who rides</Text>
+            <Text style={styles.referralDesc}>Partilha e ganha por cada amiga que viajar</Text>
           </View>
           <Text style={styles.referralCopy}>📤 Share</Text>
         </TouchableOpacity>
@@ -224,10 +224,45 @@ export default function ProfileScreen() {
 
       {/* Logout */}
       <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Logout</Text>
+        <Text style={styles.logoutText}>Terminar sessão</Text>
       </TouchableOpacity>
 
-      <Text style={styles.version}>TaxiApp v1.0 · Saudi Arabia 🇸🇦</Text>
+      {/* Apple 5.1.1(v): eliminação de conta obrigatória dentro da app */}
+      <TouchableOpacity
+        style={styles.deleteBtn}
+        onPress={() => {
+          Alert.alert(
+            'Eliminar conta',
+            'Isto apaga o teu nome, foto, telefone e desliga o acesso. As viagens antigas ficam anónimas por segurança. Queres continuar?',
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              {
+                text: 'Eliminar',
+                style: 'destructive',
+                onPress: () => {
+                  Alert.alert('Confirmar', 'Toca em Eliminar para confirmar em definitivo.', [
+                    { text: 'Voltar', style: 'cancel' },
+                    {
+                      text: 'Eliminar',
+                      style: 'destructive',
+                      onPress: async () => {
+                        try {
+                          await usersApi.deleteMe();
+                        } catch {}
+                        dispatch(logout());
+                      },
+                    },
+                  ]);
+                },
+              },
+            ],
+          );
+        }}
+      >
+        <Text style={styles.deleteText}>Eliminar conta e dados</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.version}>LadiesGo! v1.0 · Luanda, Angola 🇦🇴</Text>
     </ScrollView>
   );
 }
@@ -372,6 +407,17 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   logoutText: { color: '#ef4444', fontWeight: 'bold', fontSize: 16 },
+
+  deleteBtn: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  deleteText: { color: '#b91c1c', fontWeight: '600', fontSize: 14 },
 
   version: { textAlign: 'center', color: '#bbb', fontSize: 12 },
 });

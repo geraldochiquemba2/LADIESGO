@@ -55,6 +55,9 @@ export const usersApi = {
   getProfile: () => api.get('/users/profile'),
   updateProfile: (data: any) => api.put('/users/profile', data),
   getTripHistory: (page = 1) => api.get(`/users/trips/history?page=${page}`),
+  deleteMe: () => api.delete('/users/me'),
+  reportUser: (reportedUserId: string, reason: string, tripId?: string) =>
+    api.post('/users/report', { reportedUserId, reason, tripId }),
 };
 
 export const driversApi = {

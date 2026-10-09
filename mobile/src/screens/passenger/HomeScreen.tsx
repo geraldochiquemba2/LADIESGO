@@ -308,7 +308,7 @@ export default function PassengerHomeScreen({ navigation }: any) {
           activeOpacity={0.88}
         >
           <Text style={styles.ctaText}>
-            {activeTab === 'ride' ? '🚗  Book a Ride' : '📦  Send Package'}
+            {activeTab === 'ride' ? '🚗  Pedir viagem' : '📦  Enviar encomenda'}
           </Text>
         </TouchableOpacity>
 

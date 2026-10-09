@@ -20,7 +20,7 @@ export default function SettingsScreen({ navigation }: any) {
   const [lang, setLang] = useState<'en' | 'ar'>('en');
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
+    Alert.alert('Terminar sessão', 'Tens a certeza que queres sair?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Logout',

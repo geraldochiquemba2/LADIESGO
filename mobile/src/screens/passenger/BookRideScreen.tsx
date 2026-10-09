@@ -25,6 +25,7 @@ import {
   curvePath,
   fetchRoute,
   fetchZone,
+  havKm,
   searchPlaces,
   toGeoJSONLine,
   type PlaceHit,
@@ -119,6 +120,14 @@ export default function BookRideScreen({ navigation, route }: any) {
     setRoutePoints(info.points);
     setRouteMeta({ distanceKm: info.distanceKm, durationMin: info.durationMin, real: info.real });
     setRouteLoading(false);
+  };
+
+  const kmOf = (h: PlaceHit): string => {
+    const d =
+      typeof h.distanceKm === 'number'
+        ? h.distanceKm
+        : havKm([location.latitude, location.longitude], [h.lat, h.lng]);
+    return ` · ${d.toFixed(1).replace('.', ',')} km`;
   };
 
   const pickDropoff = async (coord: { latitude: number; longitude: number }, label?: string) => {

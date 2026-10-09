@@ -9,9 +9,11 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { Alert } from 'react-native';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { socketService } from '../../services/socket';
+import { usersApi } from '../../services/api';
 
 interface Message {
   id: string;
@@ -21,12 +23,42 @@ interface Message {
   isMine: boolean;
 }
 
-export default function ChatScreen({ route }: any) {
-  const { tripId, otherName } = route.params as { tripId: string; otherName: string };
+export default function ChatScreen({ route, navigation }: any) {
+  const { tripId, otherName, otherUserId } = route.params as {
+    tripId: string;
+    otherName: string;
+    otherUserId?: string;
+  };
   const { user } = useSelector((s: RootState) => s.auth);
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState('');
+  const [blocked, setBlocked] = useState(false);
   const listRef = useRef<FlatList>(null);
+
+  const doReport = () => {
+    if (!otherUserId) {
+      Alert.alert('Denunciar', 'Esta conversa não tem utilizador associado para denunciar.');
+      return;
+    }
+    Alert.alert('Denunciar e bloquear', `Denunciar ${otherName} por conteúdo impróprio?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Denunciar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await usersApi.reportUser(otherUserId, 'Conteúdo impróprio no chat', tripId);
+          } catch {}
+          setBlocked(true);
+          Alert.alert(
+            'Denúncia enviada',
+            `${otherName} foi bloqueado/a nesta conversa. A equipa LadiesGo vai rever.`,
+            [{ text: 'OK', onPress: () => navigation?.goBack?.() }],
+          );
+        },
+      },
+    ]);
+  };
 
   useEffect(() => {
     socketService.on('server:chat-message', (data: any) => {
@@ -81,9 +113,19 @@ export default function ChatScreen({ route }: any) {
       keyboardVerticalOffset={90}
     >
       <View style={styles.header}>
-        <Text style={styles.headerName}>{otherName}</Text>
-        <Text style={styles.headerSub}>In-trip chat</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerName}>{otherName}</Text>
+          <Text style={styles.headerSub}>Chat da viagem</Text>
+        </View>
+        <TouchableOpacity onPress={doReport} style={styles.reportBtn}>
+          <Text style={styles.reportText}>Denunciar</Text>
+        </TouchableOpacity>
       </View>
+      {blocked ? (
+        <View style={styles.blockedBanner}>
+          <Text style={styles.blockedText}>Utilizador bloqueado. Denúncia enviada à equipa LadiesGo.</Text>
+        </View>
+      ) : null}
 
       <FlatList
         ref={listRef}
@@ -101,7 +143,7 @@ export default function ChatScreen({ route }: any) {
       <View style={styles.inputRow}>
         <TextInput
           style={styles.input}
-          placeholder="Type a message..."
+          placeholder="Escreve uma mensagem..."
           placeholderTextColor="#aaa"
           value={text}
           onChangeText={setText}
@@ -129,7 +171,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     paddingTop: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
+  reportBtn: {
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  reportText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  blockedBanner: { backgroundColor: '#FEE2E2', padding: 12 },
+  blockedText: { color: '#b91c1c', fontSize: 13, fontWeight: '600', textAlign: 'center' },
   headerName: { color: '#FFD700', fontSize: 18, fontWeight: 'bold' },
   headerSub: { color: '#aaa', fontSize: 13, marginTop: 2 },
 

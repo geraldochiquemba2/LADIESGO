@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Post, Body, UseGuards, Query, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
+import { Controller, Get, Put, Post, Delete, Body, UseGuards, Query, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -31,5 +31,20 @@ export class UsersController {
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
   ) {
     return this.users.getTripHistory(userId, page, limit);
+  }
+
+  // Apple 5.1.1(v) — eliminação de conta dentro da app.
+  @Delete('me')
+  deleteMe(@CurrentUser('id') userId: string) {
+    return this.users.deleteMe(userId);
+  }
+
+  // Apple 1.2 (UGC) — denunciar + bloquear utilizador do chat da viagem.
+  @Post('report')
+  reportUser(
+    @CurrentUser('id') userId: string,
+    @Body() body: { reportedUserId: string; reason?: string; tripId?: string },
+  ) {
+    return this.users.reportUser(userId, body.reportedUserId, body.reason ?? '', body.tripId);
   }
 }
