@@ -83,7 +83,7 @@ export const tripsApi = {
   getTrip: (id: string) => api.get(`/trips/${id}`),
   accept: (id: string) => api.put(`/trips/${id}/accept`),
   markArrived: (id: string) => api.put(`/trips/${id}/arrived`),
-  start: (id: string) => api.put(`/trips/${id}/start`),
+  start: (id: string, pin?: string) => api.put(`/trips/${id}/start`, { pin }),
   complete: (id: string) => api.put(`/trips/${id}/complete`),
   cancel: (id: string, reason?: string) => api.put(`/trips/${id}/cancel`, { reason }),
 };

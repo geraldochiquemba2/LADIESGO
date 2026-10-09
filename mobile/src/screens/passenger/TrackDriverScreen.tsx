@@ -277,6 +277,17 @@ export default function TrackDriverScreen({ navigation }: any) {
         {/* Status */}
         <Text style={styles.statusText}>{STATUS_LABELS[tripStatus] || tripStatus}</Text>
 
+        {/* Código de segurança — dita à motorista para arrancar */}
+        {(currentTrip as any)?.pin && (tripStatus === 'ACCEPTED' || tripStatus === 'DRIVER_ARRIVED') && (
+          <View style={styles.pinCard}>
+            <View style={styles.pinLeft}>
+              <Text style={styles.pinLabel}>Código de segurança</Text>
+              <Text style={styles.pinSub}>Partilha só ao entrar</Text>
+            </View>
+            <Text style={styles.pinValue}>{String((currentTrip as any).pin)}</Text>
+          </View>
+        )}
+
         {/* Driver info card */}
         {driver && (
           <View style={styles.driverCard}>
@@ -374,6 +385,30 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   driverInfo: { flex: 1 },
+  pinCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f6f4fa',
+    borderWidth: 1.5,
+    borderColor: '#c4b5fd',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  pinLeft: { flex: 1 },
+  pinLabel: { fontSize: 15, fontWeight: '700', color: '#1a1a2e' },
+  pinSub: { color: '#666', fontSize: 12, marginTop: 2 },
+  pinValue: {
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: 4,
+    color: '#61188E',
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
   driverName: { fontSize: 17, fontWeight: 'bold', color: '#1a1a2e' },
   driverSub: { color: '#666', marginTop: 2, fontSize: 13 },
   driverPlate: {

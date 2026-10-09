@@ -9,6 +9,8 @@ import {
   ScrollView,
   Linking,
   Platform,
+  Modal,
+  TextInput,
 } from 'react-native';
 import {
   Map as MapLibreMap,
@@ -42,6 +44,8 @@ export default function ActiveTripScreen({ navigation, route }: any) {
   const [status, setStatus] = useState<TripStatus>((trip.status as TripStatus) || 'ACCEPTED');
   const [eta, setEta] = useState<{ minutes: number; distanceKm: number } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [pinModal, setPinModal] = useState(false);
+  const [pin, setPin] = useState('');
 
   const latestMyLoc = useRef<{ lat: number; lng: number } | null>(null);
 
@@ -116,8 +120,9 @@ export default function ActiveTripScreen({ navigation, route }: any) {
         await tripsApi.markArrived(trip.id);
         setStatus('DRIVER_ARRIVED');
       } else if (status === 'DRIVER_ARRIVED') {
-        await tripsApi.start(trip.id);
-        setStatus('IN_PROGRESS');
+        // Código de segurança: a passageira dita os 4 dígitos para arrancar.
+        setPin('');
+        setPinModal(true);
       } else if (status === 'IN_PROGRESS') {
         await tripsApi.complete(trip.id);
         socketService.emit('driver:trip-completed', { tripId: trip.id });
@@ -125,6 +130,23 @@ export default function ActiveTripScreen({ navigation, route }: any) {
       }
     } catch (e: any) {
       Alert.alert('Error', e.response?.data?.message || 'Action failed. Try again.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const confirmStart = async () => {
+    if (pin.trim().length < 4) {
+      Alert.alert('Código', 'Pede o código de 4 dígitos à passageira para arrancar.');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await tripsApi.start(trip.id, pin.trim());
+      setPinModal(false);
+      setStatus('IN_PROGRESS');
+    } catch (e: any) {
+      Alert.alert('Código incorreto', e.response?.data?.message || 'Confirma o código com a passageira.');
     } finally {
       setActionLoading(false);
     }
@@ -354,6 +376,37 @@ export default function ActiveTripScreen({ navigation, route }: any) {
             )}
           </TouchableOpacity>
         )}
+
+        {/* Código de segurança para iniciar a viagem */}
+        <Modal visible={pinModal} transparent animationType="fade" onRequestClose={() => setPinModal(false)}>
+          <View style={styles.pinOverlay}>
+            <View style={styles.pinCard}>
+              <Text style={styles.pinTitle}>Código de segurança</Text>
+              <Text style={styles.pinSub}>Pede os 4 dígitos à passageira para arrancar.</Text>
+              <TextInput
+                style={styles.pinInput}
+                value={pin}
+                onChangeText={(v) => setPin(v.replace(/\D/g, '').slice(0, 4))}
+                keyboardType="number-pad"
+                maxLength={4}
+                placeholder="••••"
+                autoFocus
+              />
+              <View style={styles.pinRow}>
+                <TouchableOpacity style={styles.pinCancel} onPress={() => setPinModal(false)}>
+                  <Text style={styles.pinCancelText}>Voltar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.pinConfirm} onPress={confirmStart} disabled={actionLoading}>
+                  {actionLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.pinConfirmText}>Iniciar</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </View>
   );
@@ -532,4 +585,50 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   targetPinText: { fontSize: 18 },
+
+  pinOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  pinCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 22,
+    width: '100%',
+  },
+  pinTitle: { fontSize: 18, fontWeight: 'bold', color: '#1a1a2e', textAlign: 'center' },
+  pinSub: { color: '#666', fontSize: 13, textAlign: 'center', marginTop: 6 },
+  pinInput: {
+    borderWidth: 1.5,
+    borderColor: '#61188E',
+    borderRadius: 14,
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: 8,
+    textAlign: 'center',
+    paddingVertical: 12,
+    marginTop: 16,
+    color: '#1a1a2e',
+  },
+  pinRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  pinCancel: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: '#e5e5e5',
+    borderRadius: 14,
+    padding: 14,
+    alignItems: 'center',
+  },
+  pinCancelText: { color: '#666', fontWeight: '700', fontSize: 15 },
+  pinConfirm: {
+    flex: 1,
+    backgroundColor: '#16a34a',
+    borderRadius: 14,
+    padding: 14,
+    alignItems: 'center',
+  },
+  pinConfirmText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
 });

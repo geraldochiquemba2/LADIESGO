@@ -146,7 +146,9 @@ export class TripsService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return trip ?? null;
+    if (!trip) return null;
+    // PIN só para a passageira (a motorista tem de o pedir e digitar).
+    return trip.passengerId === userId ? { ...trip, pin: pinForTrip(trip.id) } : trip;
   }
 
   async getTrip(tripId: string, userId: string) {
@@ -173,7 +175,8 @@ export class TripsService {
     }
     if (!allowed) throw new ForbiddenException('You do not have access to this trip');
 
-    return trip;
+    // PIN só para a passageira da viagem (a motorista tem de o pedir e digitar).
+    return isPassenger ? { ...trip, pin: pinForTrip(tripId) } : trip;
   }
 
   async acceptTrip(tripId: string, userId: string) {
