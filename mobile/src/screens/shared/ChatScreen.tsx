@@ -52,7 +52,7 @@ export default function ChatScreen({ route, navigation }: any) {
           setBlocked(true);
           Alert.alert(
             'Denúncia enviada',
-            `${otherName} foi bloqueado/a nesta conversa. A equipa SenhorasVa vai rever.`,
+            `${otherName} foi bloqueado/a nesta conversa. A equipa LadiesGo vai rever.`,
             [{ text: 'OK', onPress: () => navigation?.goBack?.() }],
           );
         },
@@ -123,7 +123,7 @@ export default function ChatScreen({ route, navigation }: any) {
       </View>
       {blocked ? (
         <View style={styles.blockedBanner}>
-          <Text style={styles.blockedText}>Utilizador bloqueado. Denúncia enviada à equipa SenhorasVa.</Text>
+          <Text style={styles.blockedText}>Utilizador bloqueado. Denúncia enviada à equipa LadiesGo.</Text>
         </View>
       ) : null}
 

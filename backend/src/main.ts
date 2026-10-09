@@ -391,7 +391,7 @@ async function bootstrap() {
   // Info da API (JSON) em /api — landing / passa a servir o LadiesGo!
   httpAdapter.get('/api', (_req: any, res: any) => {
     res.json({
-      name: 'SenhorasVa! API',
+      name: 'LadiesGo! API',
       version: 'v1',
       status: 'online',
       description: 'Táxi para mulheres 🇦🇴',

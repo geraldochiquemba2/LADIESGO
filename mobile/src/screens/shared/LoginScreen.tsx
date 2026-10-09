@@ -89,7 +89,7 @@ function AnimatedScene({ onSos }: { onSos: () => void }) {
       <Animated.View style={{ transform: [{ translateY: flyY }] }}>
         <Text style={styles.butterfly}>🦋</Text>
       </Animated.View>
-      <Text style={styles.brand}>SenhorasVa!</Text>
+      <Text style={styles.brand}>LadiesGo!</Text>
       <Text style={styles.tagline}>Mobilidade Feminina Segura</Text>
       <Animated.Text
         style={[styles.taxi, { transform: [{ translateX: taxiLeft }, { translateY: taxiBob }] }]}
@@ -124,7 +124,7 @@ export default function LoginScreen() {
         return;
       }
       if (!ageOk) {
-        setError('Para usar a SenhorasVa! tens de confirmar que tens 18 anos ou mais.');
+        setError('Para usar a LadiesGo! tens de confirmar que tens 18 anos ou mais.');
         return;
       }
     }

@@ -42,8 +42,12 @@ export class TripsController {
   }
 
   @Put(':id/start')
-  start(@Param('id') tripId: string, @CurrentUser('id') userId: string) {
-    return this.trips.startTrip(tripId, userId);
+  start(
+    @Param('id') tripId: string,
+    @CurrentUser('id') userId: string,
+    @Body('pin') pin?: string,
+  ) {
+    return this.trips.startTrip(tripId, userId, pin);
   }
 
   @Put(':id/complete')

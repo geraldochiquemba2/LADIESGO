@@ -207,7 +207,7 @@ export default function ProfileScreen() {
           onPress={() => {
             const code = user?.id?.slice(-6).toUpperCase() ?? 'TAXI00';
             Share.share({
-              message: `Usa o meu código SenhorasVa ${code} e ganha desconto na 1ª viagem!`,
+              message: `Usa o meu código LadiesGo ${code} e ganha desconto na 1ª viagem!`,
             });
           }}
         >
@@ -262,7 +262,7 @@ export default function ProfileScreen() {
         <Text style={styles.deleteText}>Eliminar conta e dados</Text>
       </TouchableOpacity>
 
-      <Text style={styles.version}>SenhorasVa! v1.0 · Luanda, Angola 🇦🇴</Text>
+      <Text style={styles.version}>LadiesGo! v1.0 · Luanda, Angola 🇦🇴</Text>
     </ScrollView>
   );
 }

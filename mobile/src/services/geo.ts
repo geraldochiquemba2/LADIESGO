@@ -119,7 +119,7 @@ export async function fetchZone(lat: number, lng: number): Promise<string> {
   try {
     const r = await fetch(
       `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=14`,
-      { headers: { 'User-Agent': 'SenhorasVa/1.0' } },
+      { headers: { 'User-Agent': 'LadiesGo/1.0' } },
     );
     const j = await r.json();
     const a = j?.address || {};
@@ -136,7 +136,7 @@ export interface PlaceHit {
   distanceKm?: number;
 }
 
-// Pesquisa de moradas: primeiro o índice SenhorasVa no backend (23k+ locais,
+// Pesquisa de moradas: primeiro o índice LadiesGo no backend (23k+ locais,
 // instantâneo e com os nossos nomes), Nominatim só como fallback.
 export async function searchPlaces(
   q: string,
@@ -166,7 +166,7 @@ export async function searchPlaces(
       `https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=ao` +
       `&viewbox=13.05,-8.70,13.55,-9.05&bounded=0` +
       `&accept-language=pt&q=${encodeURIComponent(query)}`;
-    const r = await fetch(url, { headers: { 'User-Agent': 'SenhorasVa/1.0' } });
+    const r = await fetch(url, { headers: { 'User-Agent': 'LadiesGo/1.0' } });
     const j = await r.json();
     if (!Array.isArray(j)) return [];
     return j

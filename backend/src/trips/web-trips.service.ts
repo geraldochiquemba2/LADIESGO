@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { TripsService } from './trips.service';
+import { TripsService, pinForTrip } from './trips.service';
 import { LiveDriversService } from '../drivers/live-drivers.service';
 import { WebRequestTripDto, TripStatusDto } from './dto/web-trip.dto';
 
@@ -28,11 +28,33 @@ const DB_TO_WEB_STATUS: Record<string, string> = {
 const toPay = (p?: string) => (/cart|card|multicaixa|tpa/i.test(p || '') ? 'CARD' : 'CASH');
 const payToWeb = (p?: string) => (p === 'CARD' ? 'Cartão' : 'Numerário');
 
-// PIN estável por viagem (a página mostra-o na partilha; fallback era 4821).
+// PIN estável por viagem (algoritmo único em trips.service: pinForTrip).
 function pinFor(id: string): string {
-  let h = 0;
-  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return String(1000 + (h % 9000));
+  return pinForTrip(id);
+}
+
+// Nomes genéricos que o geocoder do cliente deixa quando falha.
+const GENERIC_PLACE = ['ponto no mapa', 'local atual', 'ponto', 'destino', 'local'];
+
+// Último recurso no servidor: morada legível via Nominatim para a fatura,
+// o painel e a motorista não verem "Ponto no mapa".
+async function revName(lat: number, lng: number): Promise<string | null> {
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=16`,
+      { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: ctl.signal },
+    );
+    clearTimeout(to);
+    if (!r.ok) return null;
+    const j: any = await r.json();
+    const a = j?.address || {};
+    const name = a.road || a.suburb || a.neighbourhood || a.city_district || a.city || a.town || a.village || null;
+    return typeof name === 'string' && name.trim() ? name.trim().slice(0, 80) : null;
+  } catch {
+    return null;
+  }
 }
 
 function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -123,10 +145,29 @@ export class WebTripsService {
           .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
       : [];
 
+    // Nomes para a fatura: preenche os genéricos em falta via Nominatim.
+    let pickupName = (dto.pickupName || '').trim();
+    if (!pickupName || GENERIC_PLACE.includes(pickupName.toLowerCase())) {
+      pickupName = (await revName(dto.pickupLat, dto.pickupLng)) || 'Ponto no mapa';
+    }
+    await Promise.all(
+      cleanStops.map(async (s) => {
+        if ((!s.n && !s.a) || GENERIC_PLACE.includes((s.n || '').toLowerCase())) {
+          const nm = await revName(s.lat, s.lng);
+          if (nm) {
+            s.n = nm;
+            if (!s.a) s.a = '';
+          } else if (!s.n) {
+            s.n = 'Paragem';
+          }
+        }
+      }),
+    );
+
     const trip = await this.prisma.trip.create({
       data: {
         passengerId: callerId,
-        pickupAddress: (dto.pickupName || '').trim().slice(0, 80) || 'Ponto no mapa',
+        pickupAddress: pickupName.slice(0, 80),
         pickupLat: dto.pickupLat,
         pickupLng: dto.pickupLng,
         dropoffAddress: a ? `${n} · ${a}` : n,
@@ -161,7 +202,8 @@ export class WebTripsService {
     const isPax = trip.passengerId === userId;
     const isDrv = !!trip.driver && trip.driver.userId === userId;
     // Telefones só para os próprios intervenientes (nunca em listagens).
-    return this.formatTrip(trip, { driverPhone: isPax || isDrv, passengerPhone: isDrv });
+    // PIN só para a passageira: a motorista tem de o pedir e digitar.
+    return this.formatTrip(trip, { driverPhone: isPax || isDrv, passengerPhone: isDrv, showPin: isPax });
   }
 
   // ---- Pedidos à espera de motorista (GET /trips/incoming) ----
@@ -323,7 +365,7 @@ export class WebTripsService {
       return { ok: true, status: 'arrived' };
     }
     if (st === 'in_progress') {
-      await this.trips.startTrip(tripId, userId);
+      await this.trips.startTrip(tripId, userId, body.pin);
       return { ok: true, status: 'in_progress' };
     }
     if (st === 'completed') {
@@ -354,7 +396,7 @@ export class WebTripsService {
   }
 
   // ---- Formato exato que a página web espera ----
-  formatTrip(t: any, opts?: { driverPhone?: boolean; passengerPhone?: boolean }) {
+  formatTrip(t: any, opts?: { driverPhone?: boolean; passengerPhone?: boolean; showPin?: boolean }) {
     const [n, ...rest] = String(t.dropoffAddress || '').split(' · ');
     const driverUserId = t.driver?.userId || null;
     let live: any = null;
@@ -381,7 +423,7 @@ export class WebTripsService {
       views: viewedBy.length,
       by: this.byLabel(t),
       reason: t.cancelReason || '',
-      pin: pinFor(t.id),
+      pin: opts?.showPin ? pinFor(t.id) : null,
       driverId: driverUserId,
       driverName: t.driver?.user?.name || t.driver?.user?.phone || null,
       driver: driverUserId

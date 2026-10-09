@@ -37,7 +37,7 @@ function bgOptions(): any {
     pausesUpdatesAutomatically: false,
     showsBackgroundLocationIndicator: true,
     foregroundService: {
-      notificationTitle: 'SenhorasVa motorista',
+      notificationTitle: 'LadiesGo motorista',
       notificationBody: 'A partilhar a tua posição com as passageiras.',
         notificationColor: '#61188E',
     },

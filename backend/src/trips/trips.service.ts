@@ -16,6 +16,15 @@ function getSurgeMultiplier(): number {
   return 1.0;
 }
 
+// Código de segurança da viagem (4 dígitos, estável): a passageira vê-o
+// na app e dita-o à motorista, que o digita ao chegar para iniciar.
+// Mesmo algoritmo no site (pinJS) e no backend.
+export function pinForTrip(id: string): string {
+  let h = 0;
+  for (const c of String(id || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return String(1000 + (h % 9000));
+}
+
 @Injectable()
 export class TripsService {
   constructor(
@@ -200,7 +209,11 @@ export class TripsService {
     return trip;
   }
 
-  async startTrip(tripId: string, userId: string) {
+  async startTrip(tripId: string, userId: string, pin?: string) {
+    // Segurança LadiesGo: sem o código ditado pela passageira não arranca.
+    if (!pin || String(pin).trim() !== pinForTrip(tripId)) {
+      throw new BadRequestException('Código de segurança incorreto. Pede o código de 4 dígitos à passageira.');
+    }
     const trip = await this.updateTripStatus(tripId, userId, 'DRIVER_ARRIVED', 'IN_PROGRESS', { startedAt: new Date() });
     this.notifs.sendPush(trip.passengerId, {
       title: '🚀 Trip Started',

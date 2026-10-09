@@ -110,7 +110,18 @@ export class AdminService {
         orderBy: { createdAt: 'desc' },
         include: {
           passenger: { select: { name: true, phone: true } },
-          driver: { include: { user: { select: { name: true, phone: true } } } },
+          driver: {
+            select: {
+              id: true,
+              userId: true,
+              currentLat: true,
+              currentLng: true,
+              updatedAt: true,
+              carPlate: true,
+              carMake: true,
+              user: { select: { name: true, phone: true } },
+            },
+          },
           payment: true,
         },
       }),

@@ -80,6 +80,12 @@ export class TripStatusDto {
   @IsString()
   status!: string;
 
+  // Código de segurança ditado pela passageira (obrigatório ao iniciar).
+  @IsOptional()
+  @IsString()
+  @MaxLength(8)
+  pin?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(16)
