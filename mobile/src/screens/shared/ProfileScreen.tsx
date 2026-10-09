@@ -222,12 +222,7 @@ export default function ProfileScreen() {
         </View>
       </View>
 
-      {/* Logout */}
-      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Terminar sessão</Text>
-      </TouchableOpacity>
-
-      {/* Apple 5.1.1(v): eliminação de conta obrigatória dentro da app */}
+      {/* Apple 5.1.1(v): eliminação de conta obrigatória dentro da app — por cima de sair */}
       <TouchableOpacity
         style={styles.deleteBtn}
         onPress={() => {
@@ -260,6 +255,11 @@ export default function ProfileScreen() {
         }}
       >
         <Text style={styles.deleteText}>Eliminar conta e dados</Text>
+      </TouchableOpacity>
+
+      {/* Logout */}
+      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+        <Text style={styles.logoutText}>Terminar sessão</Text>
       </TouchableOpacity>
 
       <Text style={styles.version}>LadiesGo! v1.0 · Luanda, Angola 🇦🇴</Text>
