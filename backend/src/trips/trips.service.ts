@@ -180,6 +180,14 @@ export class TripsService {
     const driver = await this.prisma.driver.findUnique({ where: { userId } });
     if (!driver) throw new ForbiddenException('Not a driver');
 
+    // Uma motorista não aceita 2 viagens em simultâneo (evita trocar de
+    // destino / abandonar a passageira aceite).
+    const busy = await this.prisma.trip.findFirst({
+      where: { driverId: driver.id, status: { in: ['ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'] } },
+      select: { id: true },
+    });
+    if (busy) throw new BadRequestException('Já tens uma viagem ativa.');
+
     // Atomic: only one driver can flip REQUESTED → ACCEPTED, even on simultaneous taps
     // Snapshot da viatura (o painel admin mostra com que carro foi feita a viagem).
     const vehicleLabel = [driver.carMake, driver.carModel, driver.carColor].filter(Boolean).join(' ');

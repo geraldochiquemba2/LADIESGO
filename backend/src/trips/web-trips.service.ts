@@ -122,11 +122,18 @@ export class WebTripsService {
     const n = (dto.destN || '').trim().slice(0, 60) || 'Destino';
     const a = (dto.destA || '').trim().slice(0, 80);
 
+    // Viagem já aceite/a decorrer bloqueia novo pedido (evita 2 destinos ativos).
+    const ongoing = await this.prisma.trip.findFirst({
+      where: { passengerId: callerId, status: { in: ['ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'] } },
+      select: { id: true },
+    });
+    if (ongoing) {
+      throw new ConflictException('Já tens uma viagem em curso. Cancela-a antes de pedir outra.');
+    }
     // Um REQUESTED ainda sem motorista não bloqueia novo pedido — substitui.
     const activeTrip = await this.prisma.trip.findFirst({
       where: { passengerId: callerId, status: 'REQUESTED' },
-    });
-    if (activeTrip) {
+    });    if (activeTrip) {
       await this.prisma.trip.update({
         where: { id: activeTrip.id },
         data: { status: 'CANCELLED', cancelledBy: callerId, cancelReason: 'Replaced by new booking' },
