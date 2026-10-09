@@ -281,10 +281,10 @@ export class TripsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const isDelivery = (trip as any).tripType === 'DELIVERY';
     const driverUserIds = targets.map((d) => d.userId);
     this.notifs.sendPushToMany(driverUserIds, {
-      title: isDelivery ? '📦 New Package Delivery' : '🚖 New Trip Request',
+      title: isDelivery ? '📦 Nova Entrega' : '🚖 Novo Pedido de Viagem',
       body: isDelivery
-        ? `Deliver a package · ${trip.fareEstimate} SAR`
-        : `${trip.passenger.name || 'Passenger'} needs a ride · ${trip.fareEstimate} SAR`,
+        ? `Entregar encomenda · ${trip.fareEstimate} Kz`
+        : `${trip.passenger.name || 'Passageira'} pediu uma viagem · ${trip.fareEstimate} Kz`,
       data: { tripId: trip.id, type: 'TRIP_REQUEST' },
     });
 
@@ -341,12 +341,12 @@ export class TripsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // Push to passenger in case they backgrounded the app
     this.notifs.sendPush(trip.passengerId, {
-      title: '🚗 Driver Found!',
-      body: `${trip.driver?.user?.name || 'Your driver'} is on the way`,
+      title: '🚗 Motorista Encontrada!',
+      body: `${trip.driver?.user?.name || 'A tua motorista'} está a caminho`,
       data: { tripId: trip.id, type: 'TRIP_ACCEPTED' },
     });
-    this.notifs.saveInApp(trip.passengerId, 'Driver Found!',
-      `${trip.driver?.user?.name || 'Your driver'} accepted your trip`, 'TRIP_ACCEPTED');
+    this.notifs.saveInApp(trip.passengerId, 'Motorista Encontrada!',
+      `${trip.driver?.user?.name || 'A tua motorista'} aceitou a tua viagem`, 'TRIP_ACCEPTED');
   }
 
   // ─── driver completed trip → use odometer for final fare ─────────────────
@@ -384,11 +384,11 @@ export class TripsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     this.notifs.sendPush(trip.passengerId, {
-      title: '✅ Trip Completed',
-      body: `Your fare: ${finalFare} SAR. Rate your driver!`,
+      title: '✅ Viagem Concluída',
+      body: `Total: ${finalFare} Kz. Avalia a tua motorista!`,
       data: { tripId: trip.id, type: 'TRIP_COMPLETED' },
     });
-    this.notifs.saveInApp(trip.passengerId, 'Trip Completed', `Fare: ${finalFare} SAR`, 'TRIP_COMPLETED');
+    this.notifs.saveInApp(trip.passengerId, 'Viagem Concluída', `Total: ${finalFare} Kz`, 'TRIP_COMPLETED');
   }
 
   // ─── passenger cancelled trip → notify driver ─────────────────────────────
@@ -408,8 +408,8 @@ export class TripsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         tripId: data.tripId,
       });
       this.notifs.sendPush(driver.userId, {
-        title: '❌ Trip Cancelled',
-        body: 'The passenger cancelled the trip',
+        title: '❌ Viagem Cancelada',
+        body: 'A passageira cancelou a viagem',
         data: { tripId: data.tripId, type: 'TRIP_CANCELLED' },
       });
     }

@@ -58,8 +58,8 @@ export default function SettingsScreen({ navigation }: any) {
             <View style={styles.settingLeft}>
               <Text style={styles.settingIcon}>🔔</Text>
               <View>
-                <Text style={styles.settingLabel}>Push Notifications</Text>
-                <Text style={styles.settingDesc}>Trip updates and offers</Text>
+                <Text style={styles.settingLabel}>Notificações push</Text>
+                <Text style={styles.settingDesc}>Atualizações das viagens e novidades</Text>
               </View>
             </View>
             <Switch

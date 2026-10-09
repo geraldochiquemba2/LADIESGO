@@ -212,11 +212,11 @@ export class TripsService {
   async markArrived(tripId: string, userId: string) {
     const trip = await this.updateTripStatus(tripId, userId, 'ACCEPTED', 'DRIVER_ARRIVED', { arrivedAt: new Date() });
     this.notifs.sendPush(trip.passengerId, {
-      title: '🚗 Driver Arrived!',
-      body: 'Your driver is waiting at the pickup point',
+      title: '🚗 A Motorista Chegou!',
+      body: 'A tua motorista está à tua espera no ponto de recolha',
       data: { tripId: trip.id, type: 'DRIVER_ARRIVED' },
     });
-    this.notifs.saveInApp(trip.passengerId, 'Driver Arrived!', 'Your driver is at the pickup point', 'DRIVER_ARRIVED');
+    this.notifs.saveInApp(trip.passengerId, 'A Motorista Chegou!', 'A tua motorista está no ponto de recolha', 'DRIVER_ARRIVED');
     return trip;
   }
 
@@ -227,11 +227,11 @@ export class TripsService {
     }
     const trip = await this.updateTripStatus(tripId, userId, 'DRIVER_ARRIVED', 'IN_PROGRESS', { startedAt: new Date() });
     this.notifs.sendPush(trip.passengerId, {
-      title: '🚀 Trip Started',
-      body: 'Your trip is now in progress. Enjoy the ride!',
+      title: '🚀 Viagem Iniciada',
+      body: 'A tua viagem já começou. Boa viagem!',
       data: { tripId: trip.id, type: 'TRIP_STARTED' },
     });
-    this.notifs.saveInApp(trip.passengerId, 'Trip Started', 'Your ride is in progress', 'TRIP_STARTED');
+    this.notifs.saveInApp(trip.passengerId, 'Viagem Iniciada', 'A tua viagem está em curso', 'TRIP_STARTED');
     return trip;
   }
 

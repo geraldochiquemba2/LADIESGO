@@ -402,7 +402,7 @@ export default function DriverHomeScreen({ navigation }: any) {
               <View style={styles.scheduledBadge}>
                 <Text style={styles.scheduledIcon}>🗓️</Text>
                 <Text style={styles.scheduledText}>
-                  Scheduled: {new Date(tripRequest.trip.scheduledAt).toLocaleString('en-SA', {
+                  Scheduled: {new Date(tripRequest.trip.scheduledAt).toLocaleString('pt-PT', {
                     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                   })}
                 </Text>

@@ -11,7 +11,7 @@ import { driversApi } from '../../services/api';
 
 function formatDate(iso: string) {
   const d = new Date(iso);
-  return d.toLocaleDateString('en-SA', { day: 'numeric', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('pt-PT', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 export default function EarningsScreen() {

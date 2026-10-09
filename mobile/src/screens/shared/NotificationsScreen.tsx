@@ -25,10 +25,10 @@ function formatTime(iso: string) {
   const d = new Date(iso);
   const now = Date.now();
   const diff = now - d.getTime();
-  if (diff < 60000) return 'Just now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return d.toLocaleDateString('en-SA', { day: 'numeric', month: 'short' });
+  if (diff < 60000) return 'Agora mesmo';
+  if (diff < 3600000) return `há ${Math.floor(diff / 60000)} min`;
+  if (diff < 86400000) return `há ${Math.floor(diff / 3600000)} h`;
+  return d.toLocaleDateString('pt-PT', { day: 'numeric', month: 'short' });
 }
 
 export default function NotificationsScreen() {
@@ -103,8 +103,8 @@ export default function NotificationsScreen() {
       ListEmptyComponent={
         <View style={styles.empty}>
           <Text style={styles.emptyIcon}>🔔</Text>
-          <Text style={styles.emptyTitle}>No notifications yet</Text>
-          <Text style={styles.emptyText}>Trip updates will appear here</Text>
+          <Text style={styles.emptyTitle}>Sem notificações</Text>
+          <Text style={styles.emptyText}>As atualizações das viagens aparecem aqui</Text>
         </View>
       }
       ListFooterComponent={

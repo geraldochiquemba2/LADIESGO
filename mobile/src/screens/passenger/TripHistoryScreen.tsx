@@ -20,18 +20,18 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  COMPLETED: 'Completed',
-  CANCELLED: 'Cancelled',
-  IN_PROGRESS: 'In Progress',
-  REQUESTED: 'Searching',
-  ACCEPTED: 'Driver Coming',
-  DRIVER_ARRIVED: 'Driver Arrived',
+  COMPLETED: 'Concluída',
+  CANCELLED: 'Cancelada',
+  IN_PROGRESS: 'Em curso',
+  REQUESTED: 'A procurar',
+  ACCEPTED: 'Motorista a caminho',
+  DRIVER_ARRIVED: 'Motorista chegou',
 };
 
 function formatDate(iso: string) {
   const d = new Date(iso);
-  return d.toLocaleDateString('en-SA', { day: 'numeric', month: 'short', year: 'numeric' }) +
-    '  ' + d.toLocaleTimeString('en-SA', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('pt-PT', { day: 'numeric', month: 'short', year: 'numeric' }) +
+    '  ' + d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
 }
 
 export default function TripHistoryScreen({ navigation }: any) {

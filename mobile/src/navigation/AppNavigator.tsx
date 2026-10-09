@@ -122,7 +122,7 @@ export default function AppNavigator() {
             <Stack.Screen
               name="Notifications"
               component={NotificationsScreen}
-              options={{ title: 'Notifications' }}
+              options={{ title: 'Notificações' }}
             />
           </>
         ) : (
@@ -195,7 +195,7 @@ export default function AppNavigator() {
             <Stack.Screen
               name="Notifications"
               component={NotificationsScreen}
-              options={{ title: 'Notifications' }}
+              options={{ title: 'Notificações' }}
             />
           </>
         )}

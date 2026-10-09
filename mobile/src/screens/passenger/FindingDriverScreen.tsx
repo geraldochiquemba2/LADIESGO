@@ -83,7 +83,7 @@ export default function FindingDriverScreen({ navigation }: any) {
       </Text>
       <Text style={styles.subtitle}>
         {isScheduled
-          ? `Your ride is booked for ${new Date(trip!.scheduledAt!).toLocaleString('en-SA', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+          ? `Your ride is booked for ${new Date(trip!.scheduledAt!).toLocaleString('pt-PT', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
           : "We're connecting you with a nearby driver"}
       </Text>
 
