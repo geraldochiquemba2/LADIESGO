@@ -1,95 +1,107 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Linking } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Provider, useDispatch } from 'react-redux';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { store } from './src/store';
-import { AppDispatch } from './src/store';
-import AppNavigator from './src/navigation/AppNavigator';
-import { initAuth } from './src/store/slices/authSlice';
-import { setCurrentTrip } from './src/store/slices/tripSlice';
-import { registerForPushNotifications } from './src/services/notifications';
-import ConnectingScreen from './src/screens/shared/ConnectingScreen';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { WebView } from 'react-native-webview';
 
-// Sessão guardada é restaurada com retries; sem sessão o utilizador
-// vê a tela de Login (nome + telemóvel, ou convidado).
-const RETRY_DELAYS_MS = [2000, 4000, 8000, 15000];
+// A app iOS é a SenhorasVa! web (Render) em ecrã cheio: um só código,
+// o mesmo produto e marca em todo o lado. Login, viagens, chat, SOS,
+// Eliminar conta e Denunciar vivem no site.
+const SITE_URL = 'https://ladiesgo.onrender.com/';
 
-function Root() {
-  const dispatch = useDispatch<AppDispatch>();
-  const [ready, setReady] = useState(false);
+export default function App() {
+  const webRef = useRef<WebView>(null);
+  const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const tryInit = async () => {
-      setFailed(false);
-      try {
-        // Sem sessão guardada vai direto para a tela de Login
-        // (sem criar convidado automático).
-        const stored = await AsyncStorage.getItem('accessToken');
-        if (!stored) {
-          if (cancelled) return;
-          setReady(true);
-          return;
-        }
-        const action: any = await dispatch(initAuth()).unwrap();
-        if (cancelled) return;
-        if (action?.activeTrip) {
-          dispatch(setCurrentTrip(action.activeTrip));
-        }
-        registerForPushNotifications();
-        setReady(true);
-        // Self-update via APK desativado na versão das lojas (Play/App Store
-        // proíbem instalação fora da loja). Atualizações via loja apenas.
-      } catch {
-        if (cancelled) return;
-        if (attempt < RETRY_DELAYS_MS.length) {
-          setTimeout(() => {
-            if (!cancelled) setAttempt((a) => a + 1);
-          }, RETRY_DELAYS_MS[attempt]);
-        } else {
-          setFailed(true);
-        }
-      }
-    };
-
-    tryInit();
-    return () => { cancelled = true; };
-  }, [attempt]);
+  const onShouldStartLoad = (req: { url: string }) => {
+    const url = req.url || '';
+    // Chamadas SOS (tel:113/115) e partilhas abrem fora da WebView.
+    if (/^(tel:|mailto:|sms:)/i.test(url)) {
+      Linking.openURL(url).catch(() => {});
+      return false;
+    }
+    return true;
+  };
 
   if (failed) {
-    return <ConnectingScreen onRetry={() => { setFailed(false); setAttempt(0); }} />;
-  }
-
-  if (!ready) {
     return (
-      <View style={splash.container}>
-        <Text style={splash.logo}>🦋</Text>
-        <Text style={splash.name}>SenhorasVa!</Text>
-        <Text style={splash.tagline}>Mobilidade Feminina Segura</Text>
-        <ActivityIndicator color="#fff" style={{ marginTop: 48 }} />
-      </View>
+      <SafeAreaProvider>
+        <SafeAreaView style={splash.container}>
+          <StatusBar style="light" />
+          <Text style={splash.logo}>🦋</Text>
+          <Text style={splash.name}>SenhorasVa!</Text>
+          <Text style={splash.tagline}>Sem ligação. Verifica a internet.</Text>
+          <TouchableOpacity
+            style={styles.retry}
+            onPress={() => {
+              setFailed(false);
+              setLoading(true);
+              webRef.current?.reload();
+            }}
+          >
+            <Text style={styles.retryText}>Tentar de novo</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   return (
-    <>
-      <StatusBar style="dark" />
-      <AppNavigator />
-    </>
+    <SafeAreaProvider>
+      <StatusBar style="light" />
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <WebView
+          ref={webRef}
+          source={{ uri: SITE_URL }}
+          style={styles.web}
+          javaScriptEnabled
+          domStorageEnabled
+          geolocationEnabled
+          mediaPlaybackRequiresUserAction={false}
+          allowsInlineMediaPlayback
+          sharedCookiesEnabled
+          thirdPartyCookiesEnabled
+          allowsBackForwardNavigationGestures
+          onShouldStartLoadWithRequest={onShouldStartLoad}
+          onLoadStart={() => setLoading(true)}
+          onLoadEnd={() => setLoading(false)}
+          onError={() => {
+            setLoading(false);
+            setFailed(true);
+          }}
+          onHttpError={(e) => {
+            if ((e.nativeEvent.statusCode || 0) >= 500) {
+              setLoading(false);
+              setFailed(true);
+            }
+          }}
+        />
+        {loading && !failed && (
+          <View style={splash.overlay}>
+            <Text style={splash.logo}>🦋</Text>
+            <Text style={splash.name}>SenhorasVa!</Text>
+            <Text style={splash.tagline}>Mobilidade Feminina Segura</Text>
+            <ActivityIndicator color="#fff" style={{ marginTop: 48 }} />
+          </View>
+        )}
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
-export default function App() {
-  return (
-    <Provider store={store}>
-      <Root />
-    </Provider>
-  );
-}
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#61188E' },
+  web: { flex: 1, backgroundColor: '#ece8f3' },
+  retry: {
+    marginTop: 28,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+  },
+  retryText: { color: '#5b21c9', fontWeight: '800', fontSize: 16 },
+});
 
 const splash = StyleSheet.create({
   container: {
@@ -98,7 +110,13 @@ const splash = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#61188E',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   logo: { fontSize: 72, marginBottom: 16 },
   name: { fontSize: 36, fontWeight: 'bold', color: '#fff', letterSpacing: 1 },
-  tagline: { color: '#e3d0ff', fontSize: 16, marginTop: 6 },
+  tagline: { color: '#e3d0ff', fontSize: 16, marginTop: 6, textAlign: 'center', paddingHorizontal: 32 },
 });

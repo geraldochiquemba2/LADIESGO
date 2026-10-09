@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 
@@ -66,15 +66,27 @@ export class UsersService {
   // UGC report/block (Guideline 1.2): in-trip chat abuse reporting.
   // Stores a 1-star system rating as an auditable report record and
   // returns a block receipt the client can enforce locally.
-  async reportUser(reporterId: string, reportedUserId: string, reason: string, tripId?: string) {
-    const reported = await this.prisma.user.findUnique({ where: { id: reportedUserId } });
+  async reportUser(reporterId: string, reportedUserId: string | undefined, reason: string, tripId?: string) {
+    // A webapp envia só {tripId}: resolve a contraparte (passageira <-> motorista).
+    let targetId = (reportedUserId || '').trim() || undefined;
+    if (!targetId && tripId) {
+      const t = await this.prisma.trip.findUnique({
+        where: { id: tripId },
+        include: { driver: { select: { userId: true } } },
+      });
+      if (!t) throw new NotFoundException('Viagem não encontrada.');
+      targetId = t.passengerId === reporterId ? t.driver?.userId : t.passengerId;
+      if (!targetId) throw new BadRequestException('Sem outro utilizador nesta viagem.');
+    }
+    if (!targetId) throw new BadRequestException('Utilizador a denunciar em falta.');
+    const reported = await this.prisma.user.findUnique({ where: { id: targetId } });
     if (!reported) throw new NotFoundException('Utilizador não encontrado.');
     const clean = (reason || '').trim().slice(0, 300) || 'Conteúdo impróprio';
     // Best-effort audit log — never fails the user-facing flow.
     try {
       await this.prisma.notification.create({
         data: {
-          userId: reportedUserId,
+          userId: targetId,
           title: 'Denúncia recebida',
           body: `Motivo: ${clean}${tripId ? ` (viagem ${tripId.slice(-6)})` : ''}`,
           type: 'GENERAL',
@@ -82,7 +94,7 @@ export class UsersService {
         },
       });
     } catch {}
-    return { success: true, blockedUserId: reportedUserId };
+    return { success: true, blockedUserId: targetId };
   }
 
   async getTripHistory(userId: string, page = 1, limit = 10) {

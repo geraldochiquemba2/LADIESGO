@@ -43,7 +43,7 @@ export class UsersController {
   @Post('report')
   reportUser(
     @CurrentUser('id') userId: string,
-    @Body() body: { reportedUserId: string; reason?: string; tripId?: string },
+    @Body() body: { reportedUserId?: string; reason?: string; tripId?: string },
   ) {
     return this.users.reportUser(userId, body.reportedUserId, body.reason ?? '', body.tripId);
   }
