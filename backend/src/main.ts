@@ -239,7 +239,7 @@ async function bootstrap() {
       // dos locais com esse nome — sempre pesquisáveis ("Samba" deve dar
       // a Samba, não uma torre elétrica "Benfica T196W").
       const AREA_SEEDS = [
-        { key: fold('kilamba'), name: 'Centralidade do Kilamba', municipality: 'Belas', type: 'centralidade' },
+        { key: fold('kilamba'), name: 'Município do Kilamba', municipality: 'Belas', type: 'centralidade' },
         { key: fold('zango'), name: 'Centralidade do Zango', municipality: 'Viana', type: 'centralidade' },
         { key: fold('sequele'), name: 'Centralidade do Sequele', municipality: 'Cacuaco', type: 'centralidade' },
         { key: fold('samba'), name: 'Samba', municipality: 'Samba', type: 'bairro' },
@@ -343,7 +343,8 @@ async function bootstrap() {
           if (ROAD_TYPES.has(placesIdx[i].t)) score += 1;
           // "kilamba"/"samba"/… querem a zona, não um bar com nome parecido:
           // centralidades e bairros-âncora sobem para primeiro.
-          if ((fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR) && tt.some((t) => AREA_KEYS.includes(t))) score = Math.max(0, score - 1);
+          const areaTok = tt.find((t) => AREA_KEYS.includes(t));
+          if ((fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR) && areaTok) score = (areaTok === fold('centralidade') || areaTok === fold('centralidades')) ? Math.max(0, score - 1) : score - 2;
           let dist = 0;
           if (hasLoc) {
             const dLa = placesIdx[i].lat - lat;
