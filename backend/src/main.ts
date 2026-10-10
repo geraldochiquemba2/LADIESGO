@@ -345,11 +345,15 @@ async function bootstrap() {
           if (ROAD_TYPES.has(placesIdx[i].t)) score += 1;
           // "kilamba"/"samba"/… querem a zona, não um bar com nome parecido:
           // centralidades e bairros-âncora sobem para primeiro.
-          const areaTok = tt.find((t) => AREA_KEYS.includes(t));
+          const areaTok = tt.find((t) => AREA_KEYS.includes(t) && t !== fold('centralidade') && t !== fold('centralidades'))
+            || tt.find((t) => AREA_KEYS.includes(t));
           const isAnchor = fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR;
           // "kilamba ..." sem "kiaxi": Kilamba nao e Kilamba Kiaxi —
           // fora tudo do municipio rival (a zona pedida fica).
-          if (areaTok === 'kilamba' && !isAnchor && placesIdx[i].m === 'Kilamba Kiaxi' && !tt.some((t) => t === 'kiaxi')) continue;
+          const wantsKiaxi = tt.some((t) => t === 'kiaxi' || t === 'kiaxe');
+          const isKiaxi = placesIdx[i].m === 'Kilamba Kiaxi'
+            || (placesName[i] || '').split(/[\s,\-]+/).some((w) => w === 'kiaxi' || w === 'kiaxe');
+          if (areaTok === 'kilamba' && !isAnchor && !wantsKiaxi && isKiaxi) continue;
           if ((fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR) && areaTok) score = (areaTok === fold('centralidade') || areaTok === fold('centralidades')) ? Math.max(0, score - 1) : score - 2;
           // "kilamba bloco" = blocos DENTRO do Kilamba: fora do raio da
           // zona (12 km), o que só bate via município/tipo cai fora.
