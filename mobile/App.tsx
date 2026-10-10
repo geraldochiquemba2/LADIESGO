@@ -192,7 +192,11 @@ export default function App() {
           onMessage={onMessage}
           onShouldStartLoadWithRequest={onShouldStartLoad}
           onLoadStart={() => setLoading(true)}
-          onLoadEnd={() => setLoading(false)}
+          onLoadEnd={() => {
+            // Esconde com atraso: sem isto há um flash branco entre o
+            // fim do load e a primeira pintura da página (fundo roxo).
+            setTimeout(() => setLoading(false), 700);
+          }}
           onError={() => {
             setLoading(false);
             setFailed(true);
