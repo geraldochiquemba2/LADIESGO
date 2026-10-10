@@ -46,7 +46,7 @@ document.addEventListener('input',function(e){
   if(v.trim().length<3)return;
   sugT=setTimeout(function(){
     var ll=(typeof LUANDA!=='undefined'&&LUANDA)?LUANDA:[-8.839,13.2894];
-    fetch('/api/places/search?q='+encodeURIComponent(v.trim())+'&lat='+ll[0]+'&lng='+ll[1])
+    fetch('/api/places/search?q='+encodeURIComponent(v.trim())+'&lat='+ll[0]+'&lng='+ll[1]+'&v=3')
       .then(function(r){return r.ok?r.json():null;}).then(function(j){
         if(my!==sugSeq||!j||!j.places||!j.places.length)return;
         var box=document.getElementById('sug');if(!box)return;
