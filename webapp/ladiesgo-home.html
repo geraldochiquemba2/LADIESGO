@@ -68,7 +68,9 @@ document.addEventListener('input',function(e){
         }
       }).catch(function(){});
   },450);
-});document.addEventListener('input',e=>{const qo=e.target&&e.target.id==='oq'?e.target:null;if(!qo)return;const bx=document.getElementById('sugO');if(bx)bx.innerHTML=orgHTML(qo.value)});document.addEventListener('input',e=>{const _qs=e.target&&e.target.id==='qs'?e.target:null;if(_qs){const _bx=document.getElementById('sugQ');if(_bx)_bx.innerHTML=stopHTML(_qs.value);return}});document.addEventListener('input',e=>{const sq=e.target&&e.target.id==='sq'?e.target:null;if(!sq)return;svPick=null;try{document.getElementById('sqX').style.display='none'}catch(e){}const bx=document.getElementById('sugS');if(bx)bx.innerHTML=saveHTML(sq.value)});show('home');</script><script>
+});document.addEventListener('input',e=>{const qo=e.target&&e.target.id==='oq'?e.target:null;if(!qo)return;const bx=document.getElementById('sugO');if(bx)bx.innerHTML=orgHTML(qo.value)});document.addEventListener('input',e=>{const _qs=e.target&&e.target.id==='qs'?e.target:null;if(_qs){const _bx=document.getElementById('sugQ');if(_bx)_bx.innerHTML=stopHTML(_qs.value);return}});document.addEventListener('input',e=>{const sq=e.target&&e.target.id==='sq'?e.target:null;if(!sq)return;svPick=null;try{document.getElementById('sqX').style.display='none'}catch(e){}const bx=document.getElementById('sugS');if(bx)bx.innerHTML=saveHTML(sq.value)});/* Sessão ativa: o voltar do browser não sai da home — só o botão Sair. */
+try{(function(){var locked=false;function lock(){var t=null;try{t=localStorage.getItem('taxi_token')}catch(e){}if(!t||locked)return;locked=true;try{history.pushState({lg:'stay'},'')}catch(e){}}lock();setTimeout(lock,2000);window.addEventListener('popstate',function(){var t=null;try{t=localStorage.getItem('taxi_token')}catch(e){}if(!t)return;try{history.pushState({lg:'stay'},'')}catch(e){}try{lte('Para sair, usa o botão Sair no menu')}catch(e){}});})();}catch(e){}
+show('home');</script><script>
 /* Banner bloqueante: conta com senha reposta pelo admin entra com a senha
    padrao e tem de definir uma senha propria. Sem fechar — so Sair. */
 (function(){
