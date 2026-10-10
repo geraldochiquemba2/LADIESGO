@@ -127,3 +127,16 @@ export class ChatPostDto {
   @MaxLength(300)
   text!: string;
 }
+
+// Corpo do POST /trips/:id/position (GPS live da passageira/motorista).
+export class TripPositionDto {
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  lat!: number;
+
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  lng!: number;
+}

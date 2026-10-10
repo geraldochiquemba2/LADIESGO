@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { PrismaService } from '../prisma/prisma.service';
 import { TripsService, pinForTrip } from './trips.service';
 import { LiveDriversService } from '../drivers/live-drivers.service';
+import { LiveTripPositionsService } from './live-trip-positions.service';
 import { WebRequestTripDto, TripStatusDto } from './dto/web-trip.dto';
 
 // Compatibilidade com a página web (/home): mesmos caminhos e formatos da
@@ -73,6 +74,7 @@ export class WebTripsService {
     private prisma: PrismaService,
     private trips: TripsService,
     private live: LiveDriversService,
+    private tripLive: LiveTripPositionsService,
   ) {}
 
   private lastSweep = 0;
@@ -211,6 +213,22 @@ export class WebTripsService {
     // Telefones só para os próprios intervenientes (nunca em listagens).
     // PIN só para a passageira: a motorista tem de o pedir e digitar.
     return this.formatTrip(trip, { driverPhone: isPax || isDrv, passengerPhone: isDrv, showPin: isPax });
+  }
+
+  // ---- GPS live dentro da viagem (POST /trips/:id/position) ----
+  // Só participantes. A motorista já partilha via /drivers/position; aqui
+  // a PASSAGEIRA ganha canal próprio para a motorista a ver em tempo real.
+  async updateTripPosition(tripId: string, userId: string, lat: number, lng: number) {
+    const trip = await this.assertAccess(tripId, userId);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      throw new BadRequestException('Coordenadas inválidas.');
+    }
+    if (trip.status === 'COMPLETED' || trip.status === 'CANCELLED') {
+      return { ok: true };
+    }
+    const side = trip.passengerId === userId ? 'passenger' : 'driver';
+    this.tripLive.upsert(tripId, side, lat, lng);
+    return { ok: true };
   }
 
   // ---- Pedidos à espera de motorista (GET /trips/incoming) ----
@@ -431,6 +449,10 @@ export class WebTripsService {
       by: this.byLabel(t),
       reason: t.cancelReason || '',
       pin: opts?.showPin ? pinFor(t.id) : null,
+      paxLive: (() => {
+        const p = this.tripLive.get(t.id)?.passenger;
+        return p ? { lat: p.lat, lng: p.lng, age: Math.round((Date.now() - p.ts) / 1000) } : null;
+      })(),
       driverId: driverUserId,
       driverName: t.driver?.user?.name || t.driver?.user?.phone || null,
       driver: driverUserId

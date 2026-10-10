@@ -5,6 +5,9 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import './src/services/bgLocation';
+import { BG_LOCATION_TASK } from './src/services/bgLocation';
 
 // A app iOS é a LadiesGo! web (Render) em ecrã cheio: um só código,
 // o mesmo produto e marca em todo o lado. Login, viagens, chat, SOS,
@@ -22,10 +25,11 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Vigia o login no site e entrega o JWT à casca nativa para registar o
-// push token — funciona para passageira e motorista (mesma app, mesma
-// conta, papéis escolhidos dentro do site).
-const AUTH_BRIDGE_JS = `(function(){var s=null;setInterval(function(){try{var t=localStorage.getItem('taxi_token');if(t&&t!==s){s=t;window.ReactNativeWebView.postMessage(JSON.stringify({t:'auth',token:t}));}}catch(e){}},3000);})();`;
+// Vigia o login E o estado (viagem ativa / online) no site e entrega tudo
+// à casca nativa: regista o push token e alimenta a task de GPS em fundo.
+// Funciona para passageira e motorista (mesma app, mesma conta, papéis
+// escolhidos dentro do site).
+const AUTH_BRIDGE_JS = `(function(){var s='';setInterval(function(){try{var t=localStorage.getItem('taxi_token')||'';var u=null;try{u=JSON.parse(localStorage.getItem('taxi_user')||'null')}catch(e){}var tid=null;try{tid=localStorage.getItem('lg_trip')||localStorage.getItem('lg_mtrip')}catch(e){}var on=false;try{on=localStorage.getItem('lg_online')==='1'}catch(e){}var k=t+'|'+(u&&u.id||'')+'|'+(u&&u.role||'')+'|'+(tid||'')+'|'+(on?'1':'0');if(k!==s){s=k;window.ReactNativeWebView.postMessage(JSON.stringify({t:'state',token:t||null,user:u,tripId:tid,online:on}));}}catch(e){}},3000);})();`;
 
 async function registerPushToken(jwt: string, expoToken: string) {
   try {
@@ -67,10 +71,56 @@ export default function App() {
   const onMessage = (e: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data || '{}');
-      if (msg.t === 'auth' && typeof msg.token === 'string' && msg.token.length > 10) {
-        jwtRef.current = msg.token;
-        if (pushTokenRef.current) registerPushToken(msg.token, pushTokenRef.current);
+      const token = typeof msg.token === 'string' && msg.token.length > 10 ? msg.token : null;
+      if ((msg.t === 'auth' || msg.t === 'state') && (token || msg.t === 'state')) {
+        const u = (msg.user || {}) as any;
+        const state = {
+          jwt: token,
+          userId: u.id || null,
+          role: u.role || null,
+          name: u.name || u.phone || null,
+          tripId: msg.tripId || null,
+          online: !!msg.online,
+        };
+        jwtRef.current = token;
+        AsyncStorage.setItem('lg_bg_state', JSON.stringify(state)).catch(() => {});
+        if (token && pushTokenRef.current) registerPushToken(token, pushTokenRef.current);
+        ensureBgTask(!!token);
       }
+    } catch {}
+  };
+
+  // GPS em fundo para AMBOS: pede "Sempre" uma vez com sessão e liga a
+  // task; sem sessão (logout) desliga para poupar bateria.
+  const ensureBgTask = async (hasSession: boolean) => {
+    try {
+      const started = await Location.hasStartedLocationUpdatesAsync(BG_LOCATION_TASK);
+      if (!hasSession) {
+        if (started) await Location.stopLocationUpdatesAsync(BG_LOCATION_TASK);
+        return;
+      }
+      if (started) return;
+      const fg = await Location.requestForegroundPermissionsAsync();
+      if (fg.status !== 'granted') return;
+      try {
+        const bg = await Location.requestBackgroundPermissionsAsync();
+        if (bg.status !== 'granted') return;
+      } catch {
+        return;
+      }
+      await Location.startLocationUpdatesAsync(BG_LOCATION_TASK, {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 8000,
+        distanceInterval: 15,
+        pausesUpdatesAutomatically: false,
+        activityType: Location.ActivityType.AutomotiveNavigation,
+        showsBackgroundLocationIndicator: false,
+        foregroundService: {
+          notificationTitle: 'LadiesGo!',
+          notificationBody: 'Partilha de posição ativa para a tua segurança.',
+          notificationColor: '#61188E',
+        },
+      });
     } catch {}
   };
 
