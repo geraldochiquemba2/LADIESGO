@@ -71,6 +71,16 @@ export default function App() {
   const onMessage = (e: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data || '{}');
+      if (msg.t === 'need-gps') {
+        // O site pede autorização nativa (1ª negação): o sistema mostra o
+        // prompt se ainda for permitido; depois tenta o GPS do site de novo.
+        // Se já estiver negado em definitivo, o site mostra o tutorial.
+        (async () => {
+          try { await Location.requestForegroundPermissionsAsync(); } catch {}
+          try { webRef.current?.injectJavaScript('try{window.__gpsAsked=true;locateMe()}catch(e){}true;'); } catch {}
+        })();
+        return;
+      }
       const token = typeof msg.token === 'string' && msg.token.length > 10 ? msg.token : null;
       if ((msg.t === 'auth' || msg.t === 'state') && (token || msg.t === 'state')) {
         const u = (msg.user || {}) as any;
