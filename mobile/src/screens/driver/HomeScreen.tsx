@@ -59,7 +59,8 @@ export default function DriverHomeScreen({ navigation }: any) {
     })();
   }, []);
 
-  // Real-time location stream while online
+  // Real-time location stream while online (idle: adaptativo 10s/20m).
+  // Fundo (driverBgLocation) trata do Waze aberto; aqui trata da app aberta.
   useEffect(() => {
     if (!isOnline) {
       locationSubRef.current?.remove();
@@ -67,12 +68,13 @@ export default function DriverHomeScreen({ navigation }: any) {
       return;
     }
 
+    let lastRestTs = 0;
     const startWatching = async () => {
       locationSubRef.current = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.BestForNavigation,
-          timeInterval: 3000,
-          distanceInterval: 15,
+          timeInterval: 5000,
+          distanceInterval: 20,
         },
         (loc) => {
           const pos = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
@@ -84,6 +86,12 @@ export default function DriverHomeScreen({ navigation }: any) {
             lng: pos.longitude,
             heading: h,
           });
+          // REST throttled 10s (Cloudflare Workers: sem socket, o polling usa isto).
+          const now = Date.now();
+          if (now - lastRestTs >= 10000) {
+            lastRestTs = now;
+            driversApi.updateLocation(pos.latitude, pos.longitude).catch(() => {});
+          }
           // Smoothly follow driver on map
           cameraRef.current?.easeTo({
             center: [pos.longitude, pos.latitude],

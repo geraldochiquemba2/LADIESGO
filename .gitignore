@@ -1,6 +1,7 @@
 node_modules/
 .env
 *.env.local
+render-env.txt
 dist/
 build/
 .expo/
@@ -10,4 +11,5 @@ android/
 *.err
 *.db
 trips.json
+mobile/store-screenshots/
 .DS_Store

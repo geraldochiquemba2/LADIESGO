@@ -59,7 +59,7 @@ export function curvePath(a: [number, number], b: [number, number]): [number, nu
 }
 
 function apiRoot(): string {
-  const base = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo.onrender.com/api/v1';
+  const base = process.env.EXPO_PUBLIC_API_URL || 'https://api.ladiesgo.ao/api/v1';
   return base.replace(/\/api\/v1\/?$/, '');
 }
 

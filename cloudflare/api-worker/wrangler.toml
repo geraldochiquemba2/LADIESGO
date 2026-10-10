@@ -1,0 +1,10 @@
+name = "ladiesgo-api"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[vars]
+JWT_EXPIRES_IN = "7d"
+
+# Segredos (nunca commitar):
+# wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require
+# wrangler secret put JWT_SECRET     -> string longa aleatoria 32+ chars

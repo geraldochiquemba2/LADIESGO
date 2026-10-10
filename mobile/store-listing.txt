@@ -59,9 +59,9 @@ Juntar vídeo de 30s a mostrar: Online -> abrir Waze -> posição continua.
 
 3) Notificações: "motorista encontrada, chegada e conclusão."
 
-CONTA DE TESTE PARA REVISORES (criar no backend antes de submeter)
-Passageira: +244900000001 / senha 1234
-Motorista:  +244900000002 / senha 1234
+CONTA DE TESTE PARA REVISORES (criadas no backend de produção em 2026-10-10)
+Passageira: +244923000001 / senha 1234
+Motorista:  +244923000002 / senha 1234 (criada pelo admin, APPROVED direta)
 Admin:      +244999999999 / 1234567890 (demo local)
 Instruções: entrar, pedir viagem Casa->Trabalho, aceitar como motorista.
 

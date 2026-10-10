@@ -24,7 +24,8 @@ import { MAP_STYLE, fitCoordinates, lineBetween } from '../../components/appMap'
 import MapAttribution from '../../components/MapAttribution';
 import * as Location from 'expo-location';
 import { socketService } from '../../services/socket';
-import { tripsApi } from '../../services/api';
+import { tripsApi, driversApi } from '../../services/api';
+import { setDriverActiveTrip } from '../../services/driverBgLocation';
 
 type TripStatus = 'ACCEPTED' | 'DRIVER_ARRIVED' | 'IN_PROGRESS' | 'COMPLETED';
 
@@ -51,16 +52,18 @@ export default function ActiveTripScreen({ navigation, route }: any) {
 
   useEffect(() => {
     let sub: Location.LocationSubscription | null = null;
+    let lastRestTs = 0;
 
     const setup = async () => {
       const { status: perm } = await Location.requestForegroundPermissionsAsync();
       if (perm !== 'granted') return;
+      setDriverActiveTrip(true).catch(() => {});
 
-      // Stream real-time GPS — emit to socket every update, DB saves are throttled server-side
+      // Viagem ativa: 5s/10m. REST throttled 5s (Workers) + socket (Render).
       sub = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.BestForNavigation,
-          timeInterval: 2000,
+          timeInterval: 5000,
           distanceInterval: 10, // only fire when moved ≥ 10 m
         },
         (loc) => {
@@ -70,6 +73,11 @@ export default function ActiveTripScreen({ navigation, route }: any) {
           setMyLocation(pos);
           setHeading(h);
           socketService.emit('driver:location-update', { ...pos, heading: h });
+          const now = Date.now();
+          if (now - lastRestTs >= 5000) {
+            lastRestTs = now;
+            driversApi.updateLocation(pos.lat, pos.lng).catch(() => {});
+          }
 
           // Keep map centered on driver
           cameraRef.current?.easeTo({
@@ -108,6 +116,7 @@ export default function ActiveTripScreen({ navigation, route }: any) {
 
     return () => {
       sub?.remove();
+      setDriverActiveTrip(false).catch(() => {});
       socketService.off('server:passenger-location');
       socketService.off('server:trip-cancelled');
     };

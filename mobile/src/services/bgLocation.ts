@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const BG_LOCATION_TASK = 'ladiesgo-bg-location';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo.onrender.com/api/v1';
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://api.ladiesgo.ao/api/v1';
 
 interface BgState {
   jwt: string | null;

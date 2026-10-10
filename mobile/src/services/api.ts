@@ -1,7 +1,7 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo.onrender.com/api/v1';
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://api.ladiesgo.ao/api/v1';
 
 const api = axios.create({ baseURL: API_URL, timeout: 25000 });
 
