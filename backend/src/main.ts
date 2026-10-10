@@ -383,6 +383,18 @@ async function bootstrap() {
       fs.createReadStream(f).pipe(res);
     } catch { res.status(404).send(''); }
   });
+  // Imagens da marca usadas pelas páginas (nomes versionados furam cache).
+  for (const img of ['logo-v2.jpg', 'splash.jpg']) {
+    httpAdapter.get('/' + img, (_req: any, res: any) => {
+      try {
+        const f = resolveWebFile(img);
+        if (!f) { res.status(404).send(''); return; }
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        fs.createReadStream(f).pipe(res);
+      } catch { res.status(404).send(''); }
+    });
+  }
   httpAdapter.get('/admin', (_req: any, res: any) => sendWeb(res, 'admin.html'));
   httpAdapter.get('/historia', (_req: any, res: any) => sendWeb(res, 'ladiesgo.html'));
   httpAdapter.get('/privacidade', (_req: any, res: any) => sendWeb(res, 'privacidade.html'));
