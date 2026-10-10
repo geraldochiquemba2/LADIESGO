@@ -128,6 +128,7 @@ async function bootstrap() {
   // pesquisáveis mas perdem para destinos com nome (lojas, escolas…).
   const ROAD_TYPES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'track', 'path', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
   // Consultas de zona ("kilamba", "samba", …): estes tokens pedem a zona.
+  const AREA_CENTROIDS: Record<string, { lat: number; lng: number }> = {};
   const AREA_KEYS = ['kilamba', 'zango', 'sequele', 'centralidade', 'centralidades', 'samba', 'viana', 'maianga', 'ingombota', 'benfica', 'kinaxixi'].map(fold);
   const T_RES = ['residential', 'apartments', 'apartment'].map(fold);
   const T_HOSP = ['hospital', 'clinic', 'doctors', 'dentist'].map(fold);
@@ -262,6 +263,7 @@ async function bootstrap() {
           placesNorm.unshift(fold(a.name));
           placesName.unshift(fold(a.name));
           placesFull.unshift(fold(a.name + ' ' + a.municipality + ' ' + a.type));
+          AREA_CENTROIDS[a.key] = { lat: sx / c, lng: sy / c };
           console.log(`Places seed: ${a.name} (${c} base) -> ${((sx / c) as number).toFixed(4)}, ${((sy / c) as number).toFixed(4)}`);
         }
       }
@@ -344,7 +346,22 @@ async function bootstrap() {
           // "kilamba"/"samba"/… querem a zona, não um bar com nome parecido:
           // centralidades e bairros-âncora sobem para primeiro.
           const areaTok = tt.find((t) => AREA_KEYS.includes(t));
+          const isAnchor = fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR;
+          // "kilamba ..." sem "kiaxi": Kilamba nao e Kilamba Kiaxi —
+          // fora tudo do municipio rival (a zona pedida fica).
+          if (areaTok === 'kilamba' && !isAnchor && placesIdx[i].m === 'Kilamba Kiaxi' && !tt.some((t) => t === 'kiaxi')) continue;
           if ((fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR) && areaTok) score = (areaTok === fold('centralidade') || areaTok === fold('centralidades')) ? Math.max(0, score - 1) : score - 2;
+          // "kilamba bloco" = blocos DENTRO do Kilamba: fora do raio da
+          // zona (12 km), o que só bate via município/tipo cai fora.
+          // Âncoras (centralidade/bairro) estão sempre dentro.
+          if (areaTok && fold(placesIdx[i].t) !== T_CENT && fold(placesIdx[i].t) !== T_BAIR) {
+            const ac = AREA_CENTROIDS[areaTok];
+            if (ac) {
+              const gLa = placesIdx[i].lat - ac.lat;
+              const gLo = placesIdx[i].lng - ac.lng;
+              if (Math.sqrt(gLa * gLa + gLo * gLo) * 111 > 12) continue;
+            }
+          }
           let dist = 0;
           if (hasLoc) {
             const dLa = placesIdx[i].lat - lat;
@@ -368,9 +385,8 @@ async function bootstrap() {
         const order = toks
           .map((t, idx) => ({ t, idx }))
           .sort((a, b) => {
-            const da = /\d/.test(a.t) ? 0 : 1;
-            const db = /\d/.test(b.t) ? 0 : 1;
-            return da - db || b.t.length - a.t.length;
+            const w = (t: string) => (/\d/.test(t) ? 0 : AREA_KEYS.includes(t) ? 2 : 1);
+            return w(a.t) - w(b.t) || b.t.length - a.t.length;
           });
         for (const drop of order) {
           const rest = toks.filter((_, idx) => idx !== drop.idx);
