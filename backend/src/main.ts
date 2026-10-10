@@ -493,7 +493,9 @@ async function bootstrap() {
           }
         } catch {}
       }
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      // 10 min (não 24h): o índice muda a cada deploy e o browser
+      // guardava respostas velhas (ex.: sem os Edifícios F).
+      res.setHeader('Cache-Control', 'public, max-age=600');
       res.json({ relaxed, places });
     } catch {
       res.status(400).json({ message: 'Pedido inválido.' });
