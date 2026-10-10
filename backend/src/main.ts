@@ -95,6 +95,14 @@ async function bootstrap() {
   let placesIdx: PlaceEntry[] = [];
   let placesNorm: string[] = [];
   let placesFull: string[] = [];
+  let placesName: string[] = [];
+  // Nomes genéricos do OSM que não são destinos ("parking", "grass",
+  // "Lote 3", "tvc"): o pino caía neles por estarem perto. Códigos de
+  // prédio (V10, K21, F1) são moradas reais no Kilamba e ficam.
+  const GENERIC_NAMES = new Set(['parking', 'grass', 'service', 'lote', 'tvc', 'yes', 'construction', 'site', 'local', 'ponto']);
+  // Troços de estrada (mesma rua repetida em vários pontos): continuam
+  // pesquisáveis mas perdem para destinos com nome (lojas, escolas…).
+  const ROAD_TYPES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'track', 'path', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
   const norm = (s: string) =>
     (s || '')
       .toLowerCase()
@@ -150,11 +158,16 @@ async function bootstrap() {
       placesIdx = [];
       placesNorm = [];
       placesFull = [];
+      placesName = [];
+      let skipped = 0;
       for (const p of arr) {
         const lat = Array.isArray(p) ? p[1] : p.lat;
         const lng = Array.isArray(p) ? p[2] : p.lng;
         const name = Array.isArray(p) ? p[0] : p.name;
         if (typeof name !== 'string' || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        const nn = norm(name);
+        const nnWords = nn.split(/[\s,\-]+/).filter((w) => w.length > 1);
+        if (!nn || nn.length < 2 || GENERIC_NAMES.has(nn) || /^lote\s*\d*$/.test(nn) || (nnWords.length > 0 && nnWords.every((w) => GENERIC_NAMES.has(w)))) { skipped++; continue; }
         placesIdx.push({
           n: name,
           lat,
@@ -163,9 +176,10 @@ async function bootstrap() {
           m: String(Array.isArray(p) ? p[4] || '' : p.municipality || ''),
         });
         placesNorm.push(norm(name));
+        placesName.push(nn);
         placesFull.push(norm(name + ' ' + placesIdx[placesIdx.length - 1].m + ' ' + placesIdx[placesIdx.length - 1].t));
       }
-      console.log(`Places index: ${placesIdx.length} locais`);
+      console.log(`Places index: ${placesIdx.length} locais (${skipped} genéricos ignorados)`);
     } catch (e) {
       console.warn('Places index em falta:', (e as Error).message?.slice(0, 100));
     }
@@ -223,14 +237,29 @@ async function bootstrap() {
             if (!ok) continue;
             if (fuzzy) startsFuzzy = true;
           }
-          const startsFull = full.startsWith(tt.join(' ')) ? 0 : startsFuzzy ? 2 : 1;
+          // Nome a sério primeiro: quem só bate no município/tipo
+          // ("Rua de Almeida" via Maianga) e troços de estrada perdem
+          // para o destino com o nome exato, mesmo estando mais perto.
+          let score = full.startsWith(tt.join(' ')) ? 0 : startsFuzzy ? 2 : 1;
+          const nameNorm = placesName[i] || '';
+          const nameWords = nameNorm.split(/[\s,\-]+/);
+          let nameHit = true;
+          for (const t of tt) {
+            if (nameNorm.includes(t)) continue;
+            if (t.length >= 4 && nameWords.some((w) => w.length >= 4 && lev1(t, w) <= 1)) continue;
+            if (intentHit(t, placesIdx[i], nameNorm)) continue;
+            nameHit = false;
+            break;
+          }
+          if (!nameHit) score += 1;
+          if (ROAD_TYPES.has(placesIdx[i].t)) score += 1;
           let dist = 0;
           if (hasLoc) {
             const dLa = placesIdx[i].lat - lat;
             const dLo = placesIdx[i].lng - lng;
             dist = Math.sqrt(dLa * dLa + dLo * dLo);
           }
-          out.push({ i, score: startsFull, dist });
+          out.push({ i, score, dist });
         }
         return out;
       };
