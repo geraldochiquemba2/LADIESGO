@@ -134,7 +134,7 @@ async function bootstrap() {
   const ROAD_TYPES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'track', 'path', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
   // Consultas de zona ("kilamba", "samba", …): estes tokens pedem a zona.
   const AREA_CENTROIDS: Record<string, { lat: number; lng: number }> = {};
-  const AREA_KEYS = ['kilamba', 'zango', 'sequele', 'centralidade', 'centralidades', 'samba', 'viana', 'maianga', 'ingombota', 'benfica', 'kinaxixi'].map(fold);
+  const AREA_KEYS = ['kilamba', 'zango', 'sequele', 'centralidade', 'centralidades', 'samba', 'viana', 'maianga', 'ingombota', 'benfica', 'kinaxixi', 'camama', 'hoji', 'mulenvos', 'mussulo'].map(fold);
   const T_RES = ['residential', 'apartments', 'apartment'].map(fold);
   const T_HOSP = ['hospital', 'clinic', 'doctors', 'dentist'].map(fold);
   const T_ESC = ['school', 'university', 'college', 'kindergarten'].map(fold);
@@ -267,15 +267,19 @@ async function bootstrap() {
       // dos locais com esse nome — sempre pesquisáveis ("Samba" deve dar
       // a Samba, não uma torre elétrica "Benfica T196W").
       const AREA_SEEDS = [
-        { key: fold('kilamba'), name: 'Município do Kilamba', municipality: 'Belas', type: 'centralidade' },
+        { key: fold('kilamba'), name: 'Município do Kilamba', municipality: 'Kilamba', type: 'centralidade' },
         { key: fold('zango'), name: 'Centralidade do Zango', municipality: 'Viana', type: 'centralidade' },
-        { key: fold('sequele'), name: 'Centralidade do Sequele', municipality: 'Cacuaco', type: 'centralidade' },
+        { key: fold('sequele'), name: 'Centralidade do Sequele', municipality: 'Sequele', type: 'centralidade' },
         { key: fold('samba'), name: 'Samba', municipality: 'Samba', type: 'bairro' },
         { key: fold('viana'), name: 'Viana', municipality: 'Viana', type: 'bairro' },
         { key: fold('maianga'), name: 'Maianga', municipality: 'Maianga', type: 'bairro' },
         { key: fold('ingombota'), name: 'Ingombota', municipality: 'Ingombota', type: 'bairro' },
         { key: fold('benfica'), name: 'Benfica', municipality: 'Talatona', type: 'bairro' },
         { key: fold('kinaxixi'), name: 'Kinaxixi', municipality: 'Ingombota', type: 'bairro' },
+        { key: fold('camama'), name: 'Camama', municipality: 'Camama', type: 'bairro' },
+        { key: fold('hoji'), name: 'Hoji Ya Henda', municipality: 'Hoji Ya Henda', type: 'bairro' },
+        { key: fold('mulenvos'), name: 'Mulenvos', municipality: 'Mulenvos', type: 'bairro' },
+        { key: fold('mussulo'), name: 'Mussulo', municipality: 'Mussulo', type: 'bairro' },
       ];
       for (const a of AREA_SEEDS) {
         let sx = 0, sy = 0, c = 0;
