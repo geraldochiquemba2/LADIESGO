@@ -96,53 +96,101 @@ async function bootstrap() {
   let placesNorm: string[] = [];
   let placesFull: string[] = [];
   let placesName: string[] = [];
-  // Nomes genéricos do OSM que não são destinos ("parking", "grass",
-  // "Lote 3", "tvc"): o pino caía neles por estarem perto. Códigos de
-  // prédio (V10, K21, F1) são moradas reais no Kilamba e ficam.
-  const GENERIC_NAMES = new Set(['parking', 'grass', 'service', 'lote', 'tvc', 'yes', 'construction', 'site', 'local', 'ponto', 'toilets', 'toilet', 'atm']);
-  // Troços de estrada (mesma rua repetida em vários pontos): continuam
-  // pesquisáveis mas perdem para destinos com nome (lojas, escolas…).
-  const ROAD_TYPES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'track', 'path', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
-  // Consultas de zona ("kilamba", "samba", …): estes tokens pedem a zona.
-  const AREA_KEYS = ['kilamba', 'zango', 'sequele', 'centralidade', 'centralidades', 'samba', 'viana', 'maianga', 'ingombota', 'benfica', 'kinaxixi'];
   const norm = (s: string) =>
     (s || '')
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '');
-  // Levenshtein curto com corte: tolera 1 erro ("kilmaba"→"kilamba").
-  // Devolve >1 cedo para não pesar no índice em memória.
-  function lev1(a: string, b: string): number {
+  // Fonética de bolso (PT-Angola), aplicada aos dois lados (índice e
+  // consulta): "Quilamba"→Kilamba, "pharmacia"→farmácia, "Muchima"→Muxima,
+  // "Marjinal"→Marginal, "Sango"→Zango. Só funde o que se escreve mal.
+  const fold = (s: string) =>
+    norm(s)
+      .replace(/ph/g, 'f')
+      .replace(/ch/g, 'x')
+      .replace(/qu/g, 'k')
+      .replace(/lh/g, 'l')
+      .replace(/nh/g, 'n')
+      .replace(/\u00e7/g, 's')
+      .replace(/ss/g, 's')
+      .replace(/c/g, 'k')
+      .replace(/z/g, 's')
+      .replace(/g(?=e|i)/g, 'j')
+      .replace(/h/g, '')
+      .replace(/y/g, 'i')
+      .replace(/w/g, 'u')
+      .replace(/([a-z])\1+/g, '$1');
+  // Nomes genéricos do OSM que não são destinos ("parking", "grass",
+  // "Lote 3", "tvc"): o pino caía neles por estarem perto. Códigos de
+  // prédio (V10, K21, F1) são moradas reais no Kilamba e ficam.
+  const GENERIC_NAMES = new Set(['parking', 'grass', 'service', 'lote', 'tvc', 'yes', 'construction', 'site', 'local', 'ponto', 'toilets', 'toilet', 'atm'].map(fold));
+  // Troços de estrada (mesma rua repetida em vários pontos): continuam
+  // pesquisáveis mas perdem para destinos com nome (lojas, escolas…).
+  const ROAD_TYPES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'track', 'path', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
+  // Consultas de zona ("kilamba", "samba", …): estes tokens pedem a zona.
+  const AREA_KEYS = ['kilamba', 'zango', 'sequele', 'centralidade', 'centralidades', 'samba', 'viana', 'maianga', 'ingombota', 'benfica', 'kinaxixi'].map(fold);
+  const T_RES = ['residential', 'apartments', 'apartment'].map(fold);
+  const T_HOSP = ['hospital', 'clinic', 'doctors', 'dentist'].map(fold);
+  const T_ESC = ['school', 'university', 'college', 'kindergarten'].map(fold);
+  const T_BANK = ['bank', 'atm'].map(fold);
+  const T_MKT = ['marketplace', 'market'].map(fold);
+  const T_HOT = ['hotel', 'hostel', 'guest_house'].map(fold);
+  const T_REST = ['restaurant', 'fast_food', 'cafe', 'bar'].map(fold);
+  const T_TAXI = ['taxi', 'bus_stop'].map(fold);
+  const T_CENT = fold('centralidade');
+  const T_BAIR = fold('bairro');
+  const SHOP_P = fold('shop');
+  // Damerau-Levenshtein com corte (padrão Meilisearch/Fuse): troca de 2
+  // letras seguidas ("kialmba"→"kilamba") conta como 1 erro, não 2.
+  // lim=2 só no 2.º passe (poucos resultados), em palavras de 6+ letras.
+  function levLim(a: string, b: string, lim: number): number {
     if (a === b) return 0;
     const la = a.length;
     const lb = b.length;
-    if (Math.abs(la - lb) > 1) return 2;
-    let i = 0;
-    while (i < la && i < lb && a[i] === b[i]) i++;
-    if (i === la && i === lb) return 0;
-    // substituição / inserção / remoção de 1 char
-    if (la === lb && a.slice(i + 1) === b.slice(i + 1)) return 1;
-    if (la + 1 === lb && a.slice(i) === b.slice(i + 1)) return 1;
-    if (lb + 1 === la && a.slice(i + 1) === b.slice(i)) return 1;
-    return 2;
+    if (Math.abs(la - lb) > lim) return lim + 1;
+    let q = 0;
+    while (q < la && q < lb && a[q] === b[q]) q++;
+    if (q === la && q === lb) return 0;
+    if (la === lb && q < la - 1 && a[q + 1] === b[q] && a[q] === b[q + 1] && a.slice(q + 2) === b.slice(q + 2)) return 1;
+    if (lim <= 1) {
+      if (la === lb && a.slice(q + 1) === b.slice(q + 1)) return 1;
+      if (la + 1 === lb && a.slice(q) === b.slice(q + 1)) return 1;
+      if (lb + 1 === la && a.slice(q + 1) === b.slice(q)) return 1;
+      return 2;
+    }
+    let prev: number[] = [];
+    for (let j = 0; j <= lb; j++) prev.push(j);
+    for (let i = 1; i <= la; i++) {
+      const cur: number[] = [i];
+      let rowMin = i;
+      for (let j = 1; j <= lb; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        cur.push(v);
+        if (v < rowMin) rowMin = v;
+      }
+      if (rowMin > lim) return lim + 1;
+      prev = cur;
+    }
+    return prev[lb] <= lim ? prev[lb] : lim + 1;
   }
   // Intenções por categoria: "condominio" acha residenciais mesmo sem a
   // palavra no nome; "centralidade" acha Zango/Kilamba/Sequele; etc.
-  // (chaves já normalizadas, sem acentos).
+  // (chaves e literais já dobrados para a fonética; n chega dobrado).
   const INTENTS: { keys: string[]; test: (e: PlaceEntry, n: string) => boolean }[] = [
-    { keys: ['condominio', 'condominios'], test: (e, n) => n.includes('condom') || n.includes('residencial') || ['residential', 'apartments', 'apartment'].includes(e.t) },
-    { keys: ['centralidade', 'centralidades'], test: (e, n) => e.t === 'centralidade' || n.includes('centralidade') || n.includes('zango') || n.includes('sequele') || n.includes('kilamba') },
-    { keys: ['urbanizacao', 'urbanizacoes', 'urbanizao'], test: (e, n) => n.includes('urbaniz') || e.t === 'centralidade' },
-    { keys: ['farmacia', 'farmacias'], test: (e, n) => e.t === 'pharmacy' || n.includes('farmacia') },
-    { keys: ['hospital', 'hospitais', 'clinica', 'hospitalar'], test: (e, n) => ['hospital', 'clinic', 'doctors', 'dentist'].includes(e.t) || n.includes('hospital') || n.includes('clinic') },
-    { keys: ['escola', 'escolas', 'colegio', 'universidade'], test: (e, n) => ['school', 'university', 'college', 'kindergarten'].includes(e.t) || n.includes('escola') || n.includes('universidade') },
-    { keys: ['banco', 'bancos', 'multicaixa', 'atm'], test: (e, n) => ['bank', 'atm'].includes(e.t) || n.includes('banco') },
-    { keys: ['mercado', 'mercados', 'feira', 'praca'], test: (e, n) => ['marketplace', 'market'].includes(e.t) || e.t.startsWith('shop') || n.includes('mercado') },
-    { keys: ['igreja', 'igrejas', 'culto'], test: (e, n) => e.t === 'place_of_worship' || n.includes('igreja') },
-    { keys: ['hotel', 'hoteis', 'hospedagem'], test: (e, n) => ['hotel', 'hostel', 'guest_house'].includes(e.t) || n.includes('hotel') },
-    { keys: ['restaurante', 'restaurantes', 'comer'], test: (e, n) => ['restaurant', 'fast_food', 'cafe', 'bar'].includes(e.t) },
-    { keys: ['bomba', 'bombas', 'combustivel', 'gasolina'], test: (e) => e.t === 'fuel' },
-    { keys: ['aeroporto'], test: (e, n) => e.t === 'airport' || n.includes('aeroporto') },
+    { keys: ['condominio', 'condominios'].map(fold), test: (e, n) => n.includes(fold('condom')) || n.includes(fold('residencial')) || T_RES.includes(fold(e.t)) },
+    { keys: ['centralidade', 'centralidades'].map(fold), test: (e, n) => fold(e.t) === T_CENT || n.includes(fold('centralidade')) || n.includes(fold('zango')) || n.includes(fold('sequele')) || n.includes(fold('kilamba')) },
+    { keys: ['urbanizacao', 'urbanizacoes', 'urbanizao'].map(fold), test: (e, n) => n.includes(fold('urbaniz')) || fold(e.t) === T_CENT },
+    { keys: ['farmacia', 'farmacias'].map(fold), test: (e, n) => fold(e.t) === fold('pharmacy') || n.includes(fold('farmacia')) },
+    { keys: ['hospital', 'hospitais', 'clinica', 'hospitalar'].map(fold), test: (e, n) => T_HOSP.includes(fold(e.t)) || n.includes(fold('hospital')) || n.includes(fold('clinic')) },
+    { keys: ['escola', 'escolas', 'colegio', 'universidade'].map(fold), test: (e, n) => T_ESC.includes(fold(e.t)) || n.includes(fold('escola')) || n.includes(fold('universidade')) },
+    { keys: ['banco', 'bancos', 'multicaixa', 'atm'].map(fold), test: (e, n) => T_BANK.includes(fold(e.t)) || n.includes(fold('banco')) },
+    { keys: ['mercado', 'mercados', 'feira', 'praca'].map(fold), test: (e, n) => T_MKT.includes(fold(e.t)) || fold(e.t).startsWith(SHOP_P) || n.includes(fold('mercado')) },
+    { keys: ['igreja', 'igrejas', 'culto'].map(fold), test: (e, n) => fold(e.t) === fold('place_of_worship') || n.includes(fold('igreja')) },
+    { keys: ['hotel', 'hoteis', 'hospedagem'].map(fold), test: (e, n) => T_HOT.includes(fold(e.t)) || n.includes(fold('hotel')) },
+    { keys: ['restaurante', 'restaurantes', 'comer'].map(fold), test: (e, n) => T_REST.includes(fold(e.t)) || n.includes(fold('restaurante')) },
+    { keys: ['bomba', 'bombas', 'combustivel', 'gasolina'].map(fold), test: (e) => fold(e.t) === fold('fuel') },
+    { keys: ['aeroporto'].map(fold), test: (e, n) => fold(e.t) === fold('airport') || n.includes(fold('aeroporto')) },
     { keys: ['paragem', 'paragens', 'taxi', 'candongueiro'], test: (e, n) => ['taxi', 'bus_stop'].includes(e.t) },
   ];
   function intentHit(t: string, e: PlaceEntry, n: string): boolean {
@@ -167,7 +215,7 @@ async function bootstrap() {
         const lng = Array.isArray(p) ? p[2] : p.lng;
         const name = Array.isArray(p) ? p[0] : p.name;
         if (typeof name !== 'string' || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-        const nn = norm(name);
+        const nn = fold(name);
         const nnWords = nn.split(/[\s,\-]+/).filter((w) => w.length > 1);
         const nType = String(Array.isArray(p) ? p[5] || '' : p.type || '');
         // Linhas elétricas/ferroviárias ("Cazenga - Viana") nunca são destino.
@@ -183,23 +231,23 @@ async function bootstrap() {
           t: String(Array.isArray(p) ? p[5] || '' : p.type || ''),
           m: String(Array.isArray(p) ? p[4] || '' : p.municipality || ''),
         });
-        placesNorm.push(norm(name));
+        placesNorm.push(fold(name));
         placesName.push(nn);
-        placesFull.push(norm(name + ' ' + placesIdx[placesIdx.length - 1].m + ' ' + placesIdx[placesIdx.length - 1].t));
+        placesFull.push(fold(name + ' ' + placesIdx[placesIdx.length - 1].m + ' ' + placesIdx[placesIdx.length - 1].t));
       }
       // Centralidades e bairros em falta no OSM: cria o pino no centroide
       // dos locais com esse nome — sempre pesquisáveis ("Samba" deve dar
       // a Samba, não uma torre elétrica "Benfica T196W").
       const AREA_SEEDS = [
-        { key: 'kilamba', name: 'Centralidade do Kilamba', municipality: 'Belas', type: 'centralidade' },
-        { key: 'zango', name: 'Centralidade do Zango', municipality: 'Viana', type: 'centralidade' },
-        { key: 'sequele', name: 'Centralidade do Sequele', municipality: 'Cacuaco', type: 'centralidade' },
-        { key: 'samba', name: 'Samba', municipality: 'Samba', type: 'bairro' },
-        { key: 'viana', name: 'Viana', municipality: 'Viana', type: 'bairro' },
-        { key: 'maianga', name: 'Maianga', municipality: 'Maianga', type: 'bairro' },
-        { key: 'ingombota', name: 'Ingombota', municipality: 'Ingombota', type: 'bairro' },
-        { key: 'benfica', name: 'Benfica', municipality: 'Talatona', type: 'bairro' },
-        { key: 'kinaxixi', name: 'Kinaxixi', municipality: 'Ingombota', type: 'bairro' },
+        { key: fold('kilamba'), name: 'Centralidade do Kilamba', municipality: 'Belas', type: 'centralidade' },
+        { key: fold('zango'), name: 'Centralidade do Zango', municipality: 'Viana', type: 'centralidade' },
+        { key: fold('sequele'), name: 'Centralidade do Sequele', municipality: 'Cacuaco', type: 'centralidade' },
+        { key: fold('samba'), name: 'Samba', municipality: 'Samba', type: 'bairro' },
+        { key: fold('viana'), name: 'Viana', municipality: 'Viana', type: 'bairro' },
+        { key: fold('maianga'), name: 'Maianga', municipality: 'Maianga', type: 'bairro' },
+        { key: fold('ingombota'), name: 'Ingombota', municipality: 'Ingombota', type: 'bairro' },
+        { key: fold('benfica'), name: 'Benfica', municipality: 'Talatona', type: 'bairro' },
+        { key: fold('kinaxixi'), name: 'Kinaxixi', municipality: 'Ingombota', type: 'bairro' },
       ];
       for (const a of AREA_SEEDS) {
         let sx = 0, sy = 0, c = 0;
@@ -211,9 +259,9 @@ async function bootstrap() {
           // No INÍCIO: o varrimento para aos 300 e as sementes têm de
           // ser vistas primeiro (a bonus de -1 só conta se chegar lá).
           placesIdx.unshift({ n: a.name, lat: sx / c, lng: sy / c, t: a.type, m: a.municipality });
-          placesNorm.unshift(norm(a.name));
-          placesName.unshift(norm(a.name));
-          placesFull.unshift(norm(a.name + ' ' + a.municipality + ' ' + a.type));
+          placesNorm.unshift(fold(a.name));
+          placesName.unshift(fold(a.name));
+          placesFull.unshift(fold(a.name + ' ' + a.municipality + ' ' + a.type));
           console.log(`Places seed: ${a.name} (${c} base) -> ${((sx / c) as number).toFixed(4)}, ${((sy / c) as number).toFixed(4)}`);
         }
       }
@@ -227,7 +275,7 @@ async function bootstrap() {
   // Pesquisa de destinos LadiesGo — sem auth (como zone/route)
   httpAdapter.get('/api/places/search', (req: any, res: any) => {
     try {
-      const q = norm(String(req.query?.q || '').slice(0, 60));
+      const q = fold(String(req.query?.q || '').slice(0, 60));
       if (q.length < 2) {
         res.json({ places: [] });
         return;
@@ -242,9 +290,9 @@ async function bootstrap() {
       const lat = Number(req.query?.lat);
       const lng = Number(req.query?.lng);
       const hasLoc = Number.isFinite(lat) && Number.isFinite(lng);
-      const matchTokens = (tt: string[]) => {
+      const matchTokens = (tt: string[], maxLev = 1) => {
         const out: any[] = [];
-        for (let i = 0; i < placesIdx.length && out.length < 300; i++) {
+        for (let i = 0; i < placesIdx.length; i++) {
           const full = placesFull[i];
           let startsFuzzy = false;
           const phrase = tt.join(' ');
@@ -263,10 +311,10 @@ async function bootstrap() {
               fuzzy = true;
               continue;
             }
-              // Tolerância a 1 erro em palavras com 4+ letras
+              // Tolerância a erros (1 em 4+ letras; 2 em 6+ no 2.º passe)
               if (
-                t.length >= 4 &&
-                words.some((w) => w.length >= 4 && lev1(t, w) <= 1)
+                t.length >= (maxLev > 1 ? 6 : 4) &&
+                words.some((w) => w.length >= (maxLev > 1 ? 6 : 4) && levLim(t, w, maxLev) <= maxLev)
               ) {
                 fuzzy = true;
                 continue;
@@ -286,7 +334,7 @@ async function bootstrap() {
           let nameHit = true;
           for (const t of tt) {
             if (nameNorm.includes(t)) continue;
-            if (t.length >= 4 && nameWords.some((w) => w.length >= 4 && lev1(t, w) <= 1)) continue;
+            if (t.length >= (maxLev > 1 ? 6 : 4) && nameWords.some((w) => w.length >= (maxLev > 1 ? 6 : 4) && levLim(t, w, maxLev) <= maxLev)) continue;
             if (intentHit(t, placesIdx[i], nameNorm)) continue;
             nameHit = false;
             break;
@@ -295,7 +343,7 @@ async function bootstrap() {
           if (ROAD_TYPES.has(placesIdx[i].t)) score += 1;
           // "kilamba"/"samba"/… querem a zona, não um bar com nome parecido:
           // centralidades e bairros-âncora sobem para primeiro.
-          if ((placesIdx[i].t === 'centralidade' || placesIdx[i].t === 'bairro') && tt.some((t) => AREA_KEYS.includes(t))) score = Math.max(0, score - 1);
+          if ((fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR) && tt.some((t) => AREA_KEYS.includes(t))) score = Math.max(0, score - 1);
           let dist = 0;
           if (hasLoc) {
             const dLa = placesIdx[i].lat - lat;
@@ -308,6 +356,11 @@ async function bootstrap() {
       };
       let out = matchTokens(toks);
       let relaxed = false;
+      // 2.º passe: quase sem resultados? tolera 2 erros (palavras 6+).
+      if (out.length < 3) {
+        const r2 = matchTokens(toks, 2);
+        if (r2.length > out.length) { out = r2; relaxed = true; }
+      }
       // Fallback: se nada bate ("bloco a23 kilamba"), larga a palavra mais
       // restritiva (primeiro as com dígitos) e tenta de novo.
       if (!out.length && toks.length > 1) {
