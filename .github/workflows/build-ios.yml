@@ -1,0 +1,33 @@
+name: iOS TestFlight (EAS)
+
+# Manual: Actions -> "iOS TestFlight (EAS)" -> Run workflow.
+# Faz o build de produção iOS no EAS e submete o IPA ao TestFlight.
+# Requer o secret EXPO_TOKEN (token da conta Expo dona do projeto: geraldo3).
+# Credenciais Apple: via chave ASC configurada em mobile/eas.json
+# (submit.production.ios) — sem interação.
+on:
+  workflow_dispatch:
+
+jobs:
+  build-submit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm install -g eas-cli
+      - run: npm ci
+      - name: EAS iOS production build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas build --platform ios --profile production --non-interactive
+      - name: Submit to TestFlight
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas submit --platform ios --profile production --latest --non-interactive
