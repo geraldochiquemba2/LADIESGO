@@ -60,7 +60,7 @@ document.addEventListener('input',function(e){
           have[nm.toLowerCase()]=1;
           lastSug.push({p:{n:nm,a:p.municipality||'Luanda',c:[p.lat,p.lng]}});
           var idx=lastSug.length-1;
-          html+='<button class="item" data-a="pickdest" data-i="'+idx+'"><span><b>'+esc(nm)+'</b><span class="mut sm">'+esc(p.municipality||'Luanda')+'</span></span></button>';
+          html+='<button class="item" data-a="pickdest" data-i="'+idx+'"><span><b>'+esc(nm)+'</b><span class="mut sm">'+esc(p.municipality?p.municipality+(p.province?', '+p.province:''):(p.province||'Luanda'))+'</span></span></button>';
         });
         if(html){
           if(/Sem resultados/.test(box.innerHTML))box.innerHTML='';

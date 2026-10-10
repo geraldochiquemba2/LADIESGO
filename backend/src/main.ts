@@ -91,7 +91,7 @@ async function bootstrap() {
   // Índice de locais LadiesGo (23k+ Luanda) em memória: pesquisa instantânea
   // sem gastar BD (0 CU) e sem depender do Nominatim. Carregado do JSON
   // gerado pelo extrator (webapp/ladiesgo-luanda-final.json).
-  type PlaceEntry = { n: string; lat: number; lng: number; t: string; m: string };
+  type PlaceEntry = { n: string; lat: number; lng: number; t: string; m: string; prov?: string };
   let placesIdx: PlaceEntry[] = [];
   let placesNorm: string[] = [];
   let placesFull: string[] = [];
@@ -237,6 +237,7 @@ async function bootstrap() {
           lng,
           t: String(Array.isArray(p) ? p[5] || '' : p.type || ''),
           m: String(Array.isArray(p) ? p[4] || '' : p.municipality || ''),
+          prov: 'Luanda',
         });
         placesNorm.push(fold(name));
         placesName.push(nn);
@@ -253,7 +254,7 @@ async function bootstrap() {
             const lo = Number(q.lng);
             if (!nm || nm.length < 2 || !Number.isFinite(la) || !Number.isFinite(lo)) continue;
             const al = Array.isArray(q.aliases) ? q.aliases.filter((a: any) => typeof a === 'string' && a.trim()).slice(0, 8) : [];
-            placesIdx.push({ n: nm, lat: la, lng: lo, t: String(q.type || 'poi'), m: String(q.municipality || '') });
+            placesIdx.push({ n: nm, lat: la, lng: lo, t: String(q.type || 'poi'), m: String(q.municipality || ''), prov: String(q.province || 'Luanda') });
             placesNorm.push(fold(nm));
             placesName.push(fold(nm));
             placesFull.push(fold(nm + ' ' + (q.municipality || '') + ' ' + (q.province || '')));
@@ -267,19 +268,19 @@ async function bootstrap() {
       // dos locais com esse nome — sempre pesquisáveis ("Samba" deve dar
       // a Samba, não uma torre elétrica "Benfica T196W").
       const AREA_SEEDS = [
-        { key: fold('kilamba'), name: 'Município do Kilamba', municipality: 'Kilamba', type: 'centralidade' },
-        { key: fold('zango'), name: 'Centralidade do Zango', municipality: 'Viana', type: 'centralidade' },
-        { key: fold('sequele'), name: 'Centralidade do Sequele', municipality: 'Sequele', type: 'centralidade' },
-        { key: fold('samba'), name: 'Samba', municipality: 'Samba', type: 'bairro' },
-        { key: fold('viana'), name: 'Viana', municipality: 'Viana', type: 'bairro' },
-        { key: fold('maianga'), name: 'Maianga', municipality: 'Maianga', type: 'bairro' },
-        { key: fold('ingombota'), name: 'Ingombota', municipality: 'Ingombota', type: 'bairro' },
-        { key: fold('benfica'), name: 'Benfica', municipality: 'Talatona', type: 'bairro' },
-        { key: fold('kinaxixi'), name: 'Kinaxixi', municipality: 'Ingombota', type: 'bairro' },
-        { key: fold('camama'), name: 'Camama', municipality: 'Camama', type: 'bairro' },
-        { key: fold('hoji'), name: 'Hoji Ya Henda', municipality: 'Hoji Ya Henda', type: 'bairro' },
-        { key: fold('mulenvos'), name: 'Mulenvos', municipality: 'Mulenvos', type: 'bairro' },
-        { key: fold('mussulo'), name: 'Mussulo', municipality: 'Mussulo', type: 'bairro' },
+        { key: fold('kilamba'), name: 'Município do Kilamba', municipality: 'Kilamba', province: 'Luanda', type: 'centralidade' },
+        { key: fold('zango'), name: 'Centralidade do Zango', municipality: 'Viana', province: 'Luanda', type: 'centralidade' },
+        { key: fold('sequele'), name: 'Centralidade do Sequele', municipality: 'Sequele', province: 'Icolo e Bengo', type: 'centralidade' },
+        { key: fold('samba'), name: 'Samba', municipality: 'Samba', province: 'Luanda', type: 'bairro' },
+        { key: fold('viana'), name: 'Viana', municipality: 'Viana', province: 'Luanda', type: 'bairro' },
+        { key: fold('maianga'), name: 'Maianga', municipality: 'Maianga', province: 'Luanda', type: 'bairro' },
+        { key: fold('ingombota'), name: 'Ingombota', municipality: 'Ingombota', province: 'Luanda', type: 'bairro' },
+        { key: fold('benfica'), name: 'Benfica', municipality: 'Talatona', province: 'Luanda', type: 'bairro' },
+        { key: fold('kinaxixi'), name: 'Kinaxixi', municipality: 'Ingombota', province: 'Luanda', type: 'bairro' },
+        { key: fold('camama'), name: 'Camama', municipality: 'Camama', province: 'Luanda', type: 'bairro' },
+        { key: fold('hoji'), name: 'Hoji Ya Henda', municipality: 'Hoji Ya Henda', province: 'Luanda', type: 'bairro' },
+        { key: fold('mulenvos'), name: 'Mulenvos', municipality: 'Mulenvos', province: 'Luanda', type: 'bairro' },
+        { key: fold('mussulo'), name: 'Mussulo', municipality: 'Mussulo', province: 'Luanda', type: 'bairro' },
       ];
       for (const a of AREA_SEEDS) {
         let sx = 0, sy = 0, c = 0;
@@ -290,7 +291,7 @@ async function bootstrap() {
         if (c >= 1) {
           // No INÍCIO: o varrimento para aos 300 e as sementes têm de
           // ser vistas primeiro (a bonus de -1 só conta se chegar lá).
-          placesIdx.unshift({ n: a.name, lat: sx / c, lng: sy / c, t: a.type, m: a.municipality });
+          placesIdx.unshift({ n: a.name, lat: sx / c, lng: sy / c, t: a.type, m: a.municipality, prov: (a as any).province || 'Luanda' });
           placesNorm.unshift(fold(a.name));
           placesName.unshift(fold(a.name));
           placesAlias.unshift('');
@@ -470,6 +471,7 @@ async function bootstrap() {
         lng: placesIdx[i].lng,
         type: placesIdx[i].t,
         municipality: placesIdx[i].m,
+        province: placesIdx[i].prov || 'Luanda',
         distanceKm: distKm(placesIdx[i].lat, placesIdx[i].lng),
       }));
       // Fallback Geoapify (logica Aproveita-Ja): pouco resultado local +
@@ -498,7 +500,7 @@ async function bootstrap() {
             const glng = f.geometry?.coordinates?.[0];
             if (!nm || !Number.isFinite(glat) || !Number.isFinite(glng) || seen.has(norm(nm))) continue;
             seen.add(norm(nm));
-            places.push({ name: nm, lat: glat, lng: glng, type: 'geo', municipality: String(pr.city || pr.municipality || pr.state || ''), distanceKm: distKm(glat, glng) });
+            places.push({ name: nm, lat: glat, lng: glng, type: 'geo', municipality: String(pr.city || pr.municipality || pr.state || ''), province: String(pr.state || pr.county || ''), distanceKm: distKm(glat, glng) });
           }
         } catch {}
       }
