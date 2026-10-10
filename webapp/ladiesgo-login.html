@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#61188E">
-<link rel="apple-touch-icon" href="logo.jpg">
+<link rel="apple-touch-icon" href="logo-v2.jpg">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>LadiesGo! – App de táxi para mulheres</title>
@@ -129,7 +129,7 @@ const $=id=>document.getElementById(id),lerp=(a,b,k)=>a+(b-a)*k;
 let seed=7;const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
 const wing='M20 14C15 2 3 2 3 9C3 15 11 18 20 17ZM20 18C13 19 9 24 12 27C15 30 19 25 20 22Z';
 const bf=c=>`<svg viewBox="0 0 40 30"><g class="wl"><path d="${wing}" fill="${c}" stroke="#fff" stroke-width="1.2"/></g><g class="wr"><path transform="translate(40 0) scale(-1 1)" d="${wing}" fill="${c}" stroke="#fff" stroke-width="1.2"/></g><rect x="19" y="10" width="2" height="16" rx="1" fill="#3a1470"/></svg>`;
-$('logo').innerHTML='<img src="logo.jpg" alt="LadiesGo!" style="height:46px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)">';
+$('logo').innerHTML='<img src="logo-v2.jpg" alt="LadiesGo!" style="height:46px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)">';
 setTimeout(()=>$('splash').classList.add('off'),2400);
 [['#ff9ad5',22,'26%',0],['#d9a8ff',30,'40%',-7],['#ffd0f0',18,'14%',-12]].forEach(([c,w,top,d])=>{const e=document.createElement('div');e.className='fly';e.style.cssText=`width:${w}px;top:${top};animation-delay:${d}s;animation-duration:${16+w/3}s`;e.innerHTML=bf(c);$('sceneBox').appendChild(e)});
 
