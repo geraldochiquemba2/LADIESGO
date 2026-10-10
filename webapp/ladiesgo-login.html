@@ -221,11 +221,13 @@ const layers=[['L1',.12],['L2',.3],['L3',1],['L4',1.25]];
   if(!t||!u||!u.role)return;
   try{
     var r=await fetch('/api/v1/users/profile',{headers:{Authorization:'Bearer '+t}});
+    if(r.status===401||r.status===403)throw {auth:1};
     if(!r.ok)throw 0;
     try{var p=await r.json();if(p&&typeof p.mustChangePassword!=='undefined'){u.mustChangePassword=!!p.mustChangePassword;localStorage.setItem('taxi_user',JSON.stringify(u))}}catch(e2){}
     window.location.href=(u.role==='ADMIN')?'/admin':'/home';
   }catch(e){
-    try{localStorage.removeItem('taxi_token');localStorage.removeItem('taxi_user')}catch(_){}
+    if(e&&e.auth){try{localStorage.removeItem('taxi_token');localStorage.removeItem('taxi_user')}catch(_){}}
+    else{try{window.location.href=(u.role==='ADMIN')?'/admin':'/home'}catch(_){}}
   }
 })();
 go('login');
