@@ -179,6 +179,29 @@ async function bootstrap() {
         placesName.push(nn);
         placesFull.push(norm(name + ' ' + placesIdx[placesIdx.length - 1].m + ' ' + placesIdx[placesIdx.length - 1].t));
       }
+      // Centralidades em falta no OSM (Kilamba/Zango/Sequele): cria o pino
+      // no centroide dos locais com esse nome — sempre pesquisáveis.
+      const AREA_SEEDS = [
+        { key: 'kilamba', name: 'Centralidade do Kilamba', municipality: 'Belas' },
+        { key: 'zango', name: 'Centralidade do Zango', municipality: 'Viana' },
+        { key: 'sequele', name: 'Centralidade do Sequele', municipality: 'Cacuaco' },
+      ];
+      for (const a of AREA_SEEDS) {
+        let sx = 0, sy = 0, c = 0;
+        for (let i = 0; i < placesIdx.length; i++) {
+          const words = placesNorm[i].split(/[\s,\-]+/);
+          if (words.some((w) => w === a.key || (w.length > 6 && w.startsWith(a.key)))) { sx += placesIdx[i].lat; sy += placesIdx[i].lng; c++; }
+        }
+        if (c >= 3) {
+          // No INÍCIO: o varrimento para aos 300 e as sementes têm de
+          // ser vistas primeiro (a bonus de -1 só conta se chegar lá).
+          placesIdx.unshift({ n: a.name, lat: sx / c, lng: sy / c, t: 'centralidade', m: a.municipality });
+          placesNorm.unshift(norm(a.name));
+          placesName.unshift(norm(a.name));
+          placesFull.unshift(norm(a.name + ' ' + a.municipality + ' centralidade'));
+          console.log(`Places seed: ${a.name} (${c} base) -> ${((sx / c) as number).toFixed(4)}, ${((sy / c) as number).toFixed(4)}`);
+        }
+      }
       console.log(`Places index: ${placesIdx.length} locais (${skipped} genéricos ignorados)`);
     } catch (e) {
       console.warn('Places index em falta:', (e as Error).message?.slice(0, 100));
@@ -209,8 +232,10 @@ async function bootstrap() {
         for (let i = 0; i < placesIdx.length && out.length < 300; i++) {
           const full = placesFull[i];
           let startsFuzzy = false;
-          if (full.startsWith(tt.join(' '))) {
-            // 0: frase exata no início
+          const phrase = tt.join(' ');
+          const phraseExact = full === phrase || (full.startsWith(phrase) && !/[a-z0-9]/.test(full[phrase.length] || ' '));
+          if (phraseExact) {
+            // 0: frase exata no início ("kilamba" já não casa "kilambar")
           } else {
             const words = full.split(/[\s,\-]+/);
             let ok = true;
@@ -240,7 +265,7 @@ async function bootstrap() {
           // Nome a sério primeiro: quem só bate no município/tipo
           // ("Rua de Almeida" via Maianga) e troços de estrada perdem
           // para o destino com o nome exato, mesmo estando mais perto.
-          let score = full.startsWith(tt.join(' ')) ? 0 : startsFuzzy ? 2 : 1;
+          let score = phraseExact ? 0 : startsFuzzy ? 2 : 1;
           const nameNorm = placesName[i] || '';
           const nameWords = nameNorm.split(/[\s,\-]+/);
           let nameHit = true;
@@ -253,6 +278,9 @@ async function bootstrap() {
           }
           if (!nameHit) score += 1;
           if (ROAD_TYPES.has(placesIdx[i].t)) score += 1;
+          // "kilamba"/"zango"/"sequele" querem a centralidade, não um
+          // bar com nome parecido: centralidades sobem para primeiro.
+          if (placesIdx[i].t === 'centralidade' && tt.some((t) => t === 'kilamba' || t === 'zango' || t === 'sequele' || t === 'centralidade' || t === 'centralidades')) score = Math.max(0, score - 1);
           let dist = 0;
           if (hasLoc) {
             const dLa = placesIdx[i].lat - lat;
