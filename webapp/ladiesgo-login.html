@@ -214,6 +214,20 @@ async function doRegister(){const errEl=document.getElementById('loginErr');cons
 const W={x:270,dir:-1,op:1,vis:1};let dist=0,speed=0,tx=140,prev=tx,rot=0,last=performance.now(),cur='';
 const $$=(id,v)=>$(id).textContent=v,pop=()=>{const p=$('pop');p.classList.remove('go');void p.getBoundingClientRect();p.classList.add('go')};
 const layers=[['L1',.12],['L2',.3],['L3',1],['L4',1.25]];
+/* Voltar do browser não é logout: com sessão válida, segue para dentro. */
+(async function(){
+  var t=null,u=null;
+  try{t=localStorage.getItem('taxi_token');u=JSON.parse(localStorage.getItem('taxi_user')||'null')}catch(e){}
+  if(!t||!u||!u.role)return;
+  try{
+    var r=await fetch('/api/v1/users/profile',{headers:{Authorization:'Bearer '+t}});
+    if(!r.ok)throw 0;
+    try{var p=await r.json();if(p&&typeof p.mustChangePassword!=='undefined'){u.mustChangePassword=!!p.mustChangePassword;localStorage.setItem('taxi_user',JSON.stringify(u))}}catch(e2){}
+    window.location.href=(u.role==='ADMIN')?'/admin':'/home';
+  }catch(e){
+    try{localStorage.removeItem('taxi_token');localStorage.removeItem('taxi_user')}catch(_){}
+  }
+})();
 go('login');
 function frame(now){
   const dt=Math.min((now-last)/1000,.05);last=now;t+=dt;const T=now/1000;let walk=0,wave=0;
