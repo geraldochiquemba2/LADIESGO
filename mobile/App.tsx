@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Linking, Image } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Linking } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
@@ -206,10 +206,7 @@ export default function App() {
         />
         {loading && !failed && (
           <View style={splash.overlay}>
-            <Image source={require('./assets/splash-icon.png')} style={splash.logo} />
-            <Text style={splash.name}>LadiesGo!</Text>
-            <Text style={splash.tagline}>Mobilidade Feminina Segura</Text>
-            <ActivityIndicator color="#fff" style={{ marginTop: 48 }} />
+            <ActivityIndicator color="#fff" size="large" />
           </View>
         )}
       </SafeAreaView>
