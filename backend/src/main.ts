@@ -313,7 +313,11 @@ async function bootstrap() {
       }
       // Todas as palavras, em qualquer ordem ("kilamba bloco" acha
       // "Escola Bloco D" no Kilamba). Palavras de 1 letra são ignoradas.
-      const toks = q.split(/\s+/).filter((t) => t.length >= 2);
+      const rawToks = q.split(/\s+/);
+      const toks = rawToks.filter((t) => t.length >= 2);
+      // Letras/digitos isolados ("kilamba a", "zango 3") nao filtram,
+      // mas dao bonus a quem os tem no inicio de palavra ("A1", "3").
+      const pref1 = toks.length ? rawToks.filter((t) => t.length === 1) : [];
       if (!toks.length) {
         res.json({ places: [] });
         return;
@@ -387,6 +391,7 @@ async function bootstrap() {
           const strongName = tt.some((t) => nmStrong === t || nmStrong.startsWith(t + ' ') || nmStrong.startsWith(t + ','));
           if (areaTok === 'kilamba' && !isAnchor && !wantsKiaxi && isKiaxi && !strongName) continue;
           if ((fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR) && areaTok) score = (areaTok === fold('centralidade') || areaTok === fold('centralidades')) ? Math.max(0, score - 1) : score - 2;
+          if (pref1.length && pref1.every((x) => nameWords.some((w) => w.startsWith(x)))) score -= 1;
           // "kilamba bloco" = blocos DENTRO do Kilamba: fora do raio da
           // zona (12 km), o que só bate via município/tipo cai fora.
           // Âncoras (centralidade/bairro) estão sempre dentro.
@@ -395,7 +400,7 @@ async function bootstrap() {
             if (ac) {
               const gLa = placesIdx[i].lat - ac.lat;
               const gLo = placesIdx[i].lng - ac.lng;
-              if (Math.sqrt(gLa * gLa + gLo * gLo) * 111 > 12) continue;
+              if (Math.sqrt(gLa * gLa + gLo * gLo) * 111 > 20) continue;
             }
           }
           let dist = 0;
