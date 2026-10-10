@@ -35,8 +35,11 @@
       var started=(st==='DRIVER_ARRIVED'||st==='IN_PROGRESS'||st==='COMPLETED');
       document.getElementById('st').innerHTML='<span class="pill">'+(ST[st]||st)+'</span>';
       var info=[];
+      if(t.pickup&&t.pickup.name)info.push('🟢 De '+(t.pickup.name||''));
       if(t.driver&&t.driver.name){var carTxt=t.driver.carFull||t.driver.car||'';info.push('🚗 '+t.driver.name+(carTxt?' · '+carTxt:'')+(t.driver.plate?' · '+t.driver.plate:'')+(t.driver.rating?' · ★ '+t.driver.rating:''));}
-      if(t.dest&&t.dest.name)info.push('📍 '+(t.dest.name||''));
+      if(t.dest&&t.dest.name)info.push('🏁 Para '+(t.dest.name||''));
+      var _sts=Array.isArray(t.stops)?t.stops.filter(function(s){return s&&(s.n||s.a)}).slice(0,3):[];
+      if(_sts.length)info.push('① Paragens: '+_sts.map(function(s,i){return (i+1)+') '+(s.n||s.a)}).join('; '));
       document.getElementById('info').textContent=info.join('  —  ')||'A acompanhar…';
       var cw=document.getElementById('carphoto');if(t.driver&&t.driver.photo){if(!cw){var im=document.createElement('img');im.id='carphoto';im.alt='Viatura';im.style.cssText='width:100%;border-radius:12px;margin-top:8px;max-height:150px;object-fit:cover';document.getElementById('card').appendChild(im);}document.getElementById('carphoto').src=t.driver.photo;}else if(cw){cw.remove();}
       paintContacts(t);
