@@ -81,6 +81,12 @@ export default function App() {
         })();
         return;
       }
+      if (msg.t === 'open-settings') {
+        // Negado em definitivo: o iOS nunca volta a perguntar — levar
+        // direta às Definições da app é o único caminho.
+        try { Linking.openSettings(); } catch {}
+        return;
+      }
       const token = typeof msg.token === 'string' && msg.token.length > 10 ? msg.token : null;
       if ((msg.t === 'auth' || msg.t === 'state') && (token || msg.t === 'state')) {
         const u = (msg.user || {}) as any;
