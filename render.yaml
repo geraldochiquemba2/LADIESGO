@@ -16,6 +16,8 @@ services:
         generateValue: true
       - key: JWT_EXPIRES_IN
         value: 7d
+      - key: GEOAPIFY_API_KEY
+        sync: false # opcional: fallback de moradas (mesma chave do Aproveita-Ja)
       - key: KEEP_ALIVE_URL
         value: https://ladiesgo.onrender.com
       - key: KEEP_ALIVE_INTERVAL_MS

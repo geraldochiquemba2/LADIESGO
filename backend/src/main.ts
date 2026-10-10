@@ -96,6 +96,9 @@ async function bootstrap() {
   let placesNorm: string[] = [];
   let placesFull: string[] = [];
   let placesName: string[] = [];
+  let placesAlias: string[] = [];
+  const TYPE_PRIO: Record<string, number> = { poi: 5, centrality: 4, centralidade: 4, neighborhood: 3, bairro: 3, municipality: 2, province: 1 };
+  const typePrio = (t: string) => TYPE_PRIO[t] ?? 3;
   const norm = (s: string) =>
     (s || '')
       .toLowerCase()
@@ -104,8 +107,8 @@ async function bootstrap() {
   // Fonética de bolso (PT-Angola), aplicada aos dois lados (índice e
   // consulta): "Quilamba"→Kilamba, "pharmacia"→farmácia, "Muchima"→Muxima,
   // "Marjinal"→Marginal, "Sango"→Zango. Só funde o que se escreve mal.
-  const fold = (s: string) =>
-    norm(s)
+  const fold = (s: string) => {
+    const r = norm(s)
       .replace(/ph/g, 'f')
       .replace(/ch/g, 'x')
       .replace(/qu/g, 'k')
@@ -118,8 +121,10 @@ async function bootstrap() {
       .replace(/g(?=e|i)/g, 'j')
       .replace(/h/g, '')
       .replace(/y/g, 'i')
-      .replace(/w/g, 'u')
-      .replace(/([a-z])\1+/g, '$1');
+      .replace(/w/g, 'u');
+    // Colapsar dobradas ("Barra"→"bara") mas nunca em siglas ("kk", "bo").
+    return r.length > 2 ? r.replace(/([a-z])\1+/g, '$1') : r;
+  };
   // Nomes genéricos do OSM que não são destinos ("parking", "grass",
   // "Lote 3", "tvc"): o pino caía neles por estarem perto. Códigos de
   // prédio (V10, K21, F1) são moradas reais no Kilamba e ficam.
@@ -210,6 +215,7 @@ async function bootstrap() {
       placesNorm = [];
       placesFull = [];
       placesName = [];
+      placesAlias = [];
       let skipped = 0;
       for (const p of arr) {
         const lat = Array.isArray(p) ? p[1] : p.lat;
@@ -234,7 +240,28 @@ async function bootstrap() {
         });
         placesNorm.push(fold(name));
         placesName.push(nn);
+        placesAlias.push('');
         placesFull.push(fold(name + ' ' + placesIdx[placesIdx.length - 1].m + ' ' + placesIdx[placesIdx.length - 1].t));
+      }
+      try {
+        const af = resolveWebFile('aproveita-luanda.json');
+        if (af) {
+          const aj = JSON.parse(fs.readFileSync(af, 'utf8'));
+          for (const q of (aj.places || [])) {
+            const nm = String(q.name || '');
+            const la = Number(q.lat);
+            const lo = Number(q.lng);
+            if (!nm || nm.length < 2 || !Number.isFinite(la) || !Number.isFinite(lo)) continue;
+            const al = Array.isArray(q.aliases) ? q.aliases.filter((a: any) => typeof a === 'string' && a.trim()).slice(0, 8) : [];
+            placesIdx.push({ n: nm, lat: la, lng: lo, t: String(q.type || 'poi'), m: String(q.municipality || '') });
+            placesNorm.push(fold(nm));
+            placesName.push(fold(nm));
+            placesFull.push(fold(nm + ' ' + (q.municipality || '') + ' ' + (q.province || '')));
+            placesAlias.push(al.map((a: string) => fold(a)).join(' '));
+          }
+        }
+      } catch (e) {
+        console.warn('Aproveita index em falta:', (e as Error).message?.slice(0, 100));
       }
       // Centralidades e bairros em falta no OSM: cria o pino no centroide
       // dos locais com esse nome — sempre pesquisáveis ("Samba" deve dar
@@ -262,6 +289,7 @@ async function bootstrap() {
           placesIdx.unshift({ n: a.name, lat: sx / c, lng: sy / c, t: a.type, m: a.municipality });
           placesNorm.unshift(fold(a.name));
           placesName.unshift(fold(a.name));
+          placesAlias.unshift('');
           placesFull.unshift(fold(a.name + ' ' + a.municipality + ' ' + a.type));
           AREA_CENTROIDS[a.key] = { lat: sx / c, lng: sy / c };
           console.log(`Places seed: ${a.name} (${c} base) -> ${((sx / c) as number).toFixed(4)}, ${((sy / c) as number).toFixed(4)}`);
@@ -275,9 +303,10 @@ async function bootstrap() {
   loadPlaces();
 
   // Pesquisa de destinos LadiesGo — sem auth (como zone/route)
-  httpAdapter.get('/api/places/search', (req: any, res: any) => {
+  httpAdapter.get('/api/places/search', async (req: any, res: any) => {
     try {
-      const q = fold(String(req.query?.q || '').slice(0, 60));
+      const qRaw = String(req.query?.q || '').slice(0, 60);
+      const q = fold(qRaw);
       if (q.length < 2) {
         res.json({ places: [] });
         return;
@@ -306,7 +335,7 @@ async function bootstrap() {
             let ok = true;
             let fuzzy = false;
           for (const t of tt) {
-            if (full.includes(t)) continue;
+            if (full.includes(t) || (placesAlias[i] && placesAlias[i].includes(t))) continue;
             // Intenção por categoria ("condominio"→residenciais, etc.)
             // Testa no nome+município+tipo para apanhar "Zango"/"Kilamba".
             if (intentHit(t, placesIdx[i], full)) {
@@ -335,7 +364,7 @@ async function bootstrap() {
           const nameWords = nameNorm.split(/[\s,\-]+/);
           let nameHit = true;
           for (const t of tt) {
-            if (nameNorm.includes(t)) continue;
+            if (nameNorm.includes(t) || (placesAlias[i] && placesAlias[i].includes(t))) continue;
             if (t.length >= (maxLev > 1 ? 6 : 4) && nameWords.some((w) => w.length >= (maxLev > 1 ? 6 : 4) && levLim(t, w, maxLev) <= maxLev)) continue;
             if (intentHit(t, placesIdx[i], nameNorm)) continue;
             nameHit = false;
@@ -402,7 +431,7 @@ async function bootstrap() {
           }
         }
       }
-      out.sort((a, b) => a.score - b.score || a.dist - b.dist);
+      out.sort((a, b) => a.score - b.score || typePrio(placesIdx[b.i].t) - typePrio(placesIdx[a.i].t) || a.dist - b.dist);
       // Anti-duplicados: mesmo nome a <200m conta como um (entradas/saídas).
       const picked: number[] = [];
       for (const c of out) {
@@ -419,25 +448,50 @@ async function bootstrap() {
         if (dupe) continue;
         picked.push(c.i);
       }
+      const distKm = (la: number, lo: number) =>
+        hasLoc && Number.isFinite(lat) && Number.isFinite(lng)
+          ? Math.round(Math.sqrt((la - lat) ** 2 + (lo - lng) ** 2) * 111 * 10) / 10
+          : null;
+      const places = picked.map((i) => ({
+        name: placesIdx[i].n,
+        lat: placesIdx[i].lat,
+        lng: placesIdx[i].lng,
+        type: placesIdx[i].t,
+        municipality: placesIdx[i].m,
+        distanceKm: distKm(placesIdx[i].lat, placesIdx[i].lng),
+      }));
+      // Fallback Geoapify (logica Aproveita-Ja): pouco resultado local +
+      // chave configurada -> completa com enderecos globais (so Angola).
+      // Com cache de 1h para respeitar a quota gratuita.
+      if (places.length < 3 && process.env.GEOAPIFY_API_KEY) {
+        try {
+          const gk = `geo:${q}`;
+          let gj: any = cacheGet(gk);
+          if (!gj) {
+            const ctl = new AbortController();
+            const to = setTimeout(() => ctl.abort(), 6000);
+            const gr = await fetch(
+              `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(qRaw)}&filter=countrycode:ao&limit=5&apiKey=${process.env.GEOAPIFY_API_KEY}`,
+              { signal: ctl.signal },
+            );
+            clearTimeout(to);
+            gj = await gr.json();
+            cacheSet(gk, gj, 3600 * 1000);
+          }
+          const seen = new Set(places.map((x: any) => norm(x.name)));
+          for (const f of (gj.features || []).slice(0, 5)) {
+            const pr = f.properties || {};
+            const nm = String(pr.name || pr.address_line1 || '').slice(0, 80);
+            const glat = f.geometry?.coordinates?.[1];
+            const glng = f.geometry?.coordinates?.[0];
+            if (!nm || !Number.isFinite(glat) || !Number.isFinite(glng) || seen.has(norm(nm))) continue;
+            seen.add(norm(nm));
+            places.push({ name: nm, lat: glat, lng: glng, type: 'geo', municipality: String(pr.city || pr.municipality || pr.state || ''), distanceKm: distKm(glat, glng) });
+          }
+        } catch {}
+      }
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.json({
-        relaxed,
-        places: picked.map((i) => ({
-          name: placesIdx[i].n,
-          lat: placesIdx[i].lat,
-          lng: placesIdx[i].lng,
-          type: placesIdx[i].t,
-          municipality: placesIdx[i].m,
-          distanceKm:
-            hasLoc && Number.isFinite(lat) && Number.isFinite(lng)
-              ? Math.round(
-                  Math.sqrt(
-                    (placesIdx[i].lat - lat) ** 2 + (placesIdx[i].lng - lng) ** 2,
-                  ) * 111 * 10,
-                ) / 10
-              : null,
-        })),
-      });
+      res.json({ relaxed, places });
     } catch {
       res.status(400).json({ message: 'Pedido inválido.' });
     }
