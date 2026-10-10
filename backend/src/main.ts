@@ -99,10 +99,12 @@ async function bootstrap() {
   // Nomes genéricos do OSM que não são destinos ("parking", "grass",
   // "Lote 3", "tvc"): o pino caía neles por estarem perto. Códigos de
   // prédio (V10, K21, F1) são moradas reais no Kilamba e ficam.
-  const GENERIC_NAMES = new Set(['parking', 'grass', 'service', 'lote', 'tvc', 'yes', 'construction', 'site', 'local', 'ponto']);
+  const GENERIC_NAMES = new Set(['parking', 'grass', 'service', 'lote', 'tvc', 'yes', 'construction', 'site', 'local', 'ponto', 'toilets', 'toilet', 'atm']);
   // Troços de estrada (mesma rua repetida em vários pontos): continuam
   // pesquisáveis mas perdem para destinos com nome (lojas, escolas…).
   const ROAD_TYPES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'track', 'path', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
+  // Consultas de zona ("kilamba", "samba", …): estes tokens pedem a zona.
+  const AREA_KEYS = ['kilamba', 'zango', 'sequele', 'centralidade', 'centralidades', 'samba', 'viana', 'maianga', 'ingombota', 'benfica', 'kinaxixi'];
   const norm = (s: string) =>
     (s || '')
       .toLowerCase()
@@ -167,6 +169,12 @@ async function bootstrap() {
         if (typeof name !== 'string' || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
         const nn = norm(name);
         const nnWords = nn.split(/[\s,\-]+/).filter((w) => w.length > 1);
+        const nType = String(Array.isArray(p) ? p[5] || '' : p.type || '');
+        // Linhas elétricas/ferroviárias ("Cazenga - Viana") nunca são destino.
+        if (nType === 'line') { skipped++; continue; }
+        // Refs de torres/postes ("Benfica T196W", "1H2700m"): lixo do OSM.
+        // Códigos de prédio (V10, K21) não casam (letra+dígitos sem letra a fechar).
+        if (/[a-z]\d{3,}[a-z]/.test(nn)) { skipped++; continue; }
         if (!nn || nn.length < 2 || GENERIC_NAMES.has(nn) || /^lote\s*\d*$/.test(nn) || (nnWords.length > 0 && nnWords.every((w) => GENERIC_NAMES.has(w)))) { skipped++; continue; }
         placesIdx.push({
           n: name,
@@ -179,12 +187,19 @@ async function bootstrap() {
         placesName.push(nn);
         placesFull.push(norm(name + ' ' + placesIdx[placesIdx.length - 1].m + ' ' + placesIdx[placesIdx.length - 1].t));
       }
-      // Centralidades em falta no OSM (Kilamba/Zango/Sequele): cria o pino
-      // no centroide dos locais com esse nome — sempre pesquisáveis.
+      // Centralidades e bairros em falta no OSM: cria o pino no centroide
+      // dos locais com esse nome — sempre pesquisáveis ("Samba" deve dar
+      // a Samba, não uma torre elétrica "Benfica T196W").
       const AREA_SEEDS = [
-        { key: 'kilamba', name: 'Centralidade do Kilamba', municipality: 'Belas' },
-        { key: 'zango', name: 'Centralidade do Zango', municipality: 'Viana' },
-        { key: 'sequele', name: 'Centralidade do Sequele', municipality: 'Cacuaco' },
+        { key: 'kilamba', name: 'Centralidade do Kilamba', municipality: 'Belas', type: 'centralidade' },
+        { key: 'zango', name: 'Centralidade do Zango', municipality: 'Viana', type: 'centralidade' },
+        { key: 'sequele', name: 'Centralidade do Sequele', municipality: 'Cacuaco', type: 'centralidade' },
+        { key: 'samba', name: 'Samba', municipality: 'Samba', type: 'bairro' },
+        { key: 'viana', name: 'Viana', municipality: 'Viana', type: 'bairro' },
+        { key: 'maianga', name: 'Maianga', municipality: 'Maianga', type: 'bairro' },
+        { key: 'ingombota', name: 'Ingombota', municipality: 'Ingombota', type: 'bairro' },
+        { key: 'benfica', name: 'Benfica', municipality: 'Talatona', type: 'bairro' },
+        { key: 'kinaxixi', name: 'Kinaxixi', municipality: 'Ingombota', type: 'bairro' },
       ];
       for (const a of AREA_SEEDS) {
         let sx = 0, sy = 0, c = 0;
@@ -192,13 +207,13 @@ async function bootstrap() {
           const words = placesNorm[i].split(/[\s,\-]+/);
           if (words.some((w) => w === a.key || (w.length > 6 && w.startsWith(a.key)))) { sx += placesIdx[i].lat; sy += placesIdx[i].lng; c++; }
         }
-        if (c >= 3) {
+        if (c >= 1) {
           // No INÍCIO: o varrimento para aos 300 e as sementes têm de
           // ser vistas primeiro (a bonus de -1 só conta se chegar lá).
-          placesIdx.unshift({ n: a.name, lat: sx / c, lng: sy / c, t: 'centralidade', m: a.municipality });
+          placesIdx.unshift({ n: a.name, lat: sx / c, lng: sy / c, t: a.type, m: a.municipality });
           placesNorm.unshift(norm(a.name));
           placesName.unshift(norm(a.name));
-          placesFull.unshift(norm(a.name + ' ' + a.municipality + ' centralidade'));
+          placesFull.unshift(norm(a.name + ' ' + a.municipality + ' ' + a.type));
           console.log(`Places seed: ${a.name} (${c} base) -> ${((sx / c) as number).toFixed(4)}, ${((sy / c) as number).toFixed(4)}`);
         }
       }
@@ -278,9 +293,9 @@ async function bootstrap() {
           }
           if (!nameHit) score += 1;
           if (ROAD_TYPES.has(placesIdx[i].t)) score += 1;
-          // "kilamba"/"zango"/"sequele" querem a centralidade, não um
-          // bar com nome parecido: centralidades sobem para primeiro.
-          if (placesIdx[i].t === 'centralidade' && tt.some((t) => t === 'kilamba' || t === 'zango' || t === 'sequele' || t === 'centralidade' || t === 'centralidades')) score = Math.max(0, score - 1);
+          // "kilamba"/"samba"/… querem a zona, não um bar com nome parecido:
+          // centralidades e bairros-âncora sobem para primeiro.
+          if ((placesIdx[i].t === 'centralidade' || placesIdx[i].t === 'bairro') && tt.some((t) => AREA_KEYS.includes(t))) score = Math.max(0, score - 1);
           let dist = 0;
           if (hasLoc) {
             const dLa = placesIdx[i].lat - lat;
