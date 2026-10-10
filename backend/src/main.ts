@@ -382,7 +382,10 @@ async function bootstrap() {
           const wantsKiaxi = tt.some((t) => t === 'kiaxi' || t === 'kiaxe');
           const isKiaxi = placesIdx[i].m === 'Kilamba Kiaxi'
             || (placesName[i] || '').split(/[\s,\-]+/).some((w) => w === 'kiaxi' || w === 'kiaxe');
-          if (areaTok === 'kilamba' && !isAnchor && !wantsKiaxi && isKiaxi) continue;
+          // ... excepto nome forte: comeca pelo pedido ("Kilamba x34" fica).
+          const nmStrong = placesName[i] || '';
+          const strongName = tt.some((t) => nmStrong === t || nmStrong.startsWith(t + ' ') || nmStrong.startsWith(t + ','));
+          if (areaTok === 'kilamba' && !isAnchor && !wantsKiaxi && isKiaxi && !strongName) continue;
           if ((fold(placesIdx[i].t) === T_CENT || fold(placesIdx[i].t) === T_BAIR) && areaTok) score = (areaTok === fold('centralidade') || areaTok === fold('centralidades')) ? Math.max(0, score - 1) : score - 2;
           // "kilamba bloco" = blocos DENTRO do Kilamba: fora do raio da
           // zona (12 km), o que só bate via município/tipo cai fora.
