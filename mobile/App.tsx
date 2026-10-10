@@ -220,7 +220,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#61188E' },
-  web: { flex: 1, backgroundColor: '#ece8f3' },
+  web: { flex: 1, backgroundColor: '#61188E' },
   retry: {
     marginTop: 28,
     backgroundColor: '#fff',
