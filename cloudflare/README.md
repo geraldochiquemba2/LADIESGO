@@ -19,6 +19,6 @@ wrangler pages deploy webapp --project-name=ladiesgo
 ```
 
 ## 3. Mobile
-`EXPO_PUBLIC_API_URL=https://api.ladiesgo.ao/api/v1` (já em `mobile/eas.json`).
+`EXPO_PUBLIC_API_URL=https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1` (em `mobile/eas.json`; trocar para `https://api.ladiesgo.ao/api/v1` quando o domínio .ao existir com custom domain no Worker).
 GPS adaptativo: 5s/10m em viagem, 10s/20m online (ver `mobile/src/services/driverBgLocation.ts`).
 Sem socket obrigatório: REST polling em `GET /trips/:id` devolve motorista+ETA.

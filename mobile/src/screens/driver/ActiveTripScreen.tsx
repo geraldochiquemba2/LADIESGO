@@ -20,8 +20,9 @@ import {
   Layer,
   type CameraRef,
 } from '@maplibre/maplibre-react-native';
-import { MAP_STYLE, fitCoordinates, lineBetween } from '../../components/appMap';
+import { MAP_STYLE, MAP_STYLE_FALLBACK, fitCoordinates } from '../../components/appMap';
 import MapAttribution from '../../components/MapAttribution';
+import { curvePath, fetchRouteLegs, toGeoJSONLine } from '../../services/geo';
 import * as Location from 'expo-location';
 import { socketService } from '../../services/socket';
 import { tripsApi, driversApi } from '../../services/api';
@@ -49,6 +50,63 @@ export default function ActiveTripScreen({ navigation, route }: any) {
   const [pin, setPin] = useState('');
 
   const latestMyLoc = useRef<{ lat: number; lng: number } | null>(null);
+  const statusRef = useRef<TripStatus>((trip.status as TripStatus) || 'ACCEPTED');
+
+  // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
+  const [mapStyle, setMapStyle] = useState(MAP_STYLE);
+
+  // Rota real multi-pernas (estratégia da web: drvLegs/drvCurve + OSRM,
+  // curva imediata + anti-race, refresh no máx. a cada 15s).
+  const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
+  const [routeMeta, setRouteMeta] = useState<{ distanceKm: number | null; durationMin: number | null; real: boolean } | null>(null);
+  const routeSeq = useRef(0);
+  const lastRouteFetch = useRef<{ ts: number; key: string }>({ ts: 0, key: '' });
+
+  // Paragens intermédias da viagem (tolera vários formatos).
+  const tripStops = useRef<[number, number][]>([]);
+
+  const buildWaypoints = (from: { lat: number; lng: number }, st: TripStatus): [number, number][] => {
+    const pts: [number, number][] = [[from.lat, from.lng]];
+    if (st === 'IN_PROGRESS') {
+      for (const s of tripStops.current) pts.push(s);
+      if (Number.isFinite(trip.dropoffLat) && Number.isFinite(trip.dropoffLng)) {
+        pts.push([trip.dropoffLat, trip.dropoffLng]);
+      }
+    } else if (Number.isFinite(trip.pickupLat) && Number.isFinite(trip.pickupLng)) {
+      pts.push([trip.pickupLat, trip.pickupLng]);
+    }
+    return pts;
+  };
+
+  const loadRouteLegs = async (from: { lat: number; lng: number }, st: TripStatus) => {
+    const legs = buildWaypoints(from, st);
+    if (legs.length < 2) {
+      setRoutePoints([]);
+      setRouteMeta(null);
+      return;
+    }
+    const key = `${st}|` + legs.map((p) => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join('>');
+    const now = Date.now();
+    if (now - lastRouteFetch.current.ts < 15000 && lastRouteFetch.current.key === key) return;
+    lastRouteFetch.current = { ts: now, key };
+    const my = ++routeSeq.current;
+    // Desenho imediato em curva por perna (não deixa o mapa vazio)
+    let immediate: [number, number][] = [];
+    for (let i = 1; i < legs.length; i++) {
+      const seg = curvePath(legs[i - 1], legs[i]);
+      immediate = immediate.concat(immediate.length ? seg.slice(1) : seg);
+    }
+    setRoutePoints(immediate);
+    const info = await fetchRouteLegs(legs);
+    if (routeSeq.current !== my) return;
+    setRoutePoints(info.points);
+    setRouteMeta({ distanceKm: info.distanceKm, durationMin: info.durationMin, real: info.real });
+  };
+
+  useEffect(() => {
+    statusRef.current = status;
+    if (latestMyLoc.current) loadRouteLegs(latestMyLoc.current, status);
+  }, [status]);
 
   useEffect(() => {
     let sub: Location.LocationSubscription | null = null;
@@ -58,6 +116,24 @@ export default function ActiveTripScreen({ navigation, route }: any) {
       const { status: perm } = await Location.requestForegroundPermissionsAsync();
       if (perm !== 'granted') return;
       setDriverActiveTrip(true).catch(() => {});
+
+      // Lê paragens guardadas na viagem (se existirem).
+      try {
+        const raw = (trip as any)?.stops;
+        if (Array.isArray(raw)) {
+          tripStops.current = raw
+            .map((s: any): [number, number] | null => {
+              if (s == null) return null;
+              if (Array.isArray(s) && Number.isFinite(s[0]) && Number.isFinite(s[1])) return [s[0], s[1]];
+              if (Number.isFinite(s?.lat) && Number.isFinite(s?.lng)) return [s.lat, s.lng];
+              if (Number.isFinite(s?.latitude) && Number.isFinite(s?.longitude)) return [s.latitude, s.longitude];
+              if (Array.isArray(s?.c) && Number.isFinite(s.c[0]) && Number.isFinite(s.c[1])) return [s.c[0], s.c[1]];
+              return null;
+            })
+            .filter((p): p is [number, number] => p !== null)
+            .slice(0, 3);
+        }
+      } catch {}
 
       // Viagem ativa: 5s/10m. REST throttled 5s (Workers) + socket (Render).
       sub = await Location.watchPositionAsync(
@@ -78,6 +154,7 @@ export default function ActiveTripScreen({ navigation, route }: any) {
             lastRestTs = now;
             driversApi.updateLocation(pos.lat, pos.lng).catch(() => {});
           }
+          loadRouteLegs(pos, statusRef.current);
 
           // Keep map centered on driver
           cameraRef.current?.easeTo({
@@ -209,7 +286,8 @@ export default function ActiveTripScreen({ navigation, route }: any) {
     <View style={styles.container}>
       <MapLibreMap
         style={styles.map}
-        mapStyle={MAP_STYLE}
+        mapStyle={mapStyle}
+        onDidFailLoadingMap={() => setMapStyle(MAP_STYLE_FALLBACK)}
         attribution={false}
         logo={false}
         compass={false}
@@ -228,20 +306,19 @@ export default function ActiveTripScreen({ navigation, route }: any) {
           </View>
         </Marker>
 
-        {/* Route line: driver → target */}
-        <GeoJSONSource
-          id="targetRouteSource"
-          data={lineBetween(
-            [myLocation.lng, myLocation.lat],
-            [targetCoord.longitude, targetCoord.latitude],
-          )}
-        >
-          <Layer
-            id="targetRouteLine"
-            type="line"
-            style={{ lineColor: '#FFD700', lineWidth: 3, lineDasharray: [2, 1.5] }}
-          />
-        </GeoJSONSource>
+        {/* Route line: driver → pickup/stops/destino (rota real OSRM, como na web) */}
+        {routePoints.length > 0 && (
+          <GeoJSONSource
+            id="targetRouteSource"
+            data={toGeoJSONLine(routePoints)}
+          >
+            <Layer
+              id="targetRouteLine"
+              type="line"
+              style={{ lineColor: '#61188E', lineWidth: 5, lineOpacity: 0.9 }}
+            />
+          </GeoJSONSource>
+        )}
 
         {/* Pickup / destination pin */}
         <Marker
@@ -279,11 +356,25 @@ export default function ActiveTripScreen({ navigation, route }: any) {
                 {status === 'IN_PROGRESS' ? 'ETA to destination' : 'ETA to pickup'}
               </Text>
               <Text style={styles.etaValue}>{eta.minutes} min · {eta.distanceKm} km</Text>
+              {routeMeta?.distanceKm != null && (
+                <Text style={styles.routeInfo}>
+                  🛣️ {routeMeta.distanceKm.toFixed(1).replace('.', ',')} km
+                  {routeMeta.durationMin != null && ` · ~${Math.max(1, Math.round(routeMeta.durationMin))} min`}
+                  {!routeMeta.real && ' · estimado'}
+                </Text>
+              )}
             </View>
           </View>
         ) : (
           <View style={styles.etaRow}>
             <Text style={styles.etaLabel}>Waiting for passenger location...</Text>
+            {routeMeta?.distanceKm != null && (
+              <Text style={styles.routeInfo}>
+                🛣️ {routeMeta.distanceKm.toFixed(1).replace('.', ',')} km
+                {routeMeta.durationMin != null && ` · ~${Math.max(1, Math.round(routeMeta.durationMin))} min`}
+                {!routeMeta.real && ' · estimado'}
+              </Text>
+            )}
           </View>
         )}
 
@@ -341,7 +432,7 @@ export default function ActiveTripScreen({ navigation, route }: any) {
 
         <View style={styles.fareRow}>
           <Text style={styles.fareLabel}>Fare Estimate</Text>
-          <Text style={styles.fareValue}>{trip.fareEstimate} SAR</Text>
+          <Text style={styles.fareValue}>{trip.fareEstimate} Kz</Text>
         </View>
 
         {/* Turn-by-turn navigation in Google Maps */}
@@ -447,6 +538,7 @@ const styles = StyleSheet.create({
   },
   etaLabel: { color: '#999', fontSize: 12 },
   etaValue: { color: '#FFD700', fontSize: 20, fontWeight: 'bold', marginTop: 2 },
+  routeInfo: { color: '#FFD700', fontSize: 13, fontWeight: '700', marginTop: 6 },
 
   passengerCard: {
     backgroundColor: '#f8f8f8',

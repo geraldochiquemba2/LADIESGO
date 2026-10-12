@@ -5,6 +5,10 @@ import type { CameraRef } from '@maplibre/maplibre-react-native';
 // Attribution "© OpenStreetMap © CARTO" is shown via <MapAttribution />.
 export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
 
+// Fallback se o Positron falhar (onDidFailLoadingMap): estilo OSM Liberty.
+// Equivalente ao fallback OSM -> CARTO da web (ladiesgo-home.html).
+export const MAP_STYLE_FALLBACK = 'https://tiles.openfreemap.org/styles/liberty';
+
 // Fit the camera around a set of [lng, lat] coordinates (replaces
 // react-native-maps fitToCoordinates). Padding is in screen points.
 export function fitCoordinates(

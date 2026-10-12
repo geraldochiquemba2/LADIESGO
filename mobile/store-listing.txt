@@ -3,7 +3,8 @@ LADIESGO! — FICHA DE LOJA (Play Store + App Store)
 Pacote/Bundle: com.ladiesgo.app (slug/scheme ladiesgo — não mudar)
 Nome loja + binário: LadiesGo!
 Versão: 1.0.0 (build iOS 5 via EAS, autoIncrement no EAS production)
-API produção: https://ladiesgo.onrender.com/api/v1
+API produção: https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1
+Site/app web: https://ladiesgo.pages.dev/ladiesgo (a app iOS é WebView disto)
 Cor marca: #61188E
 
 TÍTULO CURTO (30 chars)
@@ -37,8 +38,7 @@ Play: Mapas e navegação. App Store: Viagens / Navigation.
 Classificação conteúdo: 4+ / PEGI 3. Sem conteúdo adulto.
 
 URL PRIVACIDADE (obrigatório nas 2 lojas)
-Publicar webapp/privacidade.html e colar aqui o URL público, ex:
-https://ladiesgo.onrender.com/privacidade
+https://ladiesgo.pages.dev/privacidade (live, Cloudflare Pages)
 Texto já conforme Lei 22/11 Angola (APDP).
 
 SEGURANÇA DOS DADOS (Play Data Safety) — declarar:
@@ -59,9 +59,9 @@ Juntar vídeo de 30s a mostrar: Online -> abrir Waze -> posição continua.
 
 3) Notificações: "motorista encontrada, chegada e conclusão."
 
-CONTA DE TESTE PARA REVISORES (criadas no backend de produção em 2026-10-10)
-Passageira: +244923000001 / senha 1234
-Motorista:  +244923000002 / senha 1234 (criada pelo admin, APPROVED direta)
+CONTA DE TESTE PARA REVISORES (verificada na BD produção em 2026-10-10, login 200)
+Passageira: +244923000001 / senha 1234567890
+Motorista:  +244923000002 / senha 1234567890 (APPROVED, pronta a aceitar)
 Admin:      +244999999999 / 1234567890 (demo local)
 Instruções: entrar, pedir viagem Casa->Trabalho, aceitar como motorista.
 

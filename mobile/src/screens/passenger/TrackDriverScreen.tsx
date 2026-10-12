@@ -16,8 +16,9 @@ import {
   Layer,
   type CameraRef,
 } from '@maplibre/maplibre-react-native';
-import { MAP_STYLE, fitCoordinates, lineBetween } from '../../components/appMap';
+import { MAP_STYLE, MAP_STYLE_FALLBACK, fitCoordinates } from '../../components/appMap';
 import MapAttribution from '../../components/MapAttribution';
+import { curvePath, fetchRoute, toGeoJSONLine } from '../../services/geo';
 import * as Location from 'expo-location';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../store';
@@ -46,7 +47,33 @@ export default function TrackDriverScreen({ navigation }: any) {
   const [liveFare, setLiveFare] = useState<{ fare: number; distanceKm: number; moving: boolean } | null>(null);
 
   const latestMyLoc = useRef<{ lat: number; lng: number } | null>(null);
+  const driverLocRef = useRef<{ lat: number; lng: number } | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
+  const [mapStyle, setMapStyle] = useState(MAP_STYLE);
+
+  // Rota real pelas ruas (estratégia da web: curva imediata + OSRM,
+  // anti-race por sequência, refresh no máx. a cada 15s).
+  const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
+  const [routeMeta, setRouteMeta] = useState<{ distanceKm: number | null; durationMin: number | null; real: boolean } | null>(null);
+  const routeSeq = useRef(0);
+  const lastRouteFetch = useRef<{ ts: number; key: string }>({ ts: 0, key: '' });
+
+  const loadRoute = useCallback(async (from: { lat: number; lng: number }, to: { lat: number; lng: number }) => {
+    const key = `${from.lat.toFixed(4)},${from.lng.toFixed(4)}>${to.lat.toFixed(4)},${to.lng.toFixed(4)}`;
+    const now = Date.now();
+    if (now - lastRouteFetch.current.ts < 15000 && lastRouteFetch.current.key === key) return;
+    lastRouteFetch.current = { ts: now, key };
+    const my = ++routeSeq.current;
+    const fromLL: [number, number] = [from.lat, from.lng];
+    const toLL: [number, number] = [to.lat, to.lng];
+    setRoutePoints(curvePath(fromLL, toLL));
+    const info = await fetchRoute(fromLL, toLL);
+    if (routeSeq.current !== my) return;
+    setRoutePoints(info.points);
+    setRouteMeta({ distanceKm: info.distanceKm, durationMin: info.durationMin, real: info.real });
+  }, []);
 
   // Live countdown — ticks down every second from latest ETA
   useEffect(() => {
@@ -90,19 +117,24 @@ export default function TrackDriverScreen({ navigation }: any) {
           latestMyLoc.current = pos;
           setMyLocation(pos);
           socketService.emit('passenger:location-update', pos);
+          if (driverLocRef.current) loadRoute(pos, driverLocRef.current);
         },
       );
 
       // Receive driver's real-time location
       socketService.on('server:driver-location', (data) => {
         const dLoc = { lat: data.lat, lng: data.lng };
+        driverLocRef.current = dLoc;
         setDriverLocation(dLoc);
         setDriverHeading(data.heading ?? -1);
         setEta({ minutes: data.etaMinutes, distanceKm: data.distanceKm });
         setEtaSeconds(data.etaMinutes * 60);
         dispatch(updateDriverLocation({ lat: data.lat, lng: data.lng }));
         if (data.status) setTripStatus(data.status);
-        if (latestMyLoc.current) fitMap(latestMyLoc.current, dLoc);
+        if (latestMyLoc.current) {
+          fitMap(latestMyLoc.current, dLoc);
+          loadRoute(latestMyLoc.current, dLoc);
+        }
       });
 
       // Live fare meter — only ticks when driver is moving
@@ -185,7 +217,8 @@ export default function TrackDriverScreen({ navigation }: any) {
     <View style={styles.container}>
       <MapLibreMap
         style={styles.map}
-        mapStyle={MAP_STYLE}
+        mapStyle={mapStyle}
+        onDidFailLoadingMap={() => setMapStyle(MAP_STYLE_FALLBACK)}
         attribution={false}
         logo={false}
         compass={false}
@@ -204,19 +237,16 @@ export default function TrackDriverScreen({ navigation }: any) {
           </View>
         </Marker>
 
-        {/* Route line: my location → driver */}
-        {driverLocation && (
+        {/* Route line: my location → driver (rota real OSRM, como na web) */}
+        {driverLocation && routePoints.length > 0 && (
           <GeoJSONSource
             id="driverRouteSource"
-            data={lineBetween(
-              [myLocation.lng, myLocation.lat],
-              [driverLocation.lng, driverLocation.lat],
-            )}
+            data={toGeoJSONLine(routePoints)}
           >
             <Layer
               id="driverRouteLine"
               type="line"
-              style={{ lineColor: '#FFD700', lineWidth: 3, lineDasharray: [2, 1.5] }}
+              style={{ lineColor: '#61188E', lineWidth: 5, lineOpacity: 0.9 }}
             />
           </GeoJSONSource>
         )}
@@ -259,6 +289,13 @@ export default function TrackDriverScreen({ navigation }: any) {
               <Text style={styles.etaDist}>  Connecting to driver...</Text>
             </View>
           )}
+          {routeMeta?.distanceKm != null && (
+            <Text style={styles.routeInfo}>
+              🛣️ {routeMeta.distanceKm.toFixed(1).replace('.', ',')} km
+              {routeMeta.durationMin != null && ` · ~${Math.max(1, Math.round(routeMeta.durationMin))} min`}
+              {!routeMeta.real && ' · estimado'}
+            </Text>
+          )}
         </View>
 
         {/* Live fare meter — only shows during IN_PROGRESS, pauses when driver stops */}
@@ -270,7 +307,7 @@ export default function TrackDriverScreen({ navigation }: any) {
               </Text>
               <Text style={styles.fareMeterDist}>{liveFare.distanceKm} km driven</Text>
             </View>
-            <Text style={styles.fareMeterFare}>{liveFare.fare.toFixed(2)} SAR</Text>
+            <Text style={styles.fareMeterFare}>{liveFare.fare.toFixed(2)} Kz</Text>
           </View>
         )}
 
@@ -367,6 +404,7 @@ const styles = StyleSheet.create({
   etaMinutes: { color: '#FFD700', fontSize: 24, fontWeight: 'bold' },
   etaDot: { color: '#555', fontSize: 22, marginHorizontal: 8 },
   etaDist: { color: '#aaa', fontSize: 16 },
+  routeInfo: { color: '#FFD700', fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: 8 },
 
   statusText: {
     fontSize: 17,

@@ -1,0 +1,38 @@
+# LadiesGo! — a app nativa (WebView) tem de ver sempre o HTML mais recente.
+# Sem isto o iOS/Android servia o mapa antigo da cache e as melhorias
+# (rota real, fallback OSM->CARTO, zona) não apareciam na app.
+/*.html
+  Cache-Control: no-cache, must-revalidate
+/
+  Cache-Control: no-cache, must-revalidate
+/app
+  Cache-Control: no-cache, must-revalidate
+/home
+  Cache-Control: no-cache, must-revalidate
+/t
+  Cache-Control: no-cache, must-revalidate
+/luanda-map
+  Cache-Control: no-cache, must-revalidate
+
+# URLs bonitas do Pages (pretty URLs, sem .html): o HTML final é
+# servido aqui — sem estas regras o no-cache acima não se aplicava.
+/ladiesgo
+  Cache-Control: no-cache, must-revalidate
+/ladiesgo-login
+  Cache-Control: no-cache, must-revalidate
+/ladiesgo-home
+  Cache-Control: no-cache, must-revalidate
+/track
+  Cache-Control: no-cache, must-revalidate
+/admin
+  Cache-Control: no-cache, must-revalidate
+/privacidade
+  Cache-Control: no-cache, must-revalidate
+
+# Imagens/logo: imutáveis, cache longa para poupar dados.
+/*.jpg
+  Cache-Control: public, max-age=31536000, immutable
+/*.png
+  Cache-Control: public, max-age=31536000, immutable
+/*.svg
+  Cache-Control: public, max-age=31536000, immutable

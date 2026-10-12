@@ -20,7 +20,7 @@ import {
   type CameraRef,
   type PressEvent,
 } from '@maplibre/maplibre-react-native';
-import { MAP_STYLE, fitCoordinates } from '../../components/appMap';
+import { MAP_STYLE, MAP_STYLE_FALLBACK, fitCoordinates } from '../../components/appMap';
 import {
   curvePath,
   fetchRoute,
@@ -71,6 +71,9 @@ export default function BookRideScreen({ navigation, route }: any) {
   const [routeMeta, setRouteMeta] = useState<{ distanceKm: number | null; durationMin: number | null; real: boolean } | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const routeSeq = useRef(0);
+
+  // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
+  const [mapStyle, setMapStyle] = useState(MAP_STYLE);
 
   // Pesquisa de destino (Nominatim, limitada a Luanda)
   const [search, setSearch] = useState('');
@@ -235,7 +238,8 @@ export default function BookRideScreen({ navigation, route }: any) {
     <View style={styles.container}>
       <MapLibreMap
         style={styles.map}
-        mapStyle={MAP_STYLE}
+        mapStyle={mapStyle}
+        onDidFailLoadingMap={() => setMapStyle(MAP_STYLE_FALLBACK)}
         onPress={step === 'map' ? handleMapPress : undefined}
         attribution={false}
         logo={false}

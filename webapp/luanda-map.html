@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="pt">
 <head>
+<script>/* LadiesGo: /api/* -> Worker (Pages é estático; em localhost usa o server.js local) */
+!function(){var A='https://ladiesgo-api.ladiesgo-ao.workers.dev',h=location.hostname;if(h==='localhost'||h==='127.0.0.1'||h===''||h.indexOf('192.168.')===0||h.indexOf('10.')===0||h.indexOf('172.')===0)return;var o=window.fetch;window.fetch=function(u,x){try{if(typeof u==='string'){if(u.indexOf('/api/')===0)u=A+u;}else if(u instanceof Request){var p=new URL(u.url,location.href);if(p.origin===location.origin&&p.pathname.indexOf('/api/')===0)u=new Request(A+p.pathname+p.search,u);}}catch(e){}return o.call(this,u,x);};}();</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LadiesGo — Captar Luanda (Overpass)</title>

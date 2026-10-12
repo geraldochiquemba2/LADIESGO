@@ -17,8 +17,9 @@ import {
   UserLocation,
   type CameraRef,
 } from '@maplibre/maplibre-react-native';
-import { MAP_STYLE } from '../../components/appMap';
+import { MAP_STYLE, MAP_STYLE_FALLBACK } from '../../components/appMap';
 import MapAttribution from '../../components/MapAttribution';
+import { LUANDA } from '../../services/geo';
 import * as Location from 'expo-location';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../store';
@@ -60,6 +61,9 @@ export default function PassengerHomeScreen({ navigation }: any) {
   const [selectedDriver, setSelectedDriver] = useState<LiveDriver | null>(null);
   const cameraRef = useRef<CameraRef>(null);
 
+  // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
+  const [mapStyle, setMapStyle] = useState(MAP_STYLE);
+
   // Get location and center map
   useEffect(() => {
     (async () => {
@@ -84,8 +88,8 @@ export default function PassengerHomeScreen({ navigation }: any) {
       // Try REST for initial drivers list with phone/name/vehicle
       try {
         const res = await driversApi.getNearby(
-          location?.latitude ?? 24.7136,
-          location?.longitude ?? 46.6753,
+          location?.latitude ?? LUANDA.latitude,
+          location?.longitude ?? LUANDA.longitude,
         );
         const initial: LiveDriver[] = (res.data ?? []).filter(
           (d: any) => d.currentLat && d.currentLng,
@@ -169,8 +173,8 @@ export default function PassengerHomeScreen({ navigation }: any) {
   };
 
   const zoomToCity = () => {
-    const lat = location?.latitude ?? 24.7136;
-    const lng = location?.longitude ?? 46.6753;
+    const lat = location?.latitude ?? LUANDA.latitude;
+    const lng = location?.longitude ?? LUANDA.longitude;
     cameraRef.current?.easeTo({ center: [lng, lat], zoom: 9.5, duration: 600 });
   };
 
@@ -184,7 +188,8 @@ export default function PassengerHomeScreen({ navigation }: any) {
       {/* Full-screen map */}
       <MapLibreMap
         style={styles.map}
-        mapStyle={MAP_STYLE}
+        mapStyle={mapStyle}
+        onDidFailLoadingMap={() => setMapStyle(MAP_STYLE_FALLBACK)}
         attribution={false}
         logo={false}
         compass={false}
@@ -194,7 +199,7 @@ export default function PassengerHomeScreen({ navigation }: any) {
           initialViewState={
             location
               ? { center: [location.longitude, location.latitude], zoom: 12 }
-              : { center: [46.6753, 24.7136], zoom: 9.5 }
+              : { center: [LUANDA.longitude, LUANDA.latitude], zoom: 9.5 }
           }
         />
         <UserLocation />
@@ -225,7 +230,7 @@ export default function PassengerHomeScreen({ navigation }: any) {
               </View>
               {r.fareEstimate ? (
                 <View style={styles.requestFareBubble}>
-                  <Text style={styles.requestFareText}>{r.fareEstimate} SAR</Text>
+                  <Text style={styles.requestFareText}>{r.fareEstimate} Kz</Text>
                 </View>
               ) : null}
             </View>

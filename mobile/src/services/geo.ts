@@ -59,7 +59,7 @@ export function curvePath(a: [number, number], b: [number, number]): [number, nu
 }
 
 function apiRoot(): string {
-  const base = process.env.EXPO_PUBLIC_API_URL || 'https://api.ladiesgo.ao/api/v1';
+  const base = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
   return base.replace(/\/api\/v1\/?$/, '');
 }
 
@@ -107,6 +107,27 @@ export async function fetchRoute(
     }
   } catch {}
   return { points: fallback, distanceKm: null, durationMin: null, real: false };
+}
+
+// Rota multi-pernas (origem + paragens + destino), como routeFull/drvCurve
+// da web: cada perna vai ao OSRM e concatena; soma distância/duração.
+// Entrada em [lat, lng].
+export async function fetchRouteLegs(waypoints: [number, number][]): Promise<RouteInfo> {
+  if (waypoints.length < 2) return { points: [], distanceKm: null, durationMin: null, real: false };
+  if (waypoints.length === 2) return fetchRoute(waypoints[0], waypoints[1]);
+  let points: [number, number][] = [];
+  let dist = 0;
+  let dur = 0;
+  let real = true;
+  for (let i = 1; i < waypoints.length; i++) {
+    const leg = await fetchRoute(waypoints[i - 1], waypoints[i]);
+    points = points.concat(points.length ? leg.points.slice(1) : leg.points);
+    if (typeof leg.distanceKm === 'number') dist += leg.distanceKm;
+    else real = false;
+    if (typeof leg.durationMin === 'number') dur += leg.durationMin;
+    else real = false;
+  }
+  return { points, distanceKm: dist, durationMin: dur, real };
 }
 
 // Nome da zona (bairro/município) para mostrar na UI.

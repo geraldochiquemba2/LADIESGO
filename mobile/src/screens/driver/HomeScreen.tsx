@@ -16,7 +16,7 @@ import {
   Marker,
   type CameraRef,
 } from '@maplibre/maplibre-react-native';
-import { MAP_STYLE } from '../../components/appMap';
+import { MAP_STYLE, MAP_STYLE_FALLBACK } from '../../components/appMap';
 import MapAttribution from '../../components/MapAttribution';
 import * as Location from 'expo-location';
 import { startDriverBgTracking, stopDriverBgTracking, ensureDriverBgTracking } from '../../services/driverBgLocation';
@@ -38,6 +38,9 @@ export default function DriverHomeScreen({ navigation }: any) {
   const [liveRequests, setLiveRequests] = useState<Map<string, { id: string; pickupLat: number; pickupLng: number; fareEstimate?: number }>>(new Map());
   const cameraRef = useRef<CameraRef>(null);
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
+
+  // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
+  const [mapStyle, setMapStyle] = useState(MAP_STYLE);
 
   // Initial setup: get location + load driver status
   useEffect(() => {
@@ -238,7 +241,8 @@ export default function DriverHomeScreen({ navigation }: any) {
       {location && (
         <MapLibreMap
           style={styles.map}
-          mapStyle={MAP_STYLE}
+          mapStyle={mapStyle}
+          onDidFailLoadingMap={() => setMapStyle(MAP_STYLE_FALLBACK)}
           attribution={false}
           logo={false}
           compass={false}

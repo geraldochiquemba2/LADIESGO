@@ -9,17 +9,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import './src/services/bgLocation';
 import { BG_LOCATION_TASK } from './src/services/bgLocation';
 
-// A app iOS é a LadiesGo! web (Render) em ecrã cheio: um só código,
+// A app iOS é a LadiesGo! web (Cloudflare Pages) em ecrã cheio: um só código,
 // o mesmo produto e marca em todo o lado. Login, viagens, chat, SOS,
 // Eliminar conta e Denunciar vivem no site. A casca nativa trata de:
 // localização, notificações com som, e upload de fotos/documentos.
-const SITE_URL = 'https://ladiesgo.onrender.com/';
-const API_URL = 'https://ladiesgo.onrender.com/api/v1';
+// ?v= rebenta a cache da WebView: sem isto o iOS servia o HTML antigo
+// e as melhorias do mapa não apareciam. Aumenta a cada deploy do site.
+const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261012';
+const API_URL = 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
 const EAS_PROJECT_ID = 'ec5885e0-c677-4023-b65a-6642fe20f3fd';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -101,17 +105,23 @@ export default function App() {
         jwtRef.current = token;
         AsyncStorage.setItem('lg_bg_state', JSON.stringify(state)).catch(() => {});
         if (token && pushTokenRef.current) registerPushToken(token, pushTokenRef.current);
-        ensureBgTask(!!token);
+        // Apple (background location): só liga o GPS em fundo quando faz
+        // falta — motorista online ou viagem ativa. Passageira sem viagem
+        // não precisa de fundo; poupa bateria e cumpre a guideline 5.1.1.
+        ensureBgTask(state);
       }
     } catch {}
   };
 
-  // GPS em fundo para AMBOS: pede "Sempre" uma vez com sessão e liga a
-  // task; sem sessão (logout) desliga para poupar bateria.
-  const ensureBgTask = async (hasSession: boolean) => {
+  // GPS em fundo SÓ quando necessário (Apple guideline 5.1.1 + background
+  // location): motorista online OU viagem ativa (passageira a partilhar /
+  // a ser seguida). Sem sessão ou passageira idle: desliga para poupar
+  // bateria. O pedido "Sempre" só acontece neste contexto, nunca no login.
+  const ensureBgTask = async (state: { jwt: string | null; role: string | null; tripId: string | null; online: boolean }) => {
     try {
       const started = await Location.hasStartedLocationUpdatesAsync(BG_LOCATION_TASK);
-      if (!hasSession) {
+      const needsBackground = !!state.jwt && (state.online || !!state.tripId) && (state.role === 'DRIVER' || !!state.tripId);
+      if (!needsBackground) {
         if (started) await Location.stopLocationUpdatesAsync(BG_LOCATION_TASK);
         return;
       }
@@ -130,7 +140,7 @@ export default function App() {
         distanceInterval: 15,
         pausesUpdatesAutomatically: false,
         activityType: Location.ActivityType.AutomotiveNavigation,
-        showsBackgroundLocationIndicator: false,
+        showsBackgroundLocationIndicator: true,
         foregroundService: {
           notificationTitle: 'LadiesGo!',
           notificationBody: 'Partilha de posição ativa para a tua segurança.',
@@ -239,7 +249,7 @@ const splash = StyleSheet.create({
     alignItems: 'center',
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#61188E',
     justifyContent: 'center',
     alignItems: 'center',

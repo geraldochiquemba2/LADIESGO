@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { neon } from '@neondatabase/serverless';
 
-type Env = { DATABASE_URL: string; JWT_SECRET: string; JWT_EXPIRES_IN?: string };
+type Env = { DATABASE_URL: string; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -117,6 +117,22 @@ app.post('/api/v1/auth/login', async (c) => {
   const user = rows[0];
   const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: user.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
   return c.json({ user: withoutHash(user), accessToken, isNew: false });
+});
+
+// REGISTER: cria conta com número + senha (bcrypt via pgcrypto no Neon).
+app.post('/api/v1/auth/register', async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const { phone, password, name, role } = await c.req.json().catch(() => ({}));
+  const cleanPhone = String(phone || '').trim();
+  if (!cleanPhone || !password || String(password).length < 4)
+    return c.json({ message: 'Número ou senha inválidos.' }, 400);
+  const finalRole = String(role || 'PASSENGER').toUpperCase() === 'DRIVER' ? 'DRIVER' : 'PASSENGER';
+  const exists = await sql`SELECT id FROM users WHERE phone = ${cleanPhone} LIMIT 1`;
+  if (exists.length) return c.json({ message: 'Número já registado. Entra com a tua senha.' }, 409);
+  const rows = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, crypt(${String(password)}, gen_salt('bf', 10)), ${String(name || '').slice(0, 60) || null}, ${finalRole}, true, NOW()) RETURNING id, phone, name, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
+  const user = rows[0];
+  const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: user.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
+  return c.json({ user: withoutHash(user), accessToken, isNew: true });
 });
 
 app.post('/api/v1/auth/refresh-token', async (c) => {
@@ -329,6 +345,121 @@ app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => c.json({
 app.put('/api/v1/notifications/read-all', requireAuth, async (c) => c.json({ success: true }));
 app.post('/api/v1/payments/create-intent', requireAuth, async (c) => c.json({ clientSecret: null, cash: true }));
 app.post('/api/v1/payments/confirm', requireAuth, async (c) => c.json({ success: true }));
+
+// ─── TURN + CALL SIGNALING (voz passageira↔motorista via Metered) ───
+const FALLBACK_ICE = [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+  {
+    urls: ['turn:openrelay.metered.ca:443?transport=tcp', 'turns:openrelay.metered.ca:443'],
+    username: 'openrelay',
+    credential: 'openrelay',
+  },
+];
+const PER_CALL_SEC = 120;
+const MB_PER_MIN = 0.6;
+const CALL_TYPES = ['offer', 'answer', 'ice', 'reject', 'end', 'cancel'];
+
+async function assertParticipant(sql: any, tripId: string, userId: string) {
+  const rows = await sql`SELECT t.id FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${tripId} AND (t."passengerId" = ${userId} OR d."userId" = ${userId}) LIMIT 1`;
+  return rows.length > 0;
+}
+async function turnQuota(sql: any, freeMb: string | undefined) {
+  const budget = Math.floor(((Number(freeMb) || 300) / MB_PER_MIN) * 60);
+  const agg = await sql`SELECT COALESCE(SUM("durationSec"), 0)::int AS used FROM call_logs WHERE "createdAt" >= date_trunc('month', NOW())`;
+  const used = Number(agg[0]?.used || 0);
+  const remaining = Math.max(0, budget - used);
+  return { remainingSec: remaining, budgetSec: budget, usedSec: used, perCallSec: PER_CALL_SEC, exhausted: remaining <= 0 };
+}
+
+app.get('/api/v1/turn/ice', requireAuth, async (c) => {
+  const domain = String(c.env.METERED_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const apiKey = String(c.env.METERED_TURN_APIKEY || '').trim();
+  if (!domain || !apiKey) return c.json({ iceServers: FALLBACK_ICE, demo: true });
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(`https://${domain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`, { signal: ctl.signal });
+    clearTimeout(t);
+    const j: any = await r.json();
+    if (!r.ok || !Array.isArray(j)) throw new Error('metered');
+    return c.json({ iceServers: j, demo: false });
+  } catch {
+    return c.json({ iceServers: FALLBACK_ICE, demo: true });
+  }
+});
+app.get('/api/v1/turn/quota', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  return c.json(await turnQuota(sql, c.env.METERED_FREE_MB));
+});
+app.post('/api/v1/turn/log', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const { tripId, durationSec } = await c.req.json().catch(() => ({}));
+  if (!tripId) return c.json({ message: 'Viagem inválida.' }, 400);
+  if (!(await assertParticipant(sql, String(tripId), user.sub)))
+    return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
+  const dur = Math.min(3600, Math.max(0, Math.floor(Number(durationSec) || 0)));
+  await sql`INSERT INTO call_logs (id, "tripId", "userId", "durationSec") VALUES (gen_random_uuid()::text, ${String(tripId)}, ${user.sub}, ${dur})`;
+  return c.json(await turnQuota(sql, c.env.METERED_FREE_MB));
+});
+app.post('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const { type, payload } = await c.req.json().catch(() => ({}));
+  if (!(await assertParticipant(sql, id, user.sub)))
+    return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
+  if (CALL_TYPES.indexOf(String(type)) < 0) return c.json({ message: 'Sinal inválido.' }, 400);
+  const p = payload === undefined || payload === null ? null : JSON.stringify(payload).slice(0, 4000);
+  const rows = await sql`INSERT INTO call_signals (id, "tripId", "senderId", type, payload) VALUES (gen_random_uuid()::text, ${id}, ${user.sub}, ${String(type)}, ${p}::json) RETURNING "createdAt"`;
+  sql`DELETE FROM call_signals WHERE "tripId" = ${id} AND "createdAt" < NOW() - INTERVAL '10 minutes'`.catch(() => {});
+  return c.json({ ok: true, ts: new Date(rows[0].createdAt).getTime() });
+});
+app.get('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  if (!(await assertParticipant(sql, id, user.sub)))
+    return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
+  const sinceMs = Number(c.req.query('since')) || 0;
+  const cutoff = sinceMs > 0 ? sinceMs : Date.now() - 60 * 1000;
+  const rows = await sql`SELECT "senderId", type, payload, "createdAt" FROM call_signals WHERE "tripId" = ${id} AND "createdAt" > to_timestamp(${cutoff / 1000}) ORDER BY "createdAt" ASC LIMIT 50`;
+  return c.json({
+    signals: rows.map((s: any) => ({
+      from: s.senderId,
+      type: s.type,
+      payload: typeof s.payload === 'string' ? JSON.parse(s.payload) : s.payload,
+      ts: new Date(s.createdAt).getTime(),
+    })),
+    now: Date.now(),
+  });
+});
+
+// ─── CHAT DA VIAGEM (só intervenientes) ───
+app.get('/api/v1/trips/:id/chat', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  if (!(await assertParticipant(sql, id, user.sub)))
+    return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
+  const sinceMs = Number(c.req.query('since')) || 0;
+  const rows = await sql`SELECT "senderName", text, "createdAt" FROM chat_messages WHERE "tripId" = ${id} AND "createdAt" > to_timestamp(${sinceMs / 1000}) ORDER BY "createdAt" ASC LIMIT 50`;
+  return c.json({
+    msgs: rows.map((m: any) => ({ from: m.senderName || '?', text: m.text, ts: new Date(m.createdAt).getTime() })),
+  });
+});
+app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  if (!(await assertParticipant(sql, id, user.sub)))
+    return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
+  const { from, text } = await c.req.json().catch(() => ({}));
+  const clean = String(text || '').trim().slice(0, 300);
+  if (!clean) return c.json({ message: 'Mensagem vazia.' }, 400);
+  await sql`INSERT INTO chat_messages (id, "tripId", "senderId", "senderName", text) VALUES (gen_random_uuid()::text, ${id}, ${user.sub}, ${String(from || '').slice(0, 40) || 'Eu'}, ${clean})`;
+  return c.json({ ok: true });
+});
 
 // ─── PLACES / ZONE / ROUTE (sem BD, com cache edge) ───
 app.get('/api/places/search', async (c) => {
