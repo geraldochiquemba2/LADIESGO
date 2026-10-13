@@ -1842,6 +1842,10 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         if (offerFirst) await pushTripToDriver(sql, offerFirst, tripId, '🔔 Novo pedido LadiesGo!', body);
         else await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!', String(b.cat || ''));
         await ringStart(c.env);
+        try {
+          const fbTok = String((c.env as any).FB_SCRAPE_TOKEN || '');
+          if (fbTok) await fetch('https://graph.facebook.com/v26.0/?id=' + encodeURIComponent('https://ladiesgo.pages.dev/t?id=' + tripId) + '&scrape=true&access_token=' + encodeURIComponent(fbTok), { method: 'POST', signal: AbortSignal.timeout(10000) });
+        } catch {}
       })());
     } catch {}
     return c.json({ id: tripId });
