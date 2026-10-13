@@ -970,7 +970,7 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
       const pRows = await sql`
         SELECT t.*,
           u.name AS passenger_name, u.phone AS passenger_phone,
-          du.name AS driver_name, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+          du.name AS driver_name, du.phone AS driver_phone, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
         FROM trips t
         LEFT JOIN users u ON u.id = t."passengerId"
         LEFT JOIN drivers d ON d.id = t."driverId"
@@ -986,7 +986,7 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
       const tripsRes = await sql`
         SELECT t.*, 
           u.name AS passenger_name, u.phone AS passenger_phone,
-          du.name AS driver_name, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+          du.name AS driver_name, du.phone AS driver_phone, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
         FROM trips t
         LEFT JOIN users u ON u.id = t."passengerId"
         LEFT JOIN drivers d ON d.id = t."driverId"
@@ -1008,6 +1008,9 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
         reason: r.cancelReason,
         driver: r.driver_name,
         driverId: r.driverId,
+        passengerPhone: r.passenger_phone || '',
+        driverPhone: r.driver_phone || '',
+        vehicle: [r.car_make, r.car_model, r.car_plate].filter(Boolean).join(' · '),
         pickupLat: r.pickupLat,
         pickupLng: r.pickupLng,
         dropoffLat: r.dropoffLat,
@@ -1021,7 +1024,7 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
       const tripsRes = await sql`
         SELECT t.*, 
           u.name AS passenger_name, u.phone AS passenger_phone,
-          du.name AS driver_name, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+          du.name AS driver_name, du.phone AS driver_phone, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
         FROM trips t
         LEFT JOIN users u ON u.id = t."passengerId"
         LEFT JOIN drivers d ON d.id = t."driverId"
@@ -1042,6 +1045,9 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
         reason: r.cancelReason,
         driver: r.driver_name,
         driverId: r.driverId,
+        passengerPhone: r.passenger_phone || '',
+        driverPhone: r.driver_phone || '',
+        vehicle: [r.car_make, r.car_model, r.car_plate].filter(Boolean).join(' · '),
         pickupLat: r.pickupLat,
         pickupLng: r.pickupLng,
         dropoffLat: r.dropoffLat,
