@@ -1348,6 +1348,30 @@ app.get('/api/v1/categories', async (c) => {
   }
 });
 
+// POST /api/v1/admin/categories — Adicionar categoria (solta o enum rideType para TEXT uma vez)
+app.post('/api/v1/admin/categories', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b.name || '').trim().slice(0, 30);
+  const color = String(b.color || '').trim();
+  const mult = Number(b.mult);
+  if (name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5) {
+    return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5).' }, 400);
+  }
+  const code = name.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 16) || 'CAT';
+  try {
+    await getCategories(sql);
+    try { await sql`ALTER TABLE trips ALTER COLUMN "rideType" TYPE TEXT USING "rideType"::text`; } catch {}
+    const rows = await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES (${code}, ${name}, ${color}, ${mult}, 99) RETURNING code, name, color, mult`;
+    const r = rows[0];
+    return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult) } });
+  } catch (e) {
+    if (String(e).includes('duplicate') || String(e).includes('already exists')) return c.json({ message: 'Já existe categoria com esse nome.' }, 409);
+    console.error('add category error:', e);
+    return c.json({ message: 'Falhou ao criar.' }, 500);
+  }
+});
+
 // PUT /api/v1/admin/categories/:code — Editar nome/cor/mult
 app.put('/api/v1/admin/categories/:code', adminMiddleware, async (c) => {
   const sql = neon(c.env.DATABASE_URL);

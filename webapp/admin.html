@@ -108,6 +108,8 @@
     <h2>Categorias de viatura</h2>
     <p class="mut">Nome e cor aparecem na app; o multiplicador define o preço (base × mult). O código é fixo.</p>
     <table><thead><tr><th>Código</th><th>Nome</th><th>Cor</th><th>Mult.</th><th>Exemplo 1 km</th><th></th></tr></thead><tbody id="cats"><tr><td colspan="6" class="mut">A carregar…</td></tr></tbody></table>
+    <h2 style="margin-top:16px">Adicionar categoria</h2>
+    <div class="filters"><input id="ncName" placeholder="Nome (ex: XL)" maxlength="30" autocomplete="off"><input type="color" id="ncColor" value="#61188E" style="width:52px;height:42px;border:1.5px solid var(--ln);border-radius:12px;padding:2px;background:#fff"><input id="ncMult" placeholder="Mult. (ex: 2)" inputmode="decimal" autocomplete="off" style="max-width:120px"><button class="chip" data-a="addcat" style="align-self:center">Adicionar</button></div>
     <div class="mut" id="catMsg" style="margin:8px 0"></div>
   </section>
   <section id="sec-new" style="display:none">
@@ -255,7 +257,21 @@ async function decide(id,ok){
 }
 function catEx(mult){const m=parseFloat(String(mult).replace(',','.'));if(!Number.isFinite(m))return'—';return '≈ '+fmt(Math.max(900,Math.round((500+400*1+70*3)*m/100)*100))+' Kz';}
 function renderCats(){
+  try{if(document.activeElement&&$('cats')&&$('cats').contains(document.activeElement))return;}catch(e){}
   $('cats').innerHTML=CATS.map(x=>'<tr><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" oninput="document.getElementById(\'ce_'+esc(x.code||'')+'\').textContent=catEx(this.value)" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td class="mut" id="ce_'+esc(x.code||'')+'">'+catEx(x.mult)+'<br><span class="mut sm">1 km × '+esc(x.mult||'')+'</span></td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button></td></tr>').join('')||'<tr><td colspan="6" class="mut">Sem categorias.</td></tr>';
+}
+async function addCat(){
+  const m=$('catMsg');if(m){m.textContent='';m.style.color='';}
+  const gv=id=>{try{return ($(id)||{}).value||'';}catch(e){return'';}};
+  const body={name:gv('ncName').trim(),color:gv('ncColor'),mult:parseFloat(String(gv('ncMult')).replace(',','.'))};
+  if(body.name.length<2){if(m)m.textContent='Escreve o nome.';return;}
+  try{
+    const r=await fetch('/api/v1/admin/categories',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
+    try{$('ncName').value='';$('ncMult').value='';}catch(e){}
+    toast('Categoria criada ✓','ok');load();
+  }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Falhou ao criar.',false);}
 }
 async function saveCat(code){
   const m=$('catMsg');if(m)m.textContent='';
@@ -425,6 +441,8 @@ document.addEventListener('click',e=>{
   if(mk){mkDriver();return}
   const sc=e.target.closest('[data-a="savecat"]');
   if(sc){saveCat(sc.dataset.id);return}
+  const ac=e.target.closest('[data-a="addcat"]');
+  if(ac){addCat();return}
   const pg=e.target.closest('[data-a="upage"],[data-a="tpage"]');
   if(pg){const d=Number(pg.dataset.d)||0;if(pg.dataset.a==='upage')uPage=Math.max(1,uPage+d);else tPage=Math.max(1,tPage+d);load();return}
   const vu=e.target.closest('[data-a="usertrips"]');
