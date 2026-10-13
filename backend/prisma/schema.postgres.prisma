@@ -271,3 +271,26 @@ model Notification {
   @@index([userId, isRead, createdAt])
   @@map("notifications")
 }
+
+// Geridas no painel admin via Worker. Declaradas aqui para o
+// `prisma db push --accept-data-loss` NÃO as apagar.
+model RideCategory {
+  code  String  @id
+  name  String
+  color String  @default("#61188E")
+  mult  Decimal @default(1)
+  sort  Int     @default(0)
+
+  @@map("ride_categories")
+}
+
+model Report {
+  id             String   @id @default(cuid())
+  reporterId     String
+  reportedUserId String
+  reason         String
+  tripId         String?
+  createdAt      DateTime @default(now())
+
+  @@map("reports")
+}

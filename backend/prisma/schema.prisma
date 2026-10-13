@@ -218,3 +218,25 @@ model Notification {
   @@index([userId, isRead])
   @@map("notifications")
 }
+
+// Geridas no painel admin via Worker (ver schema.postgres.prisma).
+model RideCategory {
+  code  String @id
+  name  String
+  color String @default("#61188E")
+  mult  Float  @default(1)
+  sort  Int    @default(0)
+
+  @@map("ride_categories")
+}
+
+model Report {
+  id             String   @id @default(cuid())
+  reporterId     String
+  reportedUserId String
+  reason         String
+  tripId         String?
+  createdAt      DateTime @default(now())
+
+  @@map("reports")
+}
