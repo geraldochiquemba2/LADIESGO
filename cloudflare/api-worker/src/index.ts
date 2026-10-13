@@ -1710,7 +1710,7 @@ async function webDriverInfo(sql: any, driverId: string | null) {
 // A passageira pede → a oferta vai só para a motorista online mais próxima
 // durante 60s. Sem resposta/rejeição, passa à seguinte. Esgotada a fila,
 // abre a todas (broadcast) até ao limite de 10min.
-const OFFER_TTL_SEC = 20;
+const OFFER_TTL_SEC = 15;
 const OFFER_MAX = 15;
 async function ensureOfferColumns(sql: any) {
   try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerQueue" JSONB`; } catch {}
