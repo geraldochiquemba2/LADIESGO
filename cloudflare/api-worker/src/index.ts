@@ -1186,8 +1186,7 @@ app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
   const userRes = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, crypt('0987654321', gen_salt('bf', 10)), ${name}, 'DRIVER', true, NOW()) RETURNING id`;
   const userId = userRes[0].id;
   // Create driver
-  const hasVehicle = licenseNumber && carPlate;
-  const driverStatus = hasVehicle ? 'APPROVED' : 'PENDING';
+  const driverStatus = 'APPROVED'; // criada pelo admin entra logo aprovada
   await sql`
     INSERT INTO drivers (id, "userId", "licenseNumber", "carPlate", "carMake", "carModel", "carYear", "carColor", status, "updatedAt")
     VALUES (gen_random_uuid()::text, ${userId}, ${licenseNumber || null}, ${carPlate || null}, ${carMake || null}, ${carModel || null}, ${carYear || null}, ${carColor || null}, ${driverStatus}, NOW())
