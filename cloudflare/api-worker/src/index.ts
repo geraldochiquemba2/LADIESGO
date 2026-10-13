@@ -1351,8 +1351,17 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         const zr = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pLa}&lon=${pLo}&format=json&zoom=14`, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
         const zj: any = await zr.json();
         const za = (zj && zj.address) || {};
-        pickupName = za.suburb || za.neighbourhood || za.quarter || za.city_district || za.town || za.city || 'Ponto no mapa';
-      } catch { pickupName = 'Ponto no mapa'; }
+        pickupName = za.suburb || za.neighbourhood || za.quarter || za.city_district || za.town || za.city || '';
+      } catch {}
+      if (!pickupName) {
+        try {
+          const br = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${pLa}&longitude=${pLo}&localityLanguage=pt`, { signal: AbortSignal.timeout(8000) });
+          const bj: any = await br.json();
+          pickupName = bj.locality || bj.city || bj.principalSubdivision || '';
+        } catch {}
+      }
+      if (!pickupName) pickupName = 'Ponto no mapa';
+      pickupName = pickupName.slice(0, 60);
     }
     const dist = havKm(pLa, pLo, dLa, dLo);
     const stops = Array.isArray(b.stops) ? b.stops.slice(0, 3).map((x: any) => ({ n: String(x.n || '').slice(0, 60), a: String(x.a || '').slice(0, 80), lat: Number(x.lat), lng: Number(x.lng) })).filter((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lng)) : [];
