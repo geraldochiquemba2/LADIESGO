@@ -10,7 +10,7 @@ bindings = [{ name = "RINGER", class_name = "TripRinger" }]
 
 [[migrations]]
 tag = "v1"
-new_classes = ["TripRinger"]
+new_sqlite_classes = ["TripRinger"]
 
 # Segredos (nunca commitar):
 # wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require
