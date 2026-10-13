@@ -401,10 +401,10 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const t = rows[0];
   if (c.req.query('view') === 'web') {
     const drv = await webDriverInfo(sql, t.driverId);
-    const pu = await sql`SELECT name FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    const pu = await sql`SELECT name, phone FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico'), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
   }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
   let driver = null;
@@ -1178,10 +1178,10 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const t = rows[0];
   if (c.req.query('view') === 'web') {
     const drv = await webDriverInfo(sql, t.driverId);
-    const pu = await sql`SELECT name FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    const pu = await sql`SELECT name, phone FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico'), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
   }
   let driver = null;
   if (t.driverId) {
@@ -1416,7 +1416,7 @@ function pay2method(p: any): string {
 // Posição viva da passageira (efémera; como no server.js local).
 const paxLive = new Map<string, { lat: number; lng: number; ts: number }>();
 
-function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) => string) {
+function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) => string, paxPhone?: string) {
   const addr = String(r.dropoffAddress || 'Luanda');
   const cut = addr.indexOf(' · ');
   const destN = cut >= 0 ? addr.slice(0, cut) : addr;
@@ -1428,6 +1428,7 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
     status: NEON2WEB[r.status] || r.status,
     passengerId: r.passengerId,
     passengerName: paxName || r.passengerName || 'Passageira',
+    passengerPhone: paxPhone || r.passengerPhone || '',
     pickup: { lat: Number(r.pickupLat), lng: Number(r.pickupLng), name: String(r.pickupAddress || 'Ponto no mapa') },
     dest: { n: destN, a: destA, lat: Number(r.dropoffLat), lng: Number(r.dropoffLng) },
     stops: stops.map((s: any) => ({ n: String(s.n || ''), a: String(s.a || ''), lat: Number(s.lat), lng: Number(s.lng) })),
