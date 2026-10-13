@@ -20,11 +20,13 @@ const API_URL = 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
 const EAS_PROJECT_ID = 'ec5885e0-c677-4023-b65a-6642fe20f3fd';
 
 Notifications.setNotificationHandler({
+  // Dentro da app: sem banner/som do sistema (a home já toca o alerta).
+  // Fora da app (fundo/fechada): o iOS apresenta tudo na mesma.
   handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
+    shouldShowAlert: false,
+    shouldShowBanner: false,
+    shouldShowList: false,
+    shouldPlaySound: false,
     shouldSetBadge: false,
   }),
 });
