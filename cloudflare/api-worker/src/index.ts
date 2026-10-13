@@ -594,6 +594,26 @@ app.get('/api/places/search', async (c) => {
     return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
   }
 });
+// Fallback offline: Nominatim e bigdatacloud limitam IPs de datacenter
+// (todo o tráfego do Worker sai dos mesmos IPs). Lista compacta de
+// municípios de Luanda — devolve o mais próximo até 60 km.
+const LUANDA_ZONES: [string, number, number][] = [
+  ['Ingombota', -8.815, 13.231], ['Maianga', -8.860, 13.244],
+  ['Rangel', -8.830, 13.256], ['Cazenga', -8.850, 13.292],
+  ['Sambizanga', -8.822, 13.270], ['Samba', -8.873, 13.200],
+  ['Viana', -8.903, 13.374], ['Cacuaco', -8.783, 13.375],
+  ['Belas', -8.950, 13.200], ['Talatona', -8.920, 13.181],
+  ['Kilamba Kiaxi', -8.901, 13.234], ['Icolo e Bengo', -9.070, 13.520],
+  ['Benfica', -8.940, 13.165], ['Sequele', -8.888, 13.488],
+];
+function offlineZone(la: number, lo: number): string {
+  let best = '', bd = 60;
+  for (const [n, zla, zlo] of LUANDA_ZONES) {
+    const d = havKm(la, lo, zla, zlo);
+    if (d < bd) { bd = d; best = n; }
+  }
+  return best;
+}
 app.get('/api/zone', async (c) => {
   const la = Number(c.req.query('lat')), lo = Number(c.req.query('lng'));
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Pedido inválido.' }, 400);
@@ -611,6 +631,7 @@ app.get('/api/zone', async (c) => {
       zone = bj.locality || bj.city || bj.principalSubdivision || '';
     } catch {}
   }
+  if (!zone) zone = offlineZone(la, lo);
   return c.json({ zone }, 200, { 'Cache-Control': 'public, max-age=86400' });
 });
 app.get('/api/route', async (c) => {
@@ -1367,7 +1388,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
           pickupName = bj.locality || bj.city || bj.principalSubdivision || '';
         } catch {}
       }
-      if (!pickupName) pickupName = 'Ponto no mapa';
+      if (!pickupName) pickupName = offlineZone(pLa, pLo) || 'Ponto no mapa';
       pickupName = pickupName.slice(0, 60);
     }
     const dist = havKm(pLa, pLo, dLa, dLo);
