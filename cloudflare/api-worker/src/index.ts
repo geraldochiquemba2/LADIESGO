@@ -1501,6 +1501,8 @@ export class TripRinger {
     try {
       const tripId: string = await this.state.storage.get('tripId');
       if (!tripId) return;
+      const sent: number = (await this.state.storage.get('sent')) || 0;
+      if (sent >= 4) return;
       const sql = neon(this.env.DATABASE_URL);
       const st = await sql`SELECT id, status, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "createdAt" FROM trips WHERE id = ${tripId} LIMIT 1`;
       if (!st.length || st[0].status !== 'REQUESTED') return;
@@ -1509,6 +1511,7 @@ export class TripRinger {
       const addr = String(t.dropoffAddress || 'Luanda');
       const cut = addr.indexOf(' · ');
       await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Pedido a aguardar — LadiesGo!');
+      await this.state.storage.put('sent', sent + 1);
       await this.state.storage.setAlarm(Date.now() + 3000);
     } catch {
       try { await this.state.storage.setAlarm(Date.now() + 10000); } catch {}
