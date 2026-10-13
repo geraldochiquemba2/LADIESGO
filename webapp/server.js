@@ -9,7 +9,7 @@ const busy = new Set();
 const chats = new Map();
 const callSignals = new Map();
 let tripN = 0;
-// Oferta sequencial: 60s por motorista, mais próxima primeiro.
+// Oferta sequencial: 15s por motorista, mais próxima primeiro.
 const OFFER_TTL_MS = 15000;
 function havKm(aLa, aLo, bLa, bLo) {
   const R = 6371, t = Math.PI / 180;
@@ -38,7 +38,11 @@ function advanceOffer(t) {
   const gone = (id) => t.skipped.indexOf(id) >= 0 || t.missed.indexOf(id) >= 0;
   let idx = (t.offerIdx || 0) + (t.offeredDriverId ? 1 : 0);
   while (idx < q.length && gone(q[idx])) idx += 1;
-  if (idx >= q.length) { t.broadcast = true; }
+  if (idx >= q.length) {
+    const again = q.filter((id) => t.skipped.indexOf(id) < 0);
+    if (!again.length) { t.broadcast = true; }
+    else { t.missed = []; idx = q.indexOf(again[0]); t.offerIdx = idx; t.offeredDriverId = q[idx]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; }
+  }
   else { t.offerIdx = idx; t.offeredDriverId = q[idx]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; }
   return t;
 }
@@ -145,9 +149,9 @@ const server = http.createServer(async (req, res) => {
             } catch (e) { t.pickup.name = 'Ponto no mapa'; }
           }
           trips.set(id, t);
-          // Oferta sequencial (60s por motorista, mais próxima primeiro).
+          // Oferta sequencial (15s por motorista, mais próxima primeiro).
           try {
-            const cands = [...drivers.values()].filter(d => Date.now() - d.ts < 45000 && !busy.has(d.id)).map(d => ({ id: d.id, km: havKm(t.pickup.lat, t.pickup.lng, d.lat, d.lng) })).filter(x => Number.isFinite(x.km)).sort((a, b) => a.km - b.km).slice(0, 15).map(x => x.id);
+            const cands = [...drivers.values()].filter(d => Date.now() - d.ts < 45000 && !busy.has(d.id)).map(d => ({ id: d.id, km: havKm(t.pickup.lat, t.pickup.lng, d.lat, d.lng) })).filter(x => Number.isFinite(x.km) && x.km * 2 <= 20).sort((a, b) => a.km - b.km).slice(0, 15).map(x => x.id);
             t.offerQueue = cands; t.offerIdx = 0; t.skipped = []; t.missed = [];
             if (cands.length) { t.offeredDriverId = cands[0]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; t.broadcast = false; }
             else { t.offeredDriverId = null; t.offerExpiresAt = 0; t.broadcast = true; }
@@ -162,7 +166,7 @@ const server = http.createServer(async (req, res) => {
       const did = String(new URL(req.url, 'http://localhost').searchParams.get('driverId') || '').slice(0, 64);
       const fresh = [...trips.values()].filter(t => { if (t.status !== 'pending') return false; if (t.scheduledAt) return Date.now() > t.scheduledAt - 900000 && Date.now() < t.scheduledAt + 3600000; return Date.now() - t.ts < 600000; });const byPax = new Map();for (const t of fresh) { const c = byPax.get(t.passengerId); if (!c || t.ts > c.ts) byPax.set(t.passengerId, t); }const list = [...byPax.values()].sort((a, b) => a.ts - b.ts).slice(-20);
       if (did) list.forEach(t => { t.views = t.views || []; if (t.views.indexOf(did) < 0) t.views.push(did); });
-      // Oferta sequencial: só a motorista ofertada vê (60s cada).
+      // Oferta sequencial: só a motorista ofertada vê (15s cada).
       const mine = list.filter(t => {
         advanceOffer(t);
         const sk = Array.isArray(t.skipped) ? t.skipped : [];
@@ -237,7 +241,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.url.startsWith('/api/v1/trips/history') && req.method === 'GET') { const sendH = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); }; const u = new URL(req.url, 'http://localhost'); const p = String(u.searchParams.get('passengerId') || '').slice(0, 64); const d = String(u.searchParams.get('driverId') || '').slice(0, 64); const list = [...trips.values()].filter(t => (p && t.passengerId === p) || (d && t.driverId === d)).slice(-30).reverse() .map(t => ({ id: t.id, dest: (t.dest ? t.dest.n : '') + ' · ' + (t.dest ? t.dest.a : ''), fare: t.fare, cat: t.cat, status: t.status, by: t.by || '', reason: t.reason || '', other: d ? (t.passengerName || '') : (t.driverName || ''), ts: t.ts, from: (t.pickup && t.pickup.name) || '', pay: t.pay || '', stopsN: (t.stops || []).length, stops: (t.stops || []).map(x => ({ n: String(x.n || '').slice(0, 60) })) })); sendH(200, { trips: list }); return; }
-    // Rejeitar/passar a oferta à seguinte (60s por motorista).
+    // Rejeitar/passar a oferta à seguinte (15s por motorista).
     const skm = req.url.match(/^\/api\/v1\/trips\/([A-Za-z0-9]+)\/skip$/);
     if (skm && req.method === 'POST') {
       const t = trips.get(skm[1]);
@@ -256,7 +260,11 @@ const server = http.createServer(async (req, res) => {
             const gone = (id) => t.skipped.indexOf(id) >= 0 || t.missed.indexOf(id) >= 0;
             let idx = (t.offerIdx || 0) + 1;
             while (idx < q.length && gone(q[idx])) idx += 1;
-            if (idx >= q.length) t.broadcast = true;
+            if (idx >= q.length) {
+              const again = q.filter((id) => t.skipped.indexOf(id) < 0);
+              if (!again.length) t.broadcast = true;
+              else { t.missed = []; idx = q.indexOf(again[0]); t.offerIdx = idx; t.offeredDriverId = q[idx]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; }
+            }
             else { t.offerIdx = idx; t.offeredDriverId = q[idx]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; }
           }
           saveTrips();

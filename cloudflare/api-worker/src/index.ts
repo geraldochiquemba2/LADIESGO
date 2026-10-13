@@ -413,7 +413,7 @@ app.post('/api/v1/trips/request', requireAuth, async (c) => {
   const { mults } = await catMaps(sql);
   const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (mults[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
   const rows = await sql`INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt") VALUES (gen_random_uuid()::text, ${user.sub}, ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)}, ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)}, 'REQUESTED', ${String(b.rideType || 'ECONOMY')}, ${fare}, ${Math.round(dist * 10) / 10}, ${String(b.paymentMethod || 'CASH')}, NOW(), NOW()) RETURNING *`;
-  // Oferta sequencial por proximidade (60s cada); sem candidatas abre a todas.
+  // Oferta sequencial por proximidade (15s cada); sem candidatas abre a todas.
   try {
     await ensureOfferColumns(sql);
     const q = await buildOfferQueue(sql, Number(b.pickupLat), Number(b.pickupLng), String(b.rideType || 'ECONOMY'));
@@ -454,7 +454,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
       seen.add(r.passengerId);
       if (myCats && myCats.indexOf(byCode[r.rideType] || '') < 0) continue;
       if (offerSkippedOf(r).indexOf(did) >= 0) continue;
-      // Oferta sequencial: só a motorista ofertada vê (60s cada, mais
+      // Oferta sequencial: só a motorista ofertada vê (15s cada, mais
       // próxima primeiro). Viagens antigas sem fila contam como broadcast.
       const q = offerQueueOf(r);
       if (!q.length && !r.offeredDriverId) {
@@ -593,7 +593,16 @@ app.post('/api/v1/trips/:id/skip', requireAuth, async (c) => {
       let idx = Number(t.offerIdx || 0) + 1;
       while (idx < q.length && gone(q[idx])) idx += 1;
       if (idx >= q.length) {
-        await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
+        const againS = q.filter((x: string) => skipped.indexOf(x) < 0);
+        if (!againS.length) {
+          await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
+        } else {
+          idx = q.indexOf(againS[0]);
+          const expAtS = new Date(Date.now() + OFFER_TTL_SEC * 1000);
+          await sql`UPDATE trips SET "offerIdx" = ${idx}, "offeredDriverId" = ${q[idx]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAtS as any}, "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "offerMissed" = '[]'::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
+          const rrS = await sql`SELECT "pickupAddress", "dropoffAddress", "fareEstimate" FROM trips WHERE id = ${id} LIMIT 1`;
+          if (rrS.length) await pushTripToDriver(sql, q[idx], id, '🔔 Novo pedido LadiesGo!', `${String(rrS[0].pickupAddress || '')} → ${String(rrS[0].dropoffAddress || '').split(' · ')[0]} · ${Number(rrS[0].fareEstimate || 0)} Kz`);
+        }
       } else {
         const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
         await sql`UPDATE trips SET "offerIdx" = ${idx}, "offeredDriverId" = ${q[idx]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
@@ -1706,10 +1715,11 @@ async function webDriverInfo(sql: any, driverId: string | null) {
   };
 }
 
-// ─── OFERTA SEQUENCIAL (60s por motorista, mais próxima primeiro) ───
+// ─── OFERTA SEQUENCIAL EM CICLO (15s por motorista, mais próxima primeiro, raio 20min) ───
 // A passageira pede → a oferta vai só para a motorista online mais próxima
-// durante 60s. Sem resposta/rejeição, passa à seguinte. Esgotada a fila,
-// abre a todas (broadcast) até ao limite de 10min.
+// (até 20min do pickup). Sem resposta/rejeição, passa à seguinte. No fim da
+// fila volta à primeira (quem calou tem nova chance; quem rejeitou fica de
+// fora) até alguém aceitar ou a viagem expirar (10min).
 const OFFER_TTL_SEC = 15;
 const OFFER_MAX = 15;
 async function ensureOfferColumns(sql: any) {
@@ -1759,7 +1769,7 @@ async function buildOfferQueue(sql: any, pLa: number, pLo: number, rideCode: str
       try { stale = now - new Date(d.updatedAt).getTime(); } catch {}
       return { id: String(d.id), km, stale };
     })
-    .filter((d: any) => Number.isFinite(d.km))
+    .filter((d: any) => Number.isFinite(d.km) && d.km * 2 <= 20) // raio de 20min a 30km/h
     .sort((a: any, b: any) => (a.km - b.km) || (a.stale - b.stale))
     .slice(0, OFFER_MAX)
     .map((d: any) => d.id);
@@ -1783,17 +1793,24 @@ async function advanceOfferIfNeeded(sql: any, t: any, pushBody?: { title: string
     const skipped = offerSkippedOf(t);
     const missed = offerMissedOf(t);
     const cur = (t as any).offeredDriverId ? String((t as any).offeredDriverId) : '';
-    // Timeout (sem resposta) != rejeicao: quem calou volta a ver em
-    // broadcast, mas ja nao recebe ofertas exclusivas desta viagem.
+    // Timeout (sem resposta) != rejeicao: quem calou entra de novo na
+    // volta seguinte; quem rejeitou (skipped) fica de fora de vez.
     if (cur && missed.indexOf(cur) < 0) missed.push(cur);
     const gone = (id: string) => skipped.indexOf(id) >= 0 || missed.indexOf(id) >= 0;
     const oldIdx = Number((t as any).offerIdx || 0);
     let idx = oldIdx + (cur ? 1 : 0);
     while (idx < q.length && gone(q[idx])) idx += 1;
-    const missedJson = JSON.stringify(missed);
+    let missedJson = JSON.stringify(missed);
     if (idx >= q.length) {
-      const r = await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' RETURNING *`;
-      return r[0] || t;
+      // Volta ao início (ciclo até aceitar): quem calou tem nova chance.
+      const again = q.filter((x: string) => skipped.indexOf(x) < 0);
+      if (!again.length) {
+        const r = await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' RETURNING *`;
+        return r[0] || t;
+      }
+      missed.length = 0;
+      missedJson = JSON.stringify(missed);
+      idx = q.indexOf(again[0]);
     }
     const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
     const r = await sql`UPDATE trips SET "offerIdx" = ${idx}, "offeredDriverId" = ${q[idx]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' AND COALESCE("offerIdx", 0) = ${oldIdx} RETURNING *`;
@@ -1853,7 +1870,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW())
       RETURNING id`;
     const tripId = rows[0].id;
-    // Oferta sequencial por proximidade (60s cada); sem candidatas abre a todas.
+    // Oferta sequencial por proximidade (15s cada); sem candidatas abre a todas.
     let offerFirst: string | null = null;
     try {
       await ensureOfferColumns(sql);
