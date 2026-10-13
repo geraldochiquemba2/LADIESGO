@@ -319,6 +319,23 @@ app.get('/api/v1/ratings/pending', requireAuth, async (c) => {
     return c.json({ pendings: [] });
   }
 });
+
+// GET /api/v1/ratings/mine — avaliações recebidas (a motorista vê as suas no perfil)
+app.get('/api/v1/ratings/mine', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  try {
+    const did = await driverIdFor(sql, user.sub);
+    const rows = did
+      ? await sql`SELECT r.score, r.comment, r."createdAt", u.name AS "raterName" FROM ratings r JOIN trips t ON t.id = r."tripId" LEFT JOIN users u ON u.id = r."raterId" WHERE t."driverId" = ${did} ORDER BY r."createdAt" DESC LIMIT 30`
+      : await sql`SELECT r.score, r.comment, r."createdAt", u.name AS "raterName" FROM ratings r LEFT JOIN users u ON u.id = r."raterId" WHERE r."ratedId" = ${user.sub} ORDER BY r."createdAt" DESC LIMIT 30`;
+    const scores = rows.map((x: any) => Number(x.score) || 0).filter((s: number) => s > 0);
+    const avg = scores.length ? Math.round((scores.reduce((a: number, s: number) => a + s, 0) / scores.length) * 10) / 10 : 5;
+    return c.json({ ratings: rows, avg, count: rows.length });
+  } catch (e) {
+    return c.json({ ratings: [], avg: 5, count: 0 });
+  }
+});
 // Presença da motorista (a home chama sem token: identifica pelo id do user).
 app.post('/api/v1/drivers/position', async (c) => {
   const sql = neon(c.env.DATABASE_URL);
@@ -1532,6 +1549,7 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
     by: r.cancelledBy || '',
     reason: r.cancelReason || '',
     scheduledAt: r.scheduledAt ? new Date(r.scheduledAt).getTime() : 0,
+    completedAt: r.completedAt ? new Date(r.completedAt).getTime() : 0,
   };
 }
 
@@ -1640,7 +1658,9 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
     } else if (neonSt === 'IN_PROGRESS') {
       await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
     } else if (neonSt === 'COMPLETED') {
-      await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+      const devTs = Number((b as any).ts);
+      const doneAt = Number.isFinite(devTs) && Math.abs(devTs - Date.now()) <= 15 * 60 * 1000 ? new Date(devTs) : new Date();
+      await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = ${doneAt as any}, "updatedAt" = NOW() WHERE id = ${id}`;
       if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
     } else if (neonSt === 'CANCELLED') {
       await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
