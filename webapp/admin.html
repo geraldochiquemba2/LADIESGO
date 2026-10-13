@@ -145,7 +145,7 @@ var STM_R={pending:'REQUESTED',accepted:'ACCEPTED',arrived:'DRIVER_ARRIVED',in_p
 var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
 function normT(t){if(!t||t.pickupAddress===undefined)return t;const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[]),vehicle:[t.vehicleLabel,t.vehiclePlate].filter(Boolean).join(' · ')}}
 function stopsHtml(x){const s=x.stops||[];if(!s.length)return '';return '<br><span class="mut">+ '+s.length+' '+(s.length===1?'paragem':'paragens')+': '+s.map(p=>esc((p&&(p.n||p.a))||((p&&p.lat!=null)?(p.lat+', '+p.lng):''))).join(' › ')+'</span>'}
-function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);c.age=(d.updated!=null?d.updated:null);c.cats=d.cats||[];return c}
+function normD(d){if(!d||d.age!==undefined)return d;const c=Object.assign({},d);if(c.lat==null&&d.currentLat!=null)c.lat=Number(d.currentLat);if(c.lng==null&&d.currentLng!=null)c.lng=Number(d.currentLng);c.age=(d.updated!=null?d.updated:(d.updatedAt?Math.max(0,Math.round((Date.now()-new Date(d.updatedAt).getTime())/1000)):null));c.cats=d.cats||[];return c}
 function matchDrv(x){const q=mapQuery;if(!q)return true;return ((x.name||'')+' '+(x.phone||'')+' '+(x.carPlate||'')+' '+(x.carMake||'')+' '+(x.cats||[]).join(' ')).toLowerCase().indexOf(q)>=0}
 function matchTrip(t){const q=mapQuery;if(!q)return true;return ((t.passenger||'')+' '+(t.driver||'')+' '+(t.from||'')+' '+(t.to||'')+' '+((t.stops||[]).map(p=>p.n||p.a||'').join(' '))).toLowerCase().indexOf(q)>=0}
 const stColor={pending:'#5b21c9',accepted:'#f59e0b',arrived:'#f97316',in_progress:'#61188E',completed:'#0d9488',cancelled:'#d92d4b'};
@@ -342,11 +342,11 @@ function drawMap(){
   const enRoute={};ALL.filter(matchTrip).forEach(t=>{if((t.status==='accepted'||t.status==='arrived')&&t.driverId)enRoute[t.driverId]=t});
   const drvMarks={};
   DRV.filter(x=>x.lat!=null&&x.lng!=null).filter(matchDrv).forEach(x=>{
-    const tr=enRoute[x.id];const yw=!!tr;const fc=yw?'#eab308':'#12a150';
+    const tr=enRoute[x.id];const yw=!!tr;const on=x.isOnline!==false;const fc=yw?'#eab308':(on?'#12a150':'#9aa0a6');
     const car=[x.carPlate,x.carMake].filter(Boolean).join(' · ');
     const mk=L.circleMarker([x.lat,x.lng],{radius:9,color:'#fff',weight:3,fillColor:fc,fillOpacity:1});
     mk.bindTooltip('🚕 '+esc(x.name)+(yw?' \u2014 a caminho':'')+(car?'<br><small>'+esc(car)+'</small>':''),{permanent:true,direction:'top',offset:[0,-14],className:'drvtip',interactive:true});
-    mk.bindPopup('<b>🚕 '+esc(x.name)+'</b> '+(yw?'<b style="color:#b45309">a caminho</b>':'<span style="color:#12a150">online</span>')
+    mk.bindPopup('<b>🚕 '+esc(x.name)+'</b> '+(yw?'<b style="color:#b45309">a caminho</b>':((x.isOnline!==false)?'<span style="color:#12a150">online</span>':'<span style="color:#9aa0a6">offline</span>'))
       +(car?'<br>'+esc(car):'')
       +'<br><span class="mut">'+esc((x.cats||[]).join(', '))+'</span>'
       +'<br><span class="mut">'+x.lat.toFixed(4)+', '+x.lng.toFixed(4)+(x.age!=null?(' · há '+x.age+' s'):'')+'</span>'
