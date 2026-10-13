@@ -151,7 +151,7 @@ const server = http.createServer(async (req, res) => {
           trips.set(id, t);
           // Oferta sequencial (15s por motorista, mais próxima primeiro).
           try {
-            const cands = [...drivers.values()].filter(d => Date.now() - d.ts < 45000 && !busy.has(d.id)).map(d => ({ id: d.id, km: havKm(t.pickup.lat, t.pickup.lng, d.lat, d.lng) })).filter(x => Number.isFinite(x.km) && x.km * 2 <= 20).sort((a, b) => a.km - b.km).slice(0, 15).map(x => x.id);
+            const cands = [...drivers.values()].filter(d => Date.now() - d.ts < 45000 && !busy.has(d.id)).map(d => ({ id: d.id, km: havKm(t.pickup.lat, t.pickup.lng, d.lat, d.lng) })).filter(x => Number.isFinite(x.km) && x.km * 2 <= 10).sort((a, b) => a.km - b.km).slice(0, 15).map(x => x.id);
             t.offerQueue = cands; t.offerIdx = 0; t.skipped = []; t.missed = [];
             if (cands.length) { t.offeredDriverId = cands[0]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; t.broadcast = false; }
             else { t.offeredDriverId = null; t.offerExpiresAt = 0; t.broadcast = true; }

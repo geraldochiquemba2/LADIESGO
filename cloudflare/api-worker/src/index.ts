@@ -1769,7 +1769,7 @@ async function buildOfferQueue(sql: any, pLa: number, pLo: number, rideCode: str
       try { stale = now - new Date(d.updatedAt).getTime(); } catch {}
       return { id: String(d.id), km, stale };
     })
-    .filter((d: any) => Number.isFinite(d.km) && d.km * 2 <= 20) // raio de 20min a 30km/h
+    .filter((d: any) => Number.isFinite(d.km) && d.km * 2 <= 10) // raio de 10min a 30km/h
     .sort((a: any, b: any) => (a.km - b.km) || (a.stale - b.stale))
     .slice(0, OFFER_MAX)
     .map((d: any) => d.id);
