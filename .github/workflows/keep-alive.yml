@@ -1,9 +1,7 @@
 name: keep-alive (não deixar dormir)
 
+# DESATIVADO: produção é Cloudflare (nunca dorme). Render suspenso.
 on:
-  schedule:
-    # a cada 10 min — Render dorme aos 15 min. 1 serviço = ~720h/mês, cabe nos 750h free.
-    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 jobs:
