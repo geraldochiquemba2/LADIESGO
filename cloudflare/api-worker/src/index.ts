@@ -734,6 +734,18 @@ try {
   }
 });
 
+// POST /api/v1/admin/users/:id/reset-password — Repor senha padrão (admin)
+app.post('/api/v1/admin/users/:id/reset-password', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const { id } = c.req.param();
+  const rows = await sql`
+    UPDATE users SET "passwordHash" = crypt('0987654321', gen_salt('bf', 10)),
+      "mustChangePassword" = true, "updatedAt" = NOW()
+    WHERE id = ${id} RETURNING id`;
+  if (!rows.length) return c.json({ message: 'Utilizador não encontrado.' }, 404);
+  return c.json({ success: true });
+});
+
 // GET /api/v1/admin/drivers/pending — Pending driver registrations
 app.get('/api/v1/admin/drivers/pending', adminMiddleware, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
