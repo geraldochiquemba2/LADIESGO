@@ -9,6 +9,39 @@ const busy = new Set();
 const chats = new Map();
 const callSignals = new Map();
 let tripN = 0;
+// Oferta sequencial: 60s por motorista, mais próxima primeiro.
+const OFFER_TTL_MS = 60000;
+function havKm(aLa, aLo, bLa, bLo) {
+  const R = 6371, t = Math.PI / 180;
+  const dLa = (bLa - aLa) * t, dLo = (bLo - aLo) * t;
+  const s = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(aLa * t) * Math.cos(bLa * t) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+function offerOut(t) {
+  const q = Array.isArray(t.offerQueue) ? t.offerQueue : [];
+  return Object.assign({}, t, {
+    offerExpiresAt: t.offerExpiresAt || 0,
+    offerIndex: q.length ? (t.offerIdx || 0) + 1 : 0,
+    offerTotal: q.length,
+    isBroadcast: !!t.broadcast || (!q.length && !t.offeredDriverId),
+  });
+}
+function advanceOffer(t) {
+  if (!t || t.status !== 'pending' || t.broadcast) return t;
+  if (t.offerExpiresAt && Date.now() < t.offerExpiresAt) return t;
+  const q = Array.isArray(t.offerQueue) ? t.offerQueue : [];
+  t.skipped = Array.isArray(t.skipped) ? t.skipped : [];
+  t.missed = Array.isArray(t.missed) ? t.missed : [];
+  // Timeout (sem resposta) != rejeicao: quem calou volta a ver em broadcast,
+  // mas ja nao recebe ofertas exclusivas desta viagem.
+  if (t.offeredDriverId && t.missed.indexOf(t.offeredDriverId) < 0) t.missed.push(t.offeredDriverId);
+  const gone = (id) => t.skipped.indexOf(id) >= 0 || t.missed.indexOf(id) >= 0;
+  let idx = (t.offerIdx || 0) + (t.offeredDriverId ? 1 : 0);
+  while (idx < q.length && gone(q[idx])) idx += 1;
+  if (idx >= q.length) { t.broadcast = true; }
+  else { t.offerIdx = idx; t.offeredDriverId = q[idx]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; }
+  return t;
+}
 // Metered privado (Render -> Env Vars). Sem isto usa fallback openrelay (demo).
 // METERED_DOMAIN ex: ladiesgo-taxi.metered.live (SEM https, SEM /api...)
 // METERED_TURN_APIKEY ex: apiKey da credencial TURN (seguro no frontend via /api/v1/turn/ice)
@@ -111,7 +144,15 @@ const server = http.createServer(async (req, res) => {
               t.pickup.name = za.suburb || za.neighbourhood || za.quarter || za.city_district || za.town || za.city || 'Ponto no mapa';
             } catch (e) { t.pickup.name = 'Ponto no mapa'; }
           }
-          trips.set(id, t); saveTrips();
+          trips.set(id, t);
+          // Oferta sequencial (60s por motorista, mais próxima primeiro).
+          try {
+            const cands = [...drivers.values()].filter(d => Date.now() - d.ts < 45000 && !busy.has(d.id)).map(d => ({ id: d.id, km: havKm(t.pickup.lat, t.pickup.lng, d.lat, d.lng) })).filter(x => Number.isFinite(x.km)).sort((a, b) => a.km - b.km).slice(0, 15).map(x => x.id);
+            t.offerQueue = cands; t.offerIdx = 0; t.skipped = []; t.missed = [];
+            if (cands.length) { t.offeredDriverId = cands[0]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; t.broadcast = false; }
+            else { t.offeredDriverId = null; t.offerExpiresAt = 0; t.broadcast = true; }
+          } catch (e) { t.broadcast = true; }
+          saveTrips();
           send(200, { id });
         } catch (e) { send(400, { message: 'Pedido inválido.' }); }
       });
@@ -121,7 +162,18 @@ const server = http.createServer(async (req, res) => {
       const did = String(new URL(req.url, 'http://localhost').searchParams.get('driverId') || '').slice(0, 64);
       const fresh = [...trips.values()].filter(t => { if (t.status !== 'pending') return false; if (t.scheduledAt) return Date.now() > t.scheduledAt - 900000 && Date.now() < t.scheduledAt + 3600000; return Date.now() - t.ts < 600000; });const byPax = new Map();for (const t of fresh) { const c = byPax.get(t.passengerId); if (!c || t.ts > c.ts) byPax.set(t.passengerId, t); }const list = [...byPax.values()].sort((a, b) => a.ts - b.ts).slice(-20);
       if (did) list.forEach(t => { t.views = t.views || []; if (t.views.indexOf(did) < 0) t.views.push(did); });
-      send(200, { trips: list });
+      // Oferta sequencial: só a motorista ofertada vê (60s cada).
+      const mine = list.filter(t => {
+        advanceOffer(t);
+        const sk = Array.isArray(t.skipped) ? t.skipped : [];
+        if (did && sk.indexOf(did) >= 0) return false;
+        const q = Array.isArray(t.offerQueue) ? t.offerQueue : [];
+        if (!q.length && !t.offeredDriverId) return true;
+        if (t.broadcast) return true;
+        return did && String(t.offeredDriverId || '') === did;
+      });
+      saveTrips();
+      send(200, { trips: mine.map(offerOut) });
       return;
     }
     const cm = req.url.match(/^\/api\/v1\/trips\/([A-Za-z0-9]+)\/chat(\?.*)?$/);
@@ -185,6 +237,34 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.url.startsWith('/api/v1/trips/history') && req.method === 'GET') { const sendH = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); }; const u = new URL(req.url, 'http://localhost'); const p = String(u.searchParams.get('passengerId') || '').slice(0, 64); const d = String(u.searchParams.get('driverId') || '').slice(0, 64); const list = [...trips.values()].filter(t => (p && t.passengerId === p) || (d && t.driverId === d)).slice(-30).reverse() .map(t => ({ id: t.id, dest: (t.dest ? t.dest.n : '') + ' · ' + (t.dest ? t.dest.a : ''), fare: t.fare, cat: t.cat, status: t.status, by: t.by || '', reason: t.reason || '', other: d ? (t.passengerName || '') : (t.driverName || ''), ts: t.ts, from: (t.pickup && t.pickup.name) || '', pay: t.pay || '', stopsN: (t.stops || []).length, stops: (t.stops || []).map(x => ({ n: String(x.n || '').slice(0, 60) })) })); sendH(200, { trips: list }); return; }
+    // Rejeitar/passar a oferta à seguinte (60s por motorista).
+    const skm = req.url.match(/^\/api\/v1\/trips\/([A-Za-z0-9]+)\/skip$/);
+    if (skm && req.method === 'POST') {
+      const t = trips.get(skm[1]);
+      if (!t || t.status !== 'pending') { send(200, { ok: true }); return; }
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const b = JSON.parse(body || '{}');
+          const did = String(b.driverId || '').slice(0, 64);
+          t.skipped = Array.isArray(t.skipped) ? t.skipped : [];
+          if (did && t.skipped.indexOf(did) < 0) t.skipped.push(did);
+          if (did && String(t.offeredDriverId || '') === did && !t.broadcast) {
+            const q = Array.isArray(t.offerQueue) ? t.offerQueue : [];
+            t.missed = Array.isArray(t.missed) ? t.missed : [];
+            const gone = (id) => t.skipped.indexOf(id) >= 0 || t.missed.indexOf(id) >= 0;
+            let idx = (t.offerIdx || 0) + 1;
+            while (idx < q.length && gone(q[idx])) idx += 1;
+            if (idx >= q.length) t.broadcast = true;
+            else { t.offerIdx = idx; t.offeredDriverId = q[idx]; t.offerExpiresAt = Date.now() + OFFER_TTL_MS; }
+          }
+          saveTrips();
+          send(200, { ok: true });
+        } catch (e) { send(400, { message: 'Pedido inválido.' }); }
+      });
+      return;
+    }
     const m = req.url.match(/^\/api\/v1\/trips\/([A-Za-z0-9]+)(\/status)?$/);
     if (m) {
       let t = trips.get(m[1]);
@@ -205,6 +285,13 @@ const server = http.createServer(async (req, res) => {
             const st = String(b.status || '');
             const okNext = { accepted: ['pending'], arrived: ['accepted'], in_progress: ['arrived'], completed: ['in_progress'], cancelled: ['pending', 'accepted', 'arrived', 'in_progress'] };
             if (!okNext[st] || okNext[st].indexOf(t.status) < 0) throw 0;
+            if (st === 'accepted') {
+              advanceOffer(t);
+              const q = Array.isArray(t.offerQueue) ? t.offerQueue : [];
+              if (!t.broadcast && (q.length || t.offeredDriverId) && String(t.offeredDriverId || '') !== String(b.driverId || '').slice(0, 64)) { send(409, { message: 'Esta oferta já passou para outra motorista.' }); return; }
+              const drv = String(b.driverId || '').slice(0, 64);
+              for (const o of trips.values()) { if (o.id !== t.id && o.driverId === drv && ['accepted', 'arrived', 'in_progress'].indexOf(o.status) >= 0) { send(400, { message: 'Já tens uma viagem ativa.' }); return; } }
+            }
             t.status = st; if (st === 'cancelled' && b.by) t.by = String(b.by).slice(0, 16); if (st === 'cancelled' && b.reason) t.reason = String(b.reason).slice(0, 80); if (st === 'accepted' && b.driverId) busy.add(String(b.driverId).slice(0, 64)); if ((st === 'completed' || st === 'cancelled') && t.driverId) busy.delete(t.driverId);
             if (st === 'accepted') { t.driverId = String(b.driverId || '').slice(0, 64); t.driverName = String(b.driverName || 'Motorista').slice(0, 40); } t.pin = String(1000 + Math.floor(Math.random() * 9000));
             saveTrips(); send(200, { ok: true, status: st });

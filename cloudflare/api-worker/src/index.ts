@@ -380,6 +380,17 @@ app.post('/api/v1/trips/request', requireAuth, async (c) => {
   const { mults } = await catMaps(sql);
   const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (mults[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
   const rows = await sql`INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt") VALUES (gen_random_uuid()::text, ${user.sub}, ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)}, ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)}, 'REQUESTED', ${String(b.rideType || 'ECONOMY')}, ${fare}, ${Math.round(dist * 10) / 10}, ${String(b.paymentMethod || 'CASH')}, NOW(), NOW()) RETURNING *`;
+  // Oferta sequencial por proximidade (60s cada); sem candidatas abre a todas.
+  try {
+    await ensureOfferColumns(sql);
+    const q = await buildOfferQueue(sql, Number(b.pickupLat), Number(b.pickupLng), String(b.rideType || 'ECONOMY'));
+    if (q.length) {
+      const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
+      await sql`UPDATE trips SET "offerQueue" = ${JSON.stringify(q)}::jsonb, "offerIdx" = 0, "offeredDriverId" = ${q[0]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerBroadcast" = FALSE, "offerSkipped" = '[]'::jsonb WHERE id = ${rows[0].id}`;
+    } else {
+      await sql`UPDATE trips SET "offerBroadcast" = TRUE WHERE id = ${rows[0].id}`;
+    }
+  } catch {}
   return c.json(rows[0]);
 });
 // GET /api/v1/trips/incoming — Pedidos pendentes para a motorista (web)
@@ -389,6 +400,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
   const user = c.get('user');
   const qDriver = String(c.req.query('driverId') || '');
   try {
+    await ensureOfferColumns(sql);
     const did = await driverIdFor(sql, qDriver || user.sub);
     if (!did) return c.json({ trips: [] });
     const { byCode } = await catMaps(sql);
@@ -404,10 +416,30 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
     const seen = new Set<string>();
     const out: any[] = [];
     for (let i = rows.length - 1; i >= 0 && out.length < 20; i--) {
-      const r = rows[i];
+      let r: any = rows[i];
       if (seen.has(r.passengerId)) continue;
       seen.add(r.passengerId);
       if (myCats && myCats.indexOf(byCode[r.rideType] || '') < 0) continue;
+      if (offerSkippedOf(r).indexOf(did) >= 0) continue;
+      // Oferta sequencial: só a motorista ofertada vê (60s cada, mais
+      // próxima primeiro). Viagens antigas sem fila contam como broadcast.
+      const q = offerQueueOf(r);
+      if (!q.length && !r.offeredDriverId) {
+        out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
+        continue;
+      }
+      if (!r.offerBroadcast) {
+        r = await advanceOfferIfNeeded(sql, r, {
+          title: '🔔 Novo pedido LadiesGo!',
+          body: `${String(r.pickupAddress || 'Ponto no mapa')} → ${String(r.dropoffAddress || '').split(' · ')[0]} · ${Number(r.fareEstimate || 0)} Kz`,
+        });
+        if (offerSkippedOf(r).indexOf(did) >= 0) continue;
+        if (r.offerBroadcast) {
+          out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
+          continue;
+        }
+        if (String(r.offeredDriverId || '') !== did) continue;
+      }
       out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
     }
     return c.json({ trips: out });
@@ -490,10 +522,59 @@ app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
   const id = c.req.param('id');
   const did = await driverIdFor(sql, user.sub);
   if (!did) return c.json({ message: 'Só motoristas.' }, 403);
-  const cur = await sql`SELECT status FROM trips WHERE id = ${id} LIMIT 1`;
+  const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
   if (!cur.length || cur[0].status !== 'REQUESTED') return c.json({ message: 'Viagem indisponível.' }, 400);
-  const rows = await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
+  // Oferta sequencial: só a motorista ofertada (ou qualquer uma em broadcast).
+  try {
+    await ensureOfferColumns(sql);
+    let t: any = cur[0];
+    if (!t.offerBroadcast && (offerQueueOf(t).length || t.offeredDriverId)) {
+      t = await advanceOfferIfNeeded(sql, t);
+      if (!t.offerBroadcast && String(t.offeredDriverId || '') !== did) {
+        return c.json({ message: 'Esta oferta já passou para outra motorista.' }, 409);
+      }
+    }
+  } catch {}
+  const rows = await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'REQUESTED' RETURNING *`;
+  if (!rows.length) return c.json({ message: 'Viagem indisponível.' }, 400);
   return c.json(rows[0]);
+});
+// POST /api/v1/trips/:id/skip — Motorista rejeita/passa a oferta à seguinte
+app.post('/api/v1/trips/:id/skip', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const did = await driverIdFor(sql, user.sub);
+  if (!did) return c.json({ message: 'Só motoristas.' }, 403);
+  try {
+    await ensureOfferColumns(sql);
+    const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
+    if (!cur.length || cur[0].status !== 'REQUESTED') return c.json({ ok: true });
+    const t: any = cur[0];
+    const skipped = offerSkippedOf(t);
+    if (skipped.indexOf(did) < 0) skipped.push(did);
+    if (!t.offerBroadcast && String(t.offeredDriverId || '') === did) {
+      const q = offerQueueOf(t);
+      const missed = offerMissedOf(t);
+      const gone = (id: string) => skipped.indexOf(id) >= 0 || missed.indexOf(id) >= 0;
+      let idx = Number(t.offerIdx || 0) + 1;
+      while (idx < q.length && gone(q[idx])) idx += 1;
+      if (idx >= q.length) {
+        await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
+      } else {
+        const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
+        await sql`UPDATE trips SET "offerIdx" = ${idx}, "offeredDriverId" = ${q[idx]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
+        const rr = await sql`SELECT "pickupAddress", "dropoffAddress", "fareEstimate" FROM trips WHERE id = ${id} LIMIT 1`;
+        if (rr.length) await pushTripToDriver(sql, q[idx], id, '🔔 Novo pedido LadiesGo!', `${String(rr[0].pickupAddress || '')} → ${String(rr[0].dropoffAddress || '').split(' · ')[0]} · ${Number(rr[0].fareEstimate || 0)} Kz`);
+      }
+    } else {
+      await sql`UPDATE trips SET "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
+    }
+    return c.json({ ok: true });
+  } catch (e) {
+    console.error('skip error:', e);
+    return c.json({ ok: true });
+  }
 });
 app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
@@ -1557,6 +1638,10 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
     driver: drv || null,
     pin: pinForTrip(r.id),
     views: 0,
+    offerExpiresAt: (r as any).offerExpiresAt ? new Date((r as any).offerExpiresAt).getTime() : 0,
+    offerIndex: offerQueueOf(r).length ? Number((r as any).offerIdx || 0) + 1 : 0,
+    offerTotal: offerQueueOf(r).length,
+    isBroadcast: !(r as any).offeredDriverId && !offerQueueOf(r).length ? true : !!(r as any).offerBroadcast,
     ts: r.createdAt,
     by: r.cancelledBy || '',
     reason: r.cancelReason || '',
@@ -1586,6 +1671,106 @@ async function webDriverInfo(sql: any, driverId: string | null) {
     totalTrips: Number(r.totalTrips || 0),
     carMake: r.carMake || '', carModel: r.carModel || '', carColor: r.carColor || '', carPlate: r.carPlate || '',
   };
+}
+
+// ─── OFERTA SEQUENCIAL (60s por motorista, mais próxima primeiro) ───
+// A passageira pede → a oferta vai só para a motorista online mais próxima
+// durante 60s. Sem resposta/rejeição, passa à seguinte. Esgotada a fila,
+// abre a todas (broadcast) até ao limite de 10min.
+const OFFER_TTL_SEC = 60;
+const OFFER_MAX = 15;
+async function ensureOfferColumns(sql: any) {
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerQueue" JSONB`; } catch {}
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerIdx" INTEGER NOT NULL DEFAULT 0`; } catch {}
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offeredDriverId" TEXT`; } catch {}
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offeredAt" TIMESTAMPTZ`; } catch {}
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerExpiresAt" TIMESTAMPTZ`; } catch {}
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerBroadcast" BOOLEAN NOT NULL DEFAULT FALSE`; } catch {}
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerSkipped" JSONB`; } catch {}
+  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerMissed" JSONB`; } catch {}
+}
+function offerQueueOf(t: any): string[] {
+  const q = (t as any).offerQueue;
+  return Array.isArray(q) ? q.map((x: any) => String(x)).filter(Boolean) : [];
+}
+function offerSkippedOf(t: any): string[] {
+  const s = (t as any).offerSkipped;
+  return Array.isArray(s) ? s.map((x: any) => String(x)).filter(Boolean) : [];
+}
+function offerMissedOf(t: any): string[] {
+  const s = (t as any).offerMissed;
+  return Array.isArray(s) ? s.map((x: any) => String(x)).filter(Boolean) : [];
+}
+// Candidatas online+aprovadas com GPS e sem viagem ativa, da categoria
+// pedida, ordenadas por distância ao pickup (GPS fresco desempata).
+async function buildOfferQueue(sql: any, pLa: number, pLo: number, rideCode: string): Promise<string[]> {
+  try { await sql`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cats JSONB`; } catch {}
+  let byCode: Record<string, string> = {};
+  try { byCode = (await catMaps(sql)).byCode; } catch {}
+  let rows: any[] = [];
+  try {
+    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", d.cats, d."updatedAt" FROM drivers d WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL AND d."currentLng" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS'))`;
+  } catch { return []; }
+  const wantCat = byCode[rideCode] || '';
+  const now = Date.now();
+  return rows
+    .filter((d: any) => {
+      if (Array.isArray(d.cats) && d.cats.length && wantCat) {
+        return d.cats.map((x: any) => String(x)).indexOf(wantCat) >= 0;
+      }
+      return true;
+    })
+    .map((d: any) => {
+      const km = Number.isFinite(pLa) && Number.isFinite(pLo) ? havKm(pLa, pLo, Number(d.currentLat), Number(d.currentLng)) : 0;
+      let stale = 0;
+      try { stale = now - new Date(d.updatedAt).getTime(); } catch {}
+      return { id: String(d.id), km, stale };
+    })
+    .filter((d: any) => Number.isFinite(d.km))
+    .sort((a: any, b: any) => (a.km - b.km) || (a.stale - b.stale))
+    .slice(0, OFFER_MAX)
+    .map((d: any) => d.id);
+}
+// Push dirigido a UMA motorista (oferta exclusiva).
+async function pushTripToDriver(sql: any, driverId: string, tripId: string, title: string, body: string) {
+  try {
+    const r = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} LIMIT 1`;
+    const tok = r[0]?.fcmToken;
+    if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
+    await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: tok, sound: 'default', title, body, data: { tripId, type: 'new-trip' } }]) });
+  } catch {}
+}
+// Avança a oferta se expirou (lazy, em cada sondagem). Devolve a linha fresca.
+async function advanceOfferIfNeeded(sql: any, t: any, pushBody?: { title: string; body: string }): Promise<any> {
+  try {
+    if (!t || t.status !== 'REQUESTED' || (t as any).offerBroadcast) return t;
+    const exp = (t as any).offerExpiresAt ? new Date((t as any).offerExpiresAt).getTime() : 0;
+    if (exp && Date.now() < exp) return t;
+    const q = offerQueueOf(t);
+    const skipped = offerSkippedOf(t);
+    const missed = offerMissedOf(t);
+    const cur = (t as any).offeredDriverId ? String((t as any).offeredDriverId) : '';
+    // Timeout (sem resposta) != rejeicao: quem calou volta a ver em
+    // broadcast, mas ja nao recebe ofertas exclusivas desta viagem.
+    if (cur && missed.indexOf(cur) < 0) missed.push(cur);
+    const gone = (id: string) => skipped.indexOf(id) >= 0 || missed.indexOf(id) >= 0;
+    const oldIdx = Number((t as any).offerIdx || 0);
+    let idx = oldIdx + (cur ? 1 : 0);
+    while (idx < q.length && gone(q[idx])) idx += 1;
+    const missedJson = JSON.stringify(missed);
+    if (idx >= q.length) {
+      const r = await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' RETURNING *`;
+      return r[0] || t;
+    }
+    const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
+    const r = await sql`UPDATE trips SET "offerIdx" = ${idx}, "offeredDriverId" = ${q[idx]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' AND COALESCE("offerIdx", 0) = ${oldIdx} RETURNING *`;
+    if (!r[0]) {
+      const rr = await sql`SELECT * FROM trips WHERE id = ${t.id} LIMIT 1`;
+      return rr[0] || t;
+    }
+    if (pushBody) await pushTripToDriver(sql, q[idx], t.id, pushBody.title, pushBody.body);
+    return r[0];
+  } catch { return t; }
 }
 
 // POST /api/v1/trips/request-web — Pedido da home (web)
@@ -1635,11 +1820,27 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW())
       RETURNING id`;
     const tripId = rows[0].id;
+    // Oferta sequencial por proximidade (60s cada); sem candidatas abre a todas.
+    let offerFirst: string | null = null;
+    try {
+      await ensureOfferColumns(sql);
+      const rideCode = byName[String(b.cat)] || 'ECONOMY';
+      const q = await buildOfferQueue(sql, pLa, pLo, rideCode);
+      if (q.length) {
+        offerFirst = q[0];
+        const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
+        await sql`UPDATE trips SET "offerQueue" = ${JSON.stringify(q)}::jsonb, "offerIdx" = 0, "offeredDriverId" = ${q[0]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerBroadcast" = FALSE, "offerSkipped" = '[]'::jsonb WHERE id = ${tripId}`;
+      } else {
+        await sql`UPDATE trips SET "offerBroadcast" = TRUE WHERE id = ${tripId}`;
+      }
+    } catch {}
     // Push imediato + arranque do toca-toca de 3s (não bloqueia a resposta).
     try {
       const destN = String(b.destN || '').slice(0, 60);
+      const body = `${pickupName} → ${destN}${stops.length ? ` · +${stops.length} paragem${stops.length > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`;
       c.executionCtx.waitUntil((async () => {
-        await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!', String(b.cat || ''));
+        if (offerFirst) await pushTripToDriver(sql, offerFirst, tripId, '🔔 Novo pedido LadiesGo!', body);
+        else await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!', String(b.cat || ''));
         await ringStart(c.env);
       })());
     } catch {}
@@ -1669,7 +1870,19 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       if (!did) return c.json({ message: 'Só motoristas.' }, 403);
       const busy = await sql`SELECT id FROM trips WHERE "driverId" = ${did} AND status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') LIMIT 1`;
       if (busy.length) return c.json({ message: 'Já tens uma viagem ativa.' }, 400);
-      await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+      // Oferta sequencial: só a motorista ofertada (ou qualquer uma em broadcast).
+      try {
+        await ensureOfferColumns(sql);
+        const oc = await sql`SELECT "offerQueue", "offerIdx", "offeredDriverId", "offerBroadcast", "offerExpiresAt", status FROM trips WHERE id = ${id} LIMIT 1`;
+        if (oc.length && oc[0].status === 'REQUESTED' && !oc[0].offerBroadcast && (offerQueueOf(oc[0]).length || oc[0].offeredDriverId)) {
+          const fresh: any = await advanceOfferIfNeeded(sql, oc[0]);
+          if (!fresh.offerBroadcast && String(fresh.offeredDriverId || '') !== did) {
+            return c.json({ message: 'Esta oferta já passou para outra motorista.' }, 409);
+          }
+        }
+      } catch {}
+      const acc = await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'REQUESTED' RETURNING *`;
+      if (!acc.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'DRIVER_ARRIVED') {
       await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
     } else if (neonSt === 'IN_PROGRESS') {
@@ -1787,14 +2000,44 @@ export class TripRinger {
         const addr = String(t.dropoffAddress || 'Luanda');
         const cut = addr.indexOf(' · ');
         const { byCode } = await catMaps(sql);
+        // Oferta sequencial: roda a fila e avisa só a ofertada (sem
+        // broadcast). Reagenda para a hora em que a oferta expira.
+        try {
+          await ensureOfferColumns(sql);
+          const full = await sql`SELECT * FROM trips WHERE id = ${t.id} LIMIT 1`;
+          if (full.length && !full[0].offerBroadcast && (offerQueueOf(full[0]).length || full[0].offeredDriverId)) {
+            const fresh: any = await advanceOfferIfNeeded(sql, full[0], {
+              title: '🔔 Novo pedido LadiesGo!',
+              body: `${String(full[0].pickupAddress || 'Ponto no mapa')} → ${String(full[0].dropoffAddress || '').split(' · ')[0]} · ${Number(full[0].fareEstimate || 0)} Kz`,
+            });
+            if (!fresh.offerBroadcast) {
+              const exp = fresh.offerExpiresAt ? new Date(fresh.offerExpiresAt).getTime() : 0;
+              const delay = exp && exp > Date.now() ? Math.min(Math.max(exp - Date.now(), 3000), 65000) : 10000;
+              await this.state.storage.setAlarm(Date.now() + delay);
+              return;
+            }
+          }
+        } catch {}
         await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!', byCode[t.rideType] || '');
       } else {
+        // Resumo só das viagens em broadcast (as exclusivas já avisam a
+        // ofertada). Sem nenhuma aberta, reagenda em silêncio.
+        let openN = rows.length;
+        try {
+          await ensureOfferColumns(sql);
+          const oc = await sql`SELECT COUNT(*)::int AS n FROM trips WHERE status = 'REQUESTED' AND "createdAt" > NOW() - INTERVAL '6 minutes' AND ("offerBroadcast" = TRUE OR "offerQueue" IS NULL)`;
+          openN = Number(oc[0]?.n || 0);
+        } catch {}
+        if (!openN) {
+          try { await this.state.storage.setAlarm(Date.now() + 10000); } catch {}
+          return;
+        }
         try {
           const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
           const msgs = toks.map((r: any) => ({
             to: r.fcmToken, sound: 'default',
             title: '🔔 Viagens disponíveis — LadiesGo!',
-            body: `Tens ${rows.length} pedidos à espera · abre a app`,
+            body: `Tens ${openN} pedido${openN > 1 ? 's' : ''} à espera · abre a app`,
             data: { type: 'pending-summary' },
           })).filter((m: any) => m.to);
           if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
