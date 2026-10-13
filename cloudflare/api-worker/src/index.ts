@@ -1365,7 +1365,24 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         'REQUESTED', ${CAT2RIDE[String(b.cat)] || 'ECONOMY'}, ${fare}, ${Math.round(dist * 10) / 10},
         ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW())
       RETURNING id`;
-    return c.json({ id: rows[0].id });
+    const tripId = rows[0].id;
+    // Push com som às motoristas online (não bloqueia a resposta).
+    try {
+      const destN = String(b.destN || '').slice(0, 60);
+      c.executionCtx.waitUntil((async () => {
+        try {
+          const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
+          const msgs = toks.map((r: any) => ({
+            to: r.fcmToken, sound: 'default',
+            title: '🔔 Novo pedido LadiesGo!',
+            body: `${pickupName} → ${destN} · ${fare} Kz`,
+            data: { tripId, type: 'new-trip' },
+          })).filter((m: any) => m.to);
+          if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
+        } catch {}
+      })());
+    } catch {}
+    return c.json({ id: tripId });
   } catch (e) {
     console.error('request-web error:', e);
     return c.json({ message: 'Falhou o pedido. Tenta de novo.' }, 500);

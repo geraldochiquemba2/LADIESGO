@@ -648,6 +648,7 @@ function __onIncoming(list){
     }catch(e){}
     if(fresh.length&&on){
       try{lte('🔔 Novo pedido! ('+fresh.length+')');}catch(e){}
+      try{__beep();__lastBeep=Date.now();}catch(e){}
     }
     if(on){
       try{__lastIncList=list||[];}catch(e){}
