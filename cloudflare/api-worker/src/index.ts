@@ -69,6 +69,24 @@ function pinForTrip(id: string): string {
 }
 const BASE_FARE = 5, PER_KM = 2.5;
 const RIDE_MULT: Record<string, number> = { ECONOMY: 1.0, COMFORT: 1.35, PREMIUM: 1.7 };
+// Categorias geridas no painel admin (nome/cor/mult editáveis; code estável).
+async function getCategories(sql: any) {
+  await sql`CREATE TABLE IF NOT EXISTS ride_categories (code TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#61188E', mult NUMERIC NOT NULL DEFAULT 1, sort INT NOT NULL DEFAULT 0)`;
+  await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES ('ECONOMY','Económico','#61188E',1.0,1),('COMFORT','Conforto','#ff5fc8',1.4,2),('PREMIUM','Família','#5b21c9',1.65,3) ON CONFLICT (code) DO NOTHING`;
+  const rows = await sql`SELECT code, name, color, mult FROM ride_categories ORDER BY sort, code`;
+  return rows.map((r: any) => ({ code: r.code, name: r.name, color: r.color, mult: Number(r.mult) }));
+}
+async function catMaps(sql: any) {
+  const byCode: Record<string, string> = { ECONOMY: 'Económico', COMFORT: 'Conforto', PREMIUM: 'Família' };
+  const byName: Record<string, string> = { 'Económico': 'ECONOMY', 'Conforto': 'COMFORT', 'Família': 'PREMIUM' };
+  const mults: Record<string, number> = { ...RIDE_MULT };
+  try {
+    for (const c of await getCategories(sql)) {
+      byCode[c.code] = c.name; byName[c.name] = c.code; mults[c.code] = c.mult;
+    }
+  } catch {}
+  return { byCode, byName, mults };
+}
 function surgeNow(): number {
   const h = new Date().getHours();
   if ((h >= 7 && h <= 9) || (h >= 17 && h <= 20)) return 1.3;
@@ -183,6 +201,14 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
   const rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "updatedAt" = NOW() WHERE id = ${user.sub} RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
   return c.json(rows[0] || {});
 });
+// DELETE /api/v1/users/push-token — Logout: este aparelho deixa de receber pushes + motorista fica offline
+app.delete('/api/v1/users/push-token', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  await sql`UPDATE users SET "fcmToken" = NULL, "updatedAt" = NOW() WHERE id = ${user.sub}`;
+  await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${user.sub}`;
+  return c.json({ ok: true });
+});
 app.get('/api/v1/users/trips/history', requireAuth, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const user = c.get('user');
@@ -266,8 +292,10 @@ app.post('/api/v1/trips/estimate', requireAuth, async (c) => {
   const dist = havKm(Number(body.pickupLat), Number(body.pickupLng), Number(body.dropoffLat), Number(body.dropoffLng));
   const base = BASE_FARE + dist * PER_KM;
   const surge = surgeNow();
-  const mult = RIDE_MULT[String(body.rideType || 'ECONOMY')] ?? 1.0;
-  const options = Object.keys(RIDE_MULT).map((type) => ({ type, fare: Math.round(base * surge * RIDE_MULT[type] * 100) / 100 }));
+  const sql = neon(c.env.DATABASE_URL);
+  const { mults } = await catMaps(sql);
+  const mult = mults[String(body.rideType || 'ECONOMY')] ?? 1.0;
+  const options = Object.keys(mults).map((type) => ({ type, fare: Math.round(base * surge * mults[type] * 100) / 100 }));
   return c.json({ distanceKm: Math.round(dist * 10) / 10, estimatedFare: Math.round(base * surge * mult * 100) / 100, currency: 'Kz', surgeMultiplier: surge, surgeActive: surge > 1, options });
 });
 app.post('/api/v1/trips/request', requireAuth, async (c) => {
@@ -278,7 +306,8 @@ app.post('/api/v1/trips/request', requireAuth, async (c) => {
   if (active.length && active[0].status !== 'REQUESTED') return c.json({ message: 'You already have an active trip. Complete or cancel it first.' }, 400);
   if (active.length) await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = 'Replaced by new booking' WHERE id = ${active[0].id}`;
   const dist = havKm(Number(b.pickupLat), Number(b.pickupLng), Number(b.dropoffLat), Number(b.dropoffLng));
-  const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (RIDE_MULT[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
+  const { mults } = await catMaps(sql);
+  const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (mults[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
   const rows = await sql`INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt") VALUES (gen_random_uuid()::text, ${user.sub}, ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)}, ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)}, 'REQUESTED', ${String(b.rideType || 'ECONOMY')}, ${fare}, ${Math.round(dist * 10) / 10}, ${String(b.paymentMethod || 'CASH')}, NOW(), NOW()) RETURNING *`;
   return c.json(rows[0]);
 });
@@ -291,6 +320,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
   try {
     const did = await driverIdFor(sql, qDriver || user.sub);
     if (!did) return c.json({ trips: [] });
+    const { byCode } = await catMaps(sql);
     const rows = await sql`
       SELECT t.*, u.name AS passenger_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
       WHERE t.status = 'REQUESTED' AND t."createdAt" > NOW() - INTERVAL '10 minutes'
@@ -301,7 +331,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
       const r = rows[i];
       if (seen.has(r.passengerId)) continue;
       seen.add(r.passengerId);
-      out.push(webTripRow(r, null, r.passenger_name));
+      out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
     }
     return c.json({ trips: out });
   } catch (e) {
@@ -323,11 +353,12 @@ app.get('/api/v1/trips/history', requireAuth, async (c) => {
     else if (p) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} ORDER BY t."createdAt" DESC LIMIT 30`;
     else if (did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
     else return c.json({ trips: [] });
+    const { byCode } = await catMaps(sql);
     return c.json({ trips: rows.map((t: any) => ({
       id: t.id,
       dest: String(t.dropoffAddress || ''),
       fare: t.finalFare != null ? Number(t.finalFare) : Number(t.fareEstimate),
-      cat: RIDE2CAT[t.rideType] || 'Económico',
+      cat: byCode[t.rideType] || 'Económico',
       status: NEON2WEB[t.status] || t.status,
       by: t.cancelledBy || '', reason: t.cancelReason || '',
       other: d ? (t.passenger_name || '') : (t.driver_name || ''),
@@ -358,7 +389,8 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
     const drv = await webDriverInfo(sql, t.driverId);
     const pu = await sql`SELECT name FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    const { byCode } = await catMaps(sql);
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico'), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
   }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
   let driver = null;
@@ -1134,7 +1166,8 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
     const drv = await webDriverInfo(sql, t.driverId);
     const pu = await sql`SELECT name FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    const { byCode } = await catMaps(sql);
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico'), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
   }
   let driver = null;
   if (t.driverId) {
@@ -1300,6 +1333,39 @@ app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
   return c.json({ success: true });
 });
 
+// ─── CATEGORIAS (geridas no painel admin) ───
+// GET /api/v1/categories — Lista pública (a home usa para nomes/cores/preços)
+app.get('/api/v1/categories', async (c) => {
+  try {
+    const sql = neon(c.env.DATABASE_URL);
+    return c.json({ categories: await getCategories(sql) });
+  } catch {
+    return c.json({ categories: [
+      { code: 'ECONOMY', name: 'Económico', color: '#61188E', mult: 1 },
+      { code: 'COMFORT', name: 'Conforto', color: '#ff5fc8', mult: 1.4 },
+      { code: 'PREMIUM', name: 'Família', color: '#5b21c9', mult: 1.65 },
+    ] });
+  }
+});
+
+// PUT /api/v1/admin/categories/:code — Editar nome/cor/mult
+app.put('/api/v1/admin/categories/:code', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const code = String(c.req.param('code') || '').toUpperCase().slice(0, 16);
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b.name || '').trim().slice(0, 30);
+  const color = String(b.color || '').trim();
+  const mult = Number(b.mult);
+  if (!code || name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5) {
+    return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5).' }, 400);
+  }
+  await getCategories(sql);
+  const rows = await sql`UPDATE ride_categories SET name = ${name}, color = ${color}, mult = ${mult} WHERE code = ${code} RETURNING code, name, color, mult`;
+  if (!rows.length) return c.json({ message: 'Categoria não encontrada.' }, 404);
+  const r = rows[0];
+  return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult) } });
+});
+
 // ─── WEB CONTRACT (home ladiesgo-home.html) — Neon-backed ───
 // A home fala este dialeto (status em minúsculas, nomes incluídos).
 const WEB2NEON: Record<string, string> = { pending: 'REQUESTED', accepted: 'ACCEPTED', arrived: 'DRIVER_ARRIVED', in_progress: 'IN_PROGRESS', completed: 'COMPLETED', cancelled: 'CANCELLED' };
@@ -1312,12 +1378,13 @@ function pay2method(p: any): string {
 // Posição viva da passageira (efémera; como no server.js local).
 const paxLive = new Map<string, { lat: number; lng: number; ts: number }>();
 
-function webTripRow(r: any, drv: any, paxName: string) {
+function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) => string) {
   const addr = String(r.dropoffAddress || 'Luanda');
   const cut = addr.indexOf(' · ');
   const destN = cut >= 0 ? addr.slice(0, cut) : addr;
   const destA = cut >= 0 ? addr.slice(cut + 3) : '';
   const stops = Array.isArray(r.stops) ? r.stops : [];
+  const cat = catName ? catName(r.rideType) : (RIDE2CAT[r.rideType] || 'Económico');
   return {
     id: r.id,
     status: NEON2WEB[r.status] || r.status,
@@ -1327,7 +1394,7 @@ function webTripRow(r: any, drv: any, paxName: string) {
     dest: { n: destN, a: destA, lat: Number(r.dropoffLat), lng: Number(r.dropoffLng) },
     stops: stops.map((s: any) => ({ n: String(s.n || ''), a: String(s.a || ''), lat: Number(s.lat), lng: Number(s.lng) })),
     fare: r.finalFare != null ? Number(r.finalFare) : Number(r.fareEstimate),
-    cat: RIDE2CAT[r.rideType] || 'Económico',
+    cat: cat,
     pay: r.paymentMethod === 'CARD' ? 'Cartão' : 'Numerário',
     driver: drv || null,
     pin: pinForTrip(r.id),
@@ -1394,12 +1461,13 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
     const dist = havKm(pLa, pLo, dLa, dLo);
     const stops = Array.isArray(b.stops) ? b.stops.slice(0, 3).map((x: any) => ({ n: String(x.n || '').slice(0, 60), a: String(x.a || '').slice(0, 80), lat: Number(x.lat), lng: Number(x.lng) })).filter((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lng)) : [];
     const sched = Number(b.scheduledAt) > Date.now() ? new Date(Number(b.scheduledAt)) : null;
+    const { byName } = await catMaps(sql);
     const rows = await sql`
       INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng",
         status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", stops, "scheduledAt", "createdAt", "updatedAt")
       VALUES (gen_random_uuid()::text, ${user.sub}, ${pickupName}, ${pLa}, ${pLo},
         ${String(b.destN || '').slice(0, 60) + ' · ' + String(b.destA || '').slice(0, 80)}, ${dLa}, ${dLo},
-        'REQUESTED', ${CAT2RIDE[String(b.cat)] || 'ECONOMY'}, ${fare}, ${Math.round(dist * 10) / 10},
+        'REQUESTED', ${byName[String(b.cat)] || 'ECONOMY'}, ${fare}, ${Math.round(dist * 10) / 10},
         ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW())
       RETURNING id`;
     const tripId = rows[0].id;
