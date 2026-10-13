@@ -147,7 +147,7 @@ model Trip {
   pickupRef      String?
   dropoffRef     String?
   status         TripStatus    @default(REQUESTED)
-  rideType       RideType      @default(ECONOMY)
+  rideType       String        @default("ECONOMY")
   tripType       TripType      @default(RIDE)
   packageDescription String?
   receiverName   String?
