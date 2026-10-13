@@ -536,8 +536,20 @@ app.post('/api/v1/ratings', requireAuth, async (c) => {
   const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
   try {
-    await sql`INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt") VALUES (gen_random_uuid()::text, ${String(b.tripId)}, ${user.sub}, ${String(b.ratedId || b.driverId || '')}, ${Number(b.score || 5)}, ${String(b.comment || '').slice(0, 500)}, NOW()) ON CONFLICT ("tripId", "raterId") DO NOTHING`;
-  } catch {}
+    await sql`CREATE TABLE IF NOT EXISTS ratings (id TEXT PRIMARY KEY, "tripId" TEXT NOT NULL, "raterId" TEXT NOT NULL, "ratedId" TEXT NOT NULL DEFAULT '', score INT NOT NULL DEFAULT 5, comment TEXT NOT NULL DEFAULT '', "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS ratings_trip_rater ON ratings("tripId", "raterId")`;
+    let rated = String((b as any).ratedId || (b as any).driverId || '');
+    try {
+      const tr = await sql`SELECT "passengerId", "driverId" FROM trips WHERE id = ${String((b as any).tripId)} LIMIT 1`;
+      if (tr.length && !rated) {
+        if (user.sub === tr[0].passengerId && tr[0].driverId) {
+          const d = await sql`SELECT "userId" FROM drivers WHERE id = ${tr[0].driverId} LIMIT 1`;
+          rated = d[0]?.userId || '';
+        } else if (tr[0].passengerId) rated = tr[0].passengerId;
+      }
+    } catch {}
+    await sql`INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt") VALUES (${crypto.randomUUID()}, ${String((b as any).tripId)}, ${user.sub}, ${rated}, ${Number((b as any).score || 5)}, ${String((b as any).comment || '').slice(0, 500)}, NOW()) ON CONFLICT ("tripId", "raterId") DO NOTHING`;
+  } catch (e) { console.error('ratings insert error:', e); }
   return c.json({ success: true });
 });
 app.get('/api/v1/notifications', requireAuth, async (c) => c.json({ notifications: [] }));
