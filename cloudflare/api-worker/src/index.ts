@@ -1170,7 +1170,7 @@ app.put('/api/v1/admin/drivers/:id/approve', adminMiddleware, async (c) => {
 app.put('/api/v1/admin/drivers/:id/reject', adminMiddleware, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const { id } = c.req.param();
-  await sql`UPDATE drivers SET status = 'REJECTED', "updatedAt" = NOW() WHERE id = ${id}`;
+  await sql`UPDATE drivers SET status = 'REJECTED', "isOnline" = false, "updatedAt" = NOW() WHERE id = ${id}`;
   return c.json({ success: true });
 });
 
