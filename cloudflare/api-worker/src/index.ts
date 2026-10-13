@@ -1404,19 +1404,26 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
       RETURNING id`;
     const tripId = rows[0].id;
     // Push com som às motoristas online (não bloqueia a resposta).
+    // Toca tipo chamada: repete enquanto o pedido estiver pendente.
     try {
       const destN = String(b.destN || '').slice(0, 60);
+      const pushBody = `${pickupName} → ${destN}${stops.length ? ` · +${stops.length} paragem${stops.length > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`;
       c.executionCtx.waitUntil((async () => {
-        try {
-          const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
-          const msgs = toks.map((r: any) => ({
-            to: r.fcmToken, sound: 'default',
-            title: '🔔 Novo pedido LadiesGo!',
-            body: `${pickupName} → ${destN}${stops.length ? ` · +${stops.length} paragem${stops.length > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`,
-            data: { tripId, type: 'new-trip' },
-          })).filter((m: any) => m.to);
-          if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
-        } catch {}
+        for (let round = 0; round < 9; round++) {
+          try {
+            if (round > 0) await new Promise((r) => setTimeout(r, 20000));
+            const st = await sql`SELECT status FROM trips WHERE id = ${tripId} LIMIT 1`;
+            if (!st.length || st[0].status !== 'REQUESTED') break;
+            const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
+            const msgs = toks.map((r: any) => ({
+              to: r.fcmToken, sound: 'default',
+              title: round === 0 ? '🔔 Novo pedido LadiesGo!' : '🔔 Pedido a aguardar — LadiesGo!',
+              body: pushBody,
+              data: { tripId, type: 'new-trip' },
+            })).filter((m: any) => m.to);
+            if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
+          } catch { break; }
+        }
       })());
     } catch {}
     return c.json({ id: tripId });
