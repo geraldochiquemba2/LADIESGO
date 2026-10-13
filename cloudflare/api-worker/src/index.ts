@@ -751,11 +751,19 @@ app.get('/api/route', async (c) => {
   if (from.length !== 2 || to.length !== 2 || ![...from, ...to].every(Number.isFinite)) return c.json({ message: 'Pedido inválido.' }, 400);
   try {
     const q = `${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`;
-    const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${q}`);
-    const j: any = await r.json();
-    const g = j?.routes?.[0]?.geometry?.coordinates;
-    if (!g?.length) return c.json({ message: 'Sem rota de momento.' }, 502);
-    return c.json({ points: g.map((p: number[]) => [p[1], p[0]]), distance_m: j.routes[0].distance, duration_s: j.routes[0].duration }, 200, { 'Cache-Control': 'public, max-age=600' });
+    const bases = [
+      'https://router.project-osrm.org/route/v1/driving/',
+      'https://routing.openstreetmap.de/routed-car/route/v1/driving/',
+    ];
+    for (const base of bases) {
+      try {
+        const r = await fetch(base + q, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(6000) });
+        const j: any = await r.json();
+        const g = j?.routes?.[0]?.geometry?.coordinates;
+        if (g?.length) return c.json({ points: g.map((p: number[]) => [p[1], p[0]]), distance_m: j.routes[0].distance, duration_s: j.routes[0].duration }, 200, { 'Cache-Control': 'public, max-age=600' });
+      } catch {}
+    }
+    return c.json({ message: 'Sem rota de momento.' }, 502);
   } catch {
     return c.json({ message: 'Sem rota de momento.' }, 502);
   }
