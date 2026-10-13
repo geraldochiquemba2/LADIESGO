@@ -281,6 +281,7 @@ app.post('/api/v1/drivers/register', requireAuth, async (c) => c.json({ message:
 app.put('/api/v1/drivers/vehicle', requireAuth, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const user = c.get('user');
+  if (user.role !== 'ADMIN') return c.json({ message: 'Só o admin edita viaturas.' }, 403);
   const b = await c.req.json().catch(() => ({}));
   const did = await driverIdFor(sql, user.sub);
   if (!did) return c.json({ message: 'Sem registo de motorista.' }, 404);
@@ -304,6 +305,38 @@ app.put('/api/v1/drivers/vehicle', requireAuth, async (c) => {
       "carYear" = COALESCE(${Number.isInteger(year) ? year : null}, "carYear"),
       "updatedAt" = NOW() WHERE id = ${did}`;
   return c.json({ ok: true });
+});
+// PUT /api/v1/admin/drivers/:id — Admin edita nome + viatura + documentos
+app.put('/api/v1/admin/drivers/:id', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const id = c.req.param('id');
+  const b = await c.req.json().catch(() => ({}));
+  const cur = await sql`SELECT d.*, u.name AS uname FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${id} LIMIT 1`;
+  if (!cur.length) return c.json({ message: 'Motorista não encontrada.' }, 404);
+  const t = cur[0];
+  const plate = String(b.carPlate || '').trim().slice(0, 12);
+  if (plate) {
+    const clash = await sql`SELECT id FROM drivers WHERE "carPlate" = ${plate} AND id != ${id} LIMIT 1`;
+    if (clash.length) return c.json({ message: 'Matrícula já usada noutra viatura.' }, 409);
+  }
+  const lic = String(b.licenseNumber || '').trim().slice(0, 30) || null;
+  if (lic) {
+    const clashL = await sql`SELECT id FROM drivers WHERE "licenseNumber" = ${lic} AND id != ${id} LIMIT 1`;
+    if (clashL.length) return c.json({ message: 'Carta já usada noutra conta.' }, 409);
+  }
+  const year = parseInt(b.carYear, 10);
+  if (b.carYear !== undefined && b.carYear !== '' && b.carYear !== null && !Number.isInteger(year)) return c.json({ message: 'Ano inválido.' }, 400);
+  const nm = String(b.name || '').trim().slice(0, 60);
+  if (nm && t.userId) await sql`UPDATE users SET name = ${nm}, "updatedAt" = NOW() WHERE id = ${t.userId}`;
+  const rows = await sql`
+    UPDATE drivers SET "carMake" = COALESCE(${String(b.carMake || '').slice(0, 40) || null}, "carMake"),
+      "carModel" = COALESCE(${String(b.carModel || '').slice(0, 40) || null}, "carModel"),
+      "carColor" = COALESCE(${String(b.carColor || '').slice(0, 20) || null}, "carColor"),
+      "carPlate" = COALESCE(${plate || null}, "carPlate"),
+      "licenseNumber" = COALESCE(${lic}, "licenseNumber"),
+      "carYear" = COALESCE(${Number.isInteger(year) ? year : null}, "carYear"),
+      "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
+  return c.json(rows[0]);
 });
 // GET /api/v1/ratings/pending — Viagens concluídas por avaliar (minhas)
 app.get('/api/v1/ratings/pending', requireAuth, async (c) => {
@@ -1677,7 +1710,7 @@ async function webDriverInfo(sql: any, driverId: string | null) {
 // A passageira pede → a oferta vai só para a motorista online mais próxima
 // durante 60s. Sem resposta/rejeição, passa à seguinte. Esgotada a fila,
 // abre a todas (broadcast) até ao limite de 10min.
-const OFFER_TTL_SEC = 60;
+const OFFER_TTL_SEC = 20;
 const OFFER_MAX = 15;
 async function ensureOfferColumns(sql: any) {
   try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerQueue" JSONB`; } catch {}

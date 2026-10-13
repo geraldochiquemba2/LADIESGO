@@ -10,7 +10,7 @@ const chats = new Map();
 const callSignals = new Map();
 let tripN = 0;
 // Oferta sequencial: 60s por motorista, mais próxima primeiro.
-const OFFER_TTL_MS = 60000;
+const OFFER_TTL_MS = 20000;
 function havKm(aLa, aLo, bLa, bLo) {
   const R = 6371, t = Math.PI / 180;
   const dLa = (bLa - aLa) * t, dLo = (bLo - aLo) * t;
