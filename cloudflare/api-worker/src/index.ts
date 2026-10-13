@@ -223,7 +223,7 @@ app.put('/api/v1/drivers/location', requireAuth, async (c) => {
   await sql`UPDATE drivers SET "currentLat" = ${Number(lat)}, "currentLng" = ${Number(lng)}, "updatedAt" = NOW() WHERE "userId" = ${user.sub}`;
   return c.json({ ok: true });
 });
-app.get('/api/v1/drivers/nearby', requireAuth, async (c) => {
+app.get('/api/v1/drivers/nearby', async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const lat = Number(c.req.query('lat')), lng = Number(c.req.query('lng'));
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ message: 'Pedido inválido.' }, 400);
@@ -241,6 +241,24 @@ app.get('/api/v1/drivers/earnings', requireAuth, async (c) => {
   return c.json({ totalEarnings: Number(d[0]?.totalEarnings || 0), totalTrips: Number(d[0]?.totalTrips || 0), trips: [] });
 });
 app.post('/api/v1/drivers/register', requireAuth, async (c) => c.json({ message: 'Registo via painel admin.' }, 400));
+// Presença da motorista (a home chama sem token: identifica pelo id do user).
+app.post('/api/v1/drivers/position', async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const b = await c.req.json().catch(() => ({}));
+  const userId = String(b.id || '');
+  if (!userId) return c.json({ message: 'Motorista inválida.' }, 400);
+  if (b.offline) {
+    await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
+    return c.json({ ok: true });
+  }
+  const la = Number(b.lat), lo = Number(b.lng);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
+  const rows = await sql`
+    UPDATE drivers SET "isOnline" = true, "currentLat" = ${la}, "currentLng" = ${lo}, "updatedAt" = NOW()
+    WHERE "userId" = ${userId} RETURNING id`;
+  if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
+  return c.json({ ok: true });
+});
 
 // ─── TRIPS ───
 app.post('/api/v1/trips/estimate', requireAuth, async (c) => {
