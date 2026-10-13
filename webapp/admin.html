@@ -23,6 +23,9 @@
   .card[data-f]{cursor:pointer}.card.sel{outline:2.5px solid var(--b)}
   .umodal{position:fixed;inset:0;z-index:600;background:rgba(20,0,50,.6);display:none;align-items:center;justify-content:center;padding:18px}
   .umodal.on{display:flex}
+  #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);z-index:700;background:#2a0c58;color:#fff;font-weight:700;font-size:14px;padding:12px 20px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;max-width:90vw;text-align:center}
+  #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.ok{background:#12a150}#toast.err{background:#d92d4b}
   .ubox{position:relative;background:#fff;border-radius:20px;padding:22px 18px;max-width:480px;width:100%;max-height:86vh;overflow-y:auto}
   .ux{position:absolute;top:8px;right:10px;width:34px;height:34px;border-radius:50%;border:0;background:#f3e6ff;color:#61188E;font-weight:800;font-size:15px;cursor:pointer}
   .urow{display:flex;gap:12px;align-items:center}
@@ -119,12 +122,14 @@
 </div>
 </div>
 <div class="umodal" id="umodal"><div class="ubox"><button class="ux" data-a="closeuser" aria-label="Fechar">✕</button><div id="ubody"></div></div></div>
+<div id="toast"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const $=id=>document.getElementById(id);
 const fmt=v=>String(Math.round(v||0)).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
+function toast(msg,ok){try{const t=$('toast');if(!t)return;t.textContent=msg;t.className=ok===false?'err':(ok==='ok'?'ok':'');requestAnimationFrame(()=>t.classList.add('on'));clearTimeout(t._x);t._x=setTimeout(()=>t.classList.remove('on'),2600);}catch(e){}}
 let ALL=[],DRV=[],USERS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,openTrip=null,mapFilter=null,selDrv=null,drvQ='',mapQuery='',PEND=[],STATS=null,uPage=1,uRole='',uQ='',UTOT=0,selUser=null,tPage=1,TTOT=0;
 var STM_R={pending:'REQUESTED',accepted:'ACCEPTED',arrived:'DRIVER_ARRIVED',in_progress:'IN_PROGRESS',completed:'COMPLETED',cancelled:'CANCELLED'};
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
@@ -390,7 +395,7 @@ document.addEventListener('click',e=>{
   const dv=e.target.closest('[data-drv]');
   if(dv){e.preventDefault();const k=dv.dataset.drv||null;selDrv=selDrv===k?null:k;goTab('drivers');renderDrivers();renderHist();return}
   const rs=e.target.closest('[data-a="resetpw"]');
-  if(rs){if(confirm('Repor a senha de '+(rs.dataset.n||'')+' para a padrão 0987654321?')){fetch('/api/v1/admin/users/'+rs.dataset.id+'/reset-password',{method:'POST',headers:ah()}).then(r=>{if(!r.ok)throw 0;rs.textContent='✓';setTimeout(load,800)}).catch(()=>alert('Falhou o reset.'))}return}
+  if(rs){if(confirm('Repor a senha de '+(rs.dataset.n||'')+' para a padrão 0987654321?')){fetch('/api/v1/admin/users/'+rs.dataset.id+'/reset-password',{method:'POST',headers:ah()}).then(r=>{if(!r.ok)throw 0;rs.textContent='✓';toast('Reset feito com sucesso ✓','ok');setTimeout(load,800)}).catch(()=>toast('Falhou o reset.',false))}return}
   const mk=e.target.closest('[data-a="mkdrv"]');
   if(mk){mkDriver();return}
   const pg=e.target.closest('[data-a="upage"],[data-a="tpage"]');
