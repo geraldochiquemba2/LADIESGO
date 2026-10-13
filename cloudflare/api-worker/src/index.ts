@@ -1709,7 +1709,7 @@ async function buildOfferQueue(sql: any, pLa: number, pLo: number, rideCode: str
   try { byCode = (await catMaps(sql)).byCode; } catch {}
   let rows: any[] = [];
   try {
-    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", d.cats, d."updatedAt" FROM drivers d WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL AND d."currentLng" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS'))`;
+    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", d.cats, d."updatedAt" FROM drivers d WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL AND d."currentLng" IS NOT NULL AND d."updatedAt" > NOW() - INTERVAL '5 minutes' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS'))`;
   } catch { return []; }
   const wantCat = byCode[rideCode] || '';
   const now = Date.now();
