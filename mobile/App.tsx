@@ -51,8 +51,21 @@ export default function App() {
   const webRef = useRef<WebView>(null);
   const jwtRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
+  const loadTimer = useRef<any>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+
+  const endLoading = () => {
+    try { if (loadTimer.current) clearTimeout(loadTimer.current); } catch {}
+    loadTimer.current = null;
+    setLoading(false);
+  };
+  const beginLoading = () => {
+    setLoading(true);
+    try { if (loadTimer.current) clearTimeout(loadTimer.current); } catch {}
+    // Rede de segurança: nenhum load fica a girar para sempre.
+    loadTimer.current = setTimeout(() => setLoading(false), 25000);
+  };
 
   // Permissões NATIVAS ao abrir (uma vez): localização + notificações com som.
   useEffect(() => {
@@ -157,6 +170,16 @@ export default function App() {
       Linking.openURL(url).catch(() => {});
       return false;
     }
+    // Apps de navegação (Waze/Google/Apple Maps) e qualquer site externo
+    // abrem na app própria: dentro da WebView prendiam o loading no roxo.
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        if (u.hostname === 'ladiesgo.pages.dev') return true;
+        Linking.openURL(url).catch(() => {});
+        return false;
+      }
+    } catch {}
     return true;
   };
 
@@ -171,7 +194,7 @@ export default function App() {
             style={styles.retry}
             onPress={() => {
               setFailed(false);
-              setLoading(true);
+              beginLoading();
               webRef.current?.reload();
             }}
           >
@@ -201,19 +224,19 @@ export default function App() {
           injectedJavaScript={AUTH_BRIDGE_JS}
           onMessage={onMessage}
           onShouldStartLoadWithRequest={onShouldStartLoad}
-          onLoadStart={() => setLoading(true)}
+          onLoadStart={beginLoading}
           onLoadEnd={() => {
             // Esconde com atraso: sem isto há um flash branco entre o
             // fim do load e a primeira pintura da página (fundo roxo).
-            setTimeout(() => setLoading(false), 700);
+            setTimeout(endLoading, 700);
           }}
           onError={() => {
-            setLoading(false);
+            endLoading();
             setFailed(true);
           }}
           onHttpError={(e) => {
             if ((e.nativeEvent.statusCode || 0) >= 500) {
-              setLoading(false);
+              endLoading();
               setFailed(true);
             }
           }}
