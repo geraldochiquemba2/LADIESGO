@@ -1408,7 +1408,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
       const destN = String(b.destN || '').slice(0, 60);
       c.executionCtx.waitUntil((async () => {
         await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!');
-        await ringStart(c.env, tripId);
+        await ringStart(c.env);
       })());
     } catch {}
     return c.json({ id: tripId });
@@ -1448,7 +1448,6 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
     } else if (neonSt === 'CANCELLED') {
       await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
     }
-    try { await ringStop(c.env, id); } catch {}
     return c.json({ ok: true, status: st });
   } catch (e) {
     console.error('trip status error:', e);
@@ -1476,8 +1475,9 @@ async function pushTripToDrivers(sql: any, tripId: string, pickupName: string, d
   } catch {}
 }
 
-// Toca-toca por viagem: alarme encadeado de 3s enquanto o pedido estiver
-// pendente. Pára sozinho ao aceitar/cancelar/concluir ou aos ~4 min.
+// Toca-toca global: 1 viagem = detalhe (local + paragens); várias = resumo
+// único ("tens viagens disponíveis"). Alarme de 3s, máx. 4 repetições
+// (5 pushes no total com o imediato). Pára sem pendentes.
 export class TripRinger {
   state: any;
   env: any;
@@ -1491,26 +1491,36 @@ export class TripRinger {
       try { await this.state.storage.deleteAlarm(); } catch {}
       return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
     }
-    const tripId = u.searchParams.get('tripId') || '';
-    if (!tripId) return new Response('{"message":"sem trip"}', { status: 400 });
-    await this.state.storage.put('tripId', tripId);
     await this.state.storage.setAlarm(Date.now() + 3000);
     return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
   }
   async alarm() {
     try {
-      const tripId: string = await this.state.storage.get('tripId');
-      if (!tripId) return;
       const sent: number = (await this.state.storage.get('sent')) || 0;
       if (sent >= 4) return;
       const sql = neon(this.env.DATABASE_URL);
-      const st = await sql`SELECT id, status, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "createdAt" FROM trips WHERE id = ${tripId} LIMIT 1`;
-      if (!st.length || st[0].status !== 'REQUESTED') return;
-      if (Date.now() - new Date(st[0].createdAt).getTime() > 4 * 60 * 1000) return;
-      const t = st[0];
-      const addr = String(t.dropoffAddress || 'Luanda');
-      const cut = addr.indexOf(' · ');
-      await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Pedido a aguardar — LadiesGo!');
+      const rows = await sql`
+        SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops FROM trips
+        WHERE status = 'REQUESTED' AND "createdAt" > NOW() - INTERVAL '6 minutes'
+        ORDER BY "createdAt" ASC LIMIT 20`;
+      if (!rows.length) return;
+      if (rows.length === 1) {
+        const t = rows[0];
+        const addr = String(t.dropoffAddress || 'Luanda');
+        const cut = addr.indexOf(' · ');
+        await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!');
+      } else {
+        try {
+          const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
+          const msgs = toks.map((r: any) => ({
+            to: r.fcmToken, sound: 'default',
+            title: '🔔 Viagens disponíveis — LadiesGo!',
+            body: `Tens ${rows.length} pedidos à espera · abre a app`,
+            data: { type: 'pending-summary' },
+          })).filter((m: any) => m.to);
+          if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
+        } catch {}
+      }
       await this.state.storage.put('sent', sent + 1);
       await this.state.storage.setAlarm(Date.now() + 3000);
     } catch {
@@ -1519,17 +1529,10 @@ export class TripRinger {
   }
 }
 
-async function ringStart(env: any, tripId: string) {
+async function ringStart(env: any) {
   try {
-    const stub = env.RINGER.get(env.RINGER.idFromName(tripId));
-    await stub.fetch(`https://ringer/schedule?tripId=${tripId}`);
-  } catch {}
-}
-
-async function ringStop(env: any, tripId: string) {
-  try {
-    const stub = env.RINGER.get(env.RINGER.idFromName(tripId));
-    await stub.fetch('https://ringer/cancel');
+    const stub = env.RINGER.get(env.RINGER.idFromName('global'));
+    await stub.fetch('https://ringer/kick');
   } catch {}
 }
 
