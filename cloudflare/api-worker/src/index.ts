@@ -1491,7 +1491,11 @@ export class TripRinger {
       try { await this.state.storage.deleteAlarm(); } catch {}
       return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
     }
-    await this.state.storage.setAlarm(Date.now() + 3000);
+    const now = Date.now();
+    const lastKick: number = (await this.state.storage.get('lastKick')) || 0;
+    if (now - lastKick > 60000) await this.state.storage.put('sent', 0);
+    await this.state.storage.put('lastKick', now);
+    await this.state.storage.setAlarm(now + 3000);
     return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
   }
   async alarm() {
