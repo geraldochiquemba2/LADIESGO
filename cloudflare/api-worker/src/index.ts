@@ -597,14 +597,21 @@ app.get('/api/places/search', async (c) => {
 app.get('/api/zone', async (c) => {
   const la = Number(c.req.query('lat')), lo = Number(c.req.query('lng'));
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Pedido inválido.' }, 400);
+  let zone = '';
   try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${la}&lon=${lo}&format=json&zoom=14`, { headers: { 'User-Agent': 'LadiesGo/1.0' } });
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${la}&lon=${lo}&format=json&zoom=14`, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
     const j: any = await r.json();
     const a = j?.address || {};
-    return c.json({ zone: a.suburb || a.neighbourhood || a.quarter || a.city_district || a.town || a.city || '' }, 200, { 'Cache-Control': 'public, max-age=86400' });
-  } catch {
-    return c.json({ zone: '' }, 200, { 'Cache-Control': 'public, max-age=86400' });
+    zone = a.suburb || a.neighbourhood || a.quarter || a.city_district || a.town || a.city || '';
+  } catch {}
+  if (!zone) {
+    try {
+      const br = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${la}&longitude=${lo}&localityLanguage=pt`, { signal: AbortSignal.timeout(8000) });
+      const bj: any = await br.json();
+      zone = bj.locality || bj.city || bj.principalSubdivision || '';
+    } catch {}
   }
+  return c.json({ zone }, 200, { 'Cache-Control': 'public, max-age=86400' });
 });
 app.get('/api/route', async (c) => {
   const from = String(c.req.query('from') || '').split(',').map(Number);
