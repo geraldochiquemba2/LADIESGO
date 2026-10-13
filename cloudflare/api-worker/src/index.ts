@@ -277,6 +277,48 @@ app.get('/api/v1/drivers/earnings', requireAuth, async (c) => {
   return c.json({ totalEarnings: Number(d[0]?.totalEarnings || 0), totalTrips: Number(d[0]?.totalTrips || 0), trips: [] });
 });
 app.post('/api/v1/drivers/register', requireAuth, async (c) => c.json({ message: 'Registo via painel admin.' }, 400));
+// PUT /api/v1/drivers/vehicle — Guardar/atualizar viatura da motorista
+app.put('/api/v1/drivers/vehicle', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const b = await c.req.json().catch(() => ({}));
+  const did = await driverIdFor(sql, user.sub);
+  if (!did) return c.json({ message: 'Sem registo de motorista.' }, 404);
+  const plate = String(b.carPlate || '').trim().slice(0, 12);
+  if (plate) {
+    const clash = await sql`SELECT id FROM drivers WHERE "carPlate" = ${plate} AND id != ${did} LIMIT 1`;
+    if (clash.length) return c.json({ message: 'Matrícula já usada noutra viatura.' }, 409);
+  }
+  const lic = String(b.licenseNumber || '').trim().slice(0, 30) || null;
+  if (lic) {
+    const clashL = await sql`SELECT id FROM drivers WHERE "licenseNumber" = ${lic} AND id != ${did} LIMIT 1`;
+    if (clashL.length) return c.json({ message: 'Carta já usada noutra conta.' }, 409);
+  }
+  const year = parseInt(b.carYear, 10);
+  await sql`
+    UPDATE drivers SET "carMake" = COALESCE(${String(b.carMake || '').slice(0, 40) || null}, "carMake"),
+      "carModel" = COALESCE(${String(b.carModel || '').slice(0, 40) || null}, "carModel"),
+      "carColor" = COALESCE(${String(b.carColor || '').slice(0, 20) || null}, "carColor"),
+      "carPlate" = COALESCE(${plate || null}, "carPlate"),
+      "licenseNumber" = COALESCE(${lic}, "licenseNumber"),
+      "carYear" = COALESCE(${Number.isInteger(year) ? year : null}, "carYear"),
+      "updatedAt" = NOW() WHERE id = ${did}`;
+  return c.json({ ok: true });
+});
+// GET /api/v1/ratings/pending — Viagens concluídas por avaliar (minhas)
+app.get('/api/v1/ratings/pending', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  try {
+    const did = await driverIdFor(sql, user.sub);
+    const rows = did
+      ? await sql`SELECT t.id AS "tripId" FROM trips t LEFT JOIN ratings r ON r."tripId" = t.id AND r."raterId" = ${user.sub} WHERE t.status = 'COMPLETED' AND (t."passengerId" = ${user.sub} OR t."driverId" = ${did}) AND r.id IS NULL ORDER BY t."completedAt" DESC NULLS LAST, t."createdAt" DESC LIMIT 5`
+      : await sql`SELECT t.id AS "tripId" FROM trips t LEFT JOIN ratings r ON r."tripId" = t.id AND r."raterId" = ${user.sub} WHERE t.status = 'COMPLETED' AND t."passengerId" = ${user.sub} AND r.id IS NULL ORDER BY t."completedAt" DESC NULLS LAST, t."createdAt" DESC LIMIT 5`;
+    return c.json({ pendings: rows.map((x: any) => ({ tripId: x.tripId })) });
+  } catch (e) {
+    return c.json({ pendings: [] });
+  }
+});
 // Presença da motorista (a home chama sem token: identifica pelo id do user).
 app.post('/api/v1/drivers/position', async (c) => {
   const sql = neon(c.env.DATABASE_URL);
@@ -759,9 +801,26 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
   const status = c.req.query('status');
+  const passengerId = c.req.query('passengerId');
   const offset = (page - 1) * limit;
 
   try {
+    if (passengerId && !status) {
+      const pTotal = await sql`SELECT COUNT(*)::int AS total FROM trips WHERE "passengerId" = ${passengerId}`;
+      const pRows = await sql`
+        SELECT t.*,
+          u.name AS passenger_name, u.phone AS passenger_phone,
+          du.name AS driver_name, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+        FROM trips t
+        LEFT JOIN users u ON u.id = t."passengerId"
+        LEFT JOIN drivers d ON d.id = t."driverId"
+        LEFT JOIN users du ON du.id = d."userId"
+        WHERE t."passengerId" = ${passengerId}
+        ORDER BY t."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `;
+      return c.json({ trips: pRows, total: Number(pTotal[0]?.total || 0) });
+    }
     if (status) {
       const totalRes = await sql`SELECT COUNT(*)::int AS total FROM trips WHERE status = ${status}`;
       const tripsRes = await sql`
