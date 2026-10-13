@@ -1063,6 +1063,25 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
   }
 });
 
+// GET /api/v1/admin/driver-stats — Totais globais por motorista (o histórico da página é limitado)
+app.get('/api/v1/admin/driver-stats', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  try {
+    const rows = await sql`
+      SELECT t."driverId", COUNT(*)::int AS total,
+        SUM(CASE WHEN t.status = 'COMPLETED' THEN 1 ELSE 0 END)::int AS completed,
+        SUM(CASE WHEN t.status = 'CANCELLED' THEN 1 ELSE 0 END)::int AS cancelled,
+        COALESCE(SUM(CASE WHEN t.status = 'COMPLETED' THEN COALESCE(t."finalFare", t."fareEstimate", 0) ELSE 0 END), 0)::int AS revenue,
+        MAX(du.name) AS name
+      FROM trips t
+      LEFT JOIN drivers d ON d.id = t."driverId"
+      LEFT JOIN users du ON du.id = d."userId"
+      WHERE t."driverId" IS NOT NULL
+      GROUP BY t."driverId"
+      ORDER BY total DESC`;
+    return c.json({ driverStats: rows.map((r: any) => ({ driverId: r.driverId, name: r.name || '', total: Number(r.total || 0), completed: Number(r.completed || 0), cancelled: Number(r.cancelled || 0), revenue: Number(r.revenue || 0) })) });
+  } catch (e) { console.error('Admin driver-stats error:', e); return c.json({ driverStats: [] }); }
+});
 // GET /api/v1/admin/drivers — List drivers
 app.get('/api/v1/admin/drivers', adminMiddleware, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
