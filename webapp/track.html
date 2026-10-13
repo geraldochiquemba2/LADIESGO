@@ -13,7 +13,7 @@
   var map=L.map('map').setView([-8.839,13.289],13);
   var _tileErr=0;L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).on('tileerror',function(){try{_tileErr++;if(_tileErr===12){map.eachLayer(function(l){try{if(l._url&&l._url.indexOf('openstreetmap')>=0)map.removeLayer(l);}catch(e){}});L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);}}catch(e){}}).addTo(map);
   map.attributionControl.setPrefix('© OpenStreetMap');
-  var carMk=null,destMk=null,pickMk=null,stopMks=[],done=false;
+  var carMk=null,destMk=null,pickMk=null,stopMks=[],done=false;var fitted=false,stopSig='',glide=null;function glideTo(mk,ll){try{if(glide)cancelAnimationFrame(glide);}catch(e){}try{var a=mk.getLatLng();var b=L.latLng(ll[0],ll[1]);if(a.equals(b,1e-7))return;var t0=null;var step=function(ts){if(t0==null)t0=ts;var k=Math.min(1,(ts-t0)/900);mk.setLatLng([a.lat+(b.lat-a.lat)*k,a.lng+(b.lng-a.lng)*k]);if(k<1)glide=requestAnimationFrame(step);else glide=null;};glide=requestAnimationFrame(step);}catch(e){try{mk.setLatLng(ll);}catch(_){}}}
   var ST={REQUESTED:'À espera de motorista',ACCEPTED:'Motorista a caminho',DRIVER_ARRIVED:'Motorista chegou',IN_PROGRESS:'Em viagem',COMPLETED:'Viagem concluída ✓',CANCELLED:'Viagem cancelada'};
   function emoji(c){return L.divIcon({className:'',html:'<div style="font-size:30px;line-height:30px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.4))">'+c+'</div>',iconSize:[30,30],iconAnchor:[15,28]});}
   function stopIcon(n){return L.divIcon({className:'',html:'<div style="width:26px;height:26px;border-radius:50%;background:#61188E;color:#fff;display:grid;place-items:center;font-weight:800;font-size:13px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)">'+n+'</div>',iconSize:[26,26],iconAnchor:[13,13]});}
@@ -50,10 +50,9 @@
       else if(pickMk){try{map.removeLayer(pickMk);}catch(e){}pickMk=null;}
       if(t.dest&&t.dest.lat!=null){if(!destMk)destMk=L.marker([t.dest.lat,t.dest.lng],{icon:emoji('🏁'),interactive:false}).addTo(map);else destMk.setLatLng([t.dest.lat,t.dest.lng]);pts.push([t.dest.lat,t.dest.lng]);}
       var stops=Array.isArray(t.stops)?t.stops.filter(function(s){return s&&(s.lat!=null||(s.c&&s.c[0]!=null));}):[];
-      stopMks.forEach(function(m){try{map.removeLayer(m);}catch(e){}});stopMks=[];
-      stops.slice(0,3).forEach(function(s,i){var ll=s.lat!=null?[s.lat,s.lng]:s.c;var mk=L.marker(ll,{icon:stopIcon(i+1),interactive:false});mk.addTo(map);stopMks.push(mk);pts.push(ll);});
-      if(t.driver&&t.driver.lat!=null){if(!carMk)carMk=L.marker([t.driver.lat,t.driver.lng],{icon:L.divIcon({className:'',html:'<div style="width:40px;height:40px;border-radius:50%;background:#a855f7;display:grid;place-items:center;font-size:23px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4)">🚕</div>',iconSize:[40,40],iconAnchor:[20,20]}),interactive:false}).addTo(map);else carMk.setLatLng([t.driver.lat,t.driver.lng]);pts.push([t.driver.lat,t.driver.lng]);}
-      if(pts.length){try{map.flyToBounds(L.latLngBounds(pts).pad(0.3),{duration:0.8});}catch(e){}}
+      var _sig=stops.slice(0,3).map(function(s){var _ll=s.lat!=null?[s.lat,s.lng]:s.c;return _ll[0]+','+_ll[1];}).join('|');stops.slice(0,3).forEach(function(s){var _pl=s.lat!=null?[s.lat,s.lng]:s.c;pts.push(_pl);});if(_sig!==stopSig){stopSig=_sig;stopMks.forEach(function(m){try{map.removeLayer(m);}catch(e){}});stopMks=[];stops.slice(0,3).forEach(function(s,i){var ll=s.lat!=null?[s.lat,s.lng]:s.c;var mk=L.marker(ll,{icon:stopIcon(i+1),interactive:false});mk.addTo(map);stopMks.push(mk);});}
+      if(t.driver&&t.driver.lat!=null){if(!carMk)carMk=L.marker([t.driver.lat,t.driver.lng],{icon:L.divIcon({className:'',html:'<div style="width:40px;height:40px;border-radius:50%;background:#a855f7;display:grid;place-items:center;font-size:23px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4)">🚕</div>',iconSize:[40,40],iconAnchor:[20,20]}),interactive:false}).addTo(map);else glideTo(carMk,[t.driver.lat,t.driver.lng]);pts.push([t.driver.lat,t.driver.lng]);}
+      if(pts.length){try{if(!fitted){fitted=true;map.flyToBounds(L.latLngBounds(pts).pad(0.3),{duration:0.8});}else if(t.driver&&t.driver.lat!=null&&map.getBounds&&!map.getBounds().contains([t.driver.lat,t.driver.lng])){map.panTo([t.driver.lat,t.driver.lng],{animate:true});}}catch(e){}}
       if(st==='COMPLETED'||st==='CANCELLED'){if(carMk){try{map.removeLayer(carMk);}catch(e){}carMk=null;}done=true;}
     }catch(e){document.getElementById('info').textContent='Sem ligação. A tentar de novo…';}
   }
