@@ -1561,6 +1561,40 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
   }
 });
 
+// GET /api/v1/trips/public/:id — Partilha com contactos (sem login: quem tem o link vê)
+app.get('/api/v1/trips/public/:id', async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const id = c.req.param('id');
+  try {
+    const rows = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
+    if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+    const t = rows[0];
+    const pu = await sql`SELECT name, phone FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    let driver = null;
+    if (t.driverId) {
+      const d = await sql`
+        SELECT d."currentLat", d."currentLng", d.rating, d."carMake", d."carModel", d."carColor", d."carPlate", d."carPhoto", u.name, u.phone, u."profilePhoto"
+        FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${t.driverId} LIMIT 1`;
+      if (d.length) {
+        const r = d[0];
+        const carFull = [r.carMake, r.carModel].filter(Boolean).join(' ') + (r.carColor ? ' · ' + r.carColor : '');
+        driver = { name: r.name || 'Motorista', phone: r.phone || '', carFull, plate: r.carPlate || '', rating: r.rating != null ? Number(r.rating) : null, photo: r.carPhoto || r.profilePhoto || '', lat: r.currentLat != null ? Number(r.currentLat) : null, lng: r.currentLng != null ? Number(r.currentLng) : null };
+      }
+    }
+    const stops = Array.isArray(t.stops) ? t.stops : [];
+    return c.json({
+      status: t.status,
+      pickup: { name: String(t.pickupAddress || ''), lat: Number(t.pickupLat), lng: Number(t.pickupLng) },
+      dest: { name: String(t.dropoffAddress || ''), lat: Number(t.dropoffLat), lng: Number(t.dropoffLng) },
+      stops: stops.map((s: any) => ({ n: String(s.n || ''), a: String(s.a || ''), lat: Number(s.lat), lng: Number(s.lng) })),
+      driver, passenger: { name: pu[0]?.name || 'Passageira', phone: pu[0]?.phone || '' },
+    });
+  } catch (e) {
+    console.error('public trip error:', e);
+    return c.json({ message: 'Falhou. Tenta de novo.' }, 500);
+  }
+});
+
 // POST /api/v1/trips/:id/position — Posição viva da passageira (web)
 app.post('/api/v1/trips/:id/position', requireAuth, async (c) => {
   const id = c.req.param('id');
