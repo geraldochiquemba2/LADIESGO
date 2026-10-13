@@ -253,9 +253,15 @@ app.get('/api/v1/drivers/nearby', async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const lat = Number(c.req.query('lat')), lng = Number(c.req.query('lng'));
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ message: 'Pedido inválido.' }, 400);
-  const rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL LIMIT 100`;
+    try { await sql`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cats JSONB`; } catch {}
+  let rows: any[];
+  try {
+    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL LIMIT 100`;
+  } catch {
+    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL LIMIT 100`;
+  }
   const out = rows
-    .map((d: any) => ({ id: d.id, currentLat: Number(d.currentLat), currentLng: Number(d.currentLng), lat: Number(d.currentLat), lng: Number(d.currentLng), name: d.name, distanceKm: Math.round(havKm(lat, lng, Number(d.currentLat), Number(d.currentLng)) * 10) / 10 }))
+    .map((d: any) => ({ id: d.id, currentLat: Number(d.currentLat), currentLng: Number(d.currentLng), lat: Number(d.currentLat), lng: Number(d.currentLng), name: d.name, cats: Array.isArray(d.cats) ? d.cats.map((x: any) => String(x)) : undefined, distanceKm: Math.round(havKm(lat, lng, Number(d.currentLat), Number(d.currentLng)) * 10) / 10 }))
     .sort((a: any, b: any) => a.distanceKm - b.distanceKm)
     .slice(0, 20);
   return c.json({ drivers: out });
@@ -279,8 +285,10 @@ app.post('/api/v1/drivers/position', async (c) => {
   }
   const la = Number(b.lat), lo = Number(b.lng);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
+  try { await sql`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cats JSONB`; } catch {}
+  const cats = Array.isArray(b.cats) ? b.cats.map((x: any) => String(x).slice(0, 30)).slice(0, 6) : null;
   const rows = await sql`
-    UPDATE drivers SET "isOnline" = true, "currentLat" = ${la}, "currentLng" = ${lo}, "updatedAt" = NOW()
+    UPDATE drivers SET "isOnline" = true, "currentLat" = ${la}, "currentLng" = ${lo}, "updatedAt" = NOW(), cats = COALESCE(${cats ? JSON.stringify(cats) : null}::jsonb, cats)
     WHERE "userId" = ${userId} RETURNING id`;
   if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
   return c.json({ ok: true });
@@ -321,6 +329,11 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
     const did = await driverIdFor(sql, qDriver || user.sub);
     if (!did) return c.json({ trips: [] });
     const { byCode } = await catMaps(sql);
+    let myCats: string[] | null = null;
+    try {
+      const dr = await sql`SELECT cats FROM drivers WHERE id = ${did} LIMIT 1`;
+      if (dr.length && Array.isArray(dr[0].cats) && dr[0].cats.length) myCats = dr[0].cats.map((x: any) => String(x));
+    } catch {}
     const rows = await sql`
       SELECT t.*, u.name AS passenger_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
       WHERE t.status = 'REQUESTED' AND t."createdAt" > NOW() - INTERVAL '10 minutes'
@@ -331,6 +344,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
       const r = rows[i];
       if (seen.has(r.passengerId)) continue;
       seen.add(r.passengerId);
+      if (myCats && myCats.indexOf(byCode[r.rideType] || '') < 0) continue;
       out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
     }
     return c.json({ trips: out });
@@ -1499,7 +1513,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
     try {
       const destN = String(b.destN || '').slice(0, 60);
       c.executionCtx.waitUntil((async () => {
-        await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!');
+        await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!', String(b.cat || ''));
         await ringStart(c.env);
       })());
     } catch {}
@@ -1558,9 +1572,10 @@ app.post('/api/v1/trips/:id/position', requireAuth, async (c) => {
 });
 
 // Push com som (Expo) — usado no pedido imediato e no cron de repetição.
-async function pushTripToDrivers(sql: any, tripId: string, pickupName: string, destN: string, stopsN: number, fare: number, title: string) {
+async function pushTripToDrivers(sql: any, tripId: string, pickupName: string, destN: string, stopsN: number, fare: number, title: string, catName?: string) {
   try {
-    const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
+    const cands = await sql`SELECT u."fcmToken", d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
+    const toks = cands.filter((r: any) => !catName || !Array.isArray(r.cats) || !r.cats.length || r.cats.map((x: any) => String(x)).indexOf(catName) >= 0);
     const body = `${pickupName} → ${destN}${stopsN ? ` · +${stopsN} paragem${stopsN > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`;
     const msgs = toks.map((r: any) => ({ to: r.fcmToken, sound: 'default', title, body, data: { tripId, type: 'new-trip' } })).filter((m: any) => m.to);
     if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
@@ -1596,7 +1611,7 @@ export class TripRinger {
       if (sent >= 4) return;
       const sql = neon(this.env.DATABASE_URL);
       const rows = await sql`
-        SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops FROM trips
+        SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "rideType" FROM trips
         WHERE status = 'REQUESTED' AND "createdAt" > NOW() - INTERVAL '6 minutes'
         ORDER BY "createdAt" ASC LIMIT 20`;
       if (!rows.length) return;
@@ -1604,7 +1619,8 @@ export class TripRinger {
         const t = rows[0];
         const addr = String(t.dropoffAddress || 'Luanda');
         const cut = addr.indexOf(' · ');
-        await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!');
+        const { byCode } = await catMaps(sql);
+        await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!', byCode[t.rideType] || '');
       } else {
         try {
           const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
