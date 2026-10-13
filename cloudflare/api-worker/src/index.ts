@@ -295,6 +295,12 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const rows = await sql`SELECT t.*, d."currentLat" AS "driverLat", d."currentLng" AS "driverLng", d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${id} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   const t = rows[0];
+  if (c.req.query('view') === 'web') {
+    const drv = await webDriverInfo(sql, t.driverId);
+    const pu = await sql`SELECT name FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    const pl = paxLive.get(t.id);
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+  }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
   let driver = null;
   if (t.driverLat != null && t.driverLng != null) {
@@ -1037,6 +1043,12 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   `;
   if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   const t = rows[0];
+  if (c.req.query('view') === 'web') {
+    const drv = await webDriverInfo(sql, t.driverId);
+    const pu = await sql`SELECT name FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    const pl = paxLive.get(t.id);
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+  }
   let driver = null;
   if (t.driverId) {
     const d = await sql`SELECT d."currentLat", d."currentLng", u.name FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${t.driverId} LIMIT 1`;
@@ -1199,6 +1211,212 @@ app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
   const user = c.get('user');
   await sql`UPDATE notifications SET "isRead" = true WHERE "userId" = ${user.sub}`;
   return c.json({ success: true });
+});
+
+// ─── WEB CONTRACT (home ladiesgo-home.html) — Neon-backed ───
+// A home fala este dialeto (status em minúsculas, nomes incluídos).
+const WEB2NEON: Record<string, string> = { pending: 'REQUESTED', accepted: 'ACCEPTED', arrived: 'DRIVER_ARRIVED', in_progress: 'IN_PROGRESS', completed: 'COMPLETED', cancelled: 'CANCELLED' };
+const NEON2WEB: Record<string, string> = { REQUESTED: 'pending', ACCEPTED: 'accepted', DRIVER_ARRIVED: 'arrived', IN_PROGRESS: 'in_progress', COMPLETED: 'completed', CANCELLED: 'cancelled' };
+const CAT2RIDE: Record<string, string> = { 'Económico': 'ECONOMY', 'Conforto': 'COMFORT', 'Família': 'PREMIUM' };
+const RIDE2CAT: Record<string, string> = { ECONOMY: 'Económico', COMFORT: 'Conforto', PREMIUM: 'Família' };
+function pay2method(p: any): string {
+  return /card|tpa|multicaixa|visa|master/i.test(String(p || '')) ? 'CARD' : 'CASH';
+}
+// Posição viva da passageira (efémera; como no server.js local).
+const paxLive = new Map<string, { lat: number; lng: number; ts: number }>();
+
+function webTripRow(r: any, drv: any, paxName: string) {
+  const addr = String(r.dropoffAddress || 'Luanda');
+  const cut = addr.indexOf(' · ');
+  const destN = cut >= 0 ? addr.slice(0, cut) : addr;
+  const destA = cut >= 0 ? addr.slice(cut + 3) : '';
+  const stops = Array.isArray(r.stops) ? r.stops : [];
+  return {
+    id: r.id,
+    status: NEON2WEB[r.status] || r.status,
+    passengerId: r.passengerId,
+    passengerName: paxName || r.passengerName || 'Passageira',
+    pickup: { lat: Number(r.pickupLat), lng: Number(r.pickupLng), name: String(r.pickupAddress || 'Ponto no mapa') },
+    dest: { n: destN, a: destA, lat: Number(r.dropoffLat), lng: Number(r.dropoffLng) },
+    stops: stops.map((s: any) => ({ n: String(s.n || ''), a: String(s.a || ''), lat: Number(s.lat), lng: Number(s.lng) })),
+    fare: r.finalFare != null ? Number(r.finalFare) : Number(r.fareEstimate),
+    cat: RIDE2CAT[r.rideType] || 'Económico',
+    pay: r.paymentMethod === 'CARD' ? 'Cartão' : 'Numerário',
+    driver: drv || null,
+    pin: pinForTrip(r.id),
+    views: 0,
+    ts: r.createdAt,
+    by: r.cancelledBy || '',
+    reason: r.cancelReason || '',
+    scheduledAt: r.scheduledAt ? new Date(r.scheduledAt).getTime() : 0,
+  };
+}
+
+async function webDriverInfo(sql: any, driverId: string | null) {
+  if (!driverId) return null;
+  const d = await sql`
+    SELECT d."currentLat", d."currentLng", d.rating, d."totalTrips", d."carMake", d."carModel", d."carColor", d."carPlate", u.name, u.phone
+    FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} LIMIT 1`;
+  if (!d.length) return null;
+  const r = d[0];
+  return {
+    lat: r.currentLat != null ? Number(r.currentLat) : null,
+    lng: r.currentLng != null ? Number(r.currentLng) : null,
+    name: r.name || 'Motorista',
+    phone: r.phone || '',
+    rating: r.rating != null ? Number(r.rating) : 5,
+    totalTrips: Number(r.totalTrips || 0),
+    carMake: r.carMake || '', carModel: r.carModel || '', carColor: r.carColor || '', carPlate: r.carPlate || '',
+  };
+}
+
+// POST /api/v1/trips/request-web — Pedido da home (web)
+app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const b = await c.req.json().catch(() => ({}));
+  const pLa = Number(b.pickupLat), pLo = Number(b.pickupLng);
+  const dLa = Number(b.destLat), dLo = Number(b.destLng);
+  const fare = Math.round(Number(b.fare)) || 0;
+  if (!Number.isFinite(pLa) || !Number.isFinite(pLo) || !Number.isFinite(dLa) || !Number.isFinite(dLo) || fare <= 0) {
+    return c.json({ message: 'Pedido inválido.' }, 400);
+  }
+  try {
+    // Viagem ativa impede novo pedido (a home trata o 409 com o fluxo de avaliação).
+    const active = await sql`SELECT id, status FROM trips WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') ORDER BY "createdAt" DESC LIMIT 1`;
+    if (active.length && active[0].status !== 'REQUESTED') return c.json({ message: 'Avalia a tua última viagem para pedir outra.' }, 409);
+    if (active.length) await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = 'Replaced by new booking', "updatedAt" = NOW() WHERE id = ${active[0].id}`;
+    let pickupName = String(b.pickupName || '').slice(0, 60);
+    if (!pickupName) {
+      try {
+        const zr = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pLa}&lon=${pLo}&format=json&zoom=14`, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
+        const zj: any = await zr.json();
+        const za = (zj && zj.address) || {};
+        pickupName = za.suburb || za.neighbourhood || za.quarter || za.city_district || za.town || za.city || 'Ponto no mapa';
+      } catch { pickupName = 'Ponto no mapa'; }
+    }
+    const dist = havKm(pLa, pLo, dLa, dLo);
+    const stops = Array.isArray(b.stops) ? b.stops.slice(0, 3).map((x: any) => ({ n: String(x.n || '').slice(0, 60), a: String(x.a || '').slice(0, 80), lat: Number(x.lat), lng: Number(x.lng) })).filter((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lng)) : [];
+    const sched = Number(b.scheduledAt) > Date.now() ? new Date(Number(b.scheduledAt)) : null;
+    const rows = await sql`
+      INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng",
+        status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", stops, "scheduledAt", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${user.sub}, ${pickupName}, ${pLa}, ${pLo},
+        ${String(b.destN || '').slice(0, 60) + ' · ' + String(b.destA || '').slice(0, 80)}, ${dLa}, ${dLo},
+        'REQUESTED', ${CAT2RIDE[String(b.cat)] || 'ECONOMY'}, ${fare}, ${Math.round(dist * 10) / 10},
+        ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW())
+      RETURNING id`;
+    return c.json({ id: rows[0].id });
+  } catch (e) {
+    console.error('request-web error:', e);
+    return c.json({ message: 'Falhou o pedido. Tenta de novo.' }, 500);
+  }
+});
+
+// GET /api/v1/trips/incoming — Pedidos pendentes para a motorista (web)
+app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const qDriver = String(c.req.query('driverId') || '');
+  try {
+    const did = await driverIdFor(sql, qDriver || user.sub);
+    if (!did) return c.json({ trips: [] });
+    const rows = await sql`
+      SELECT t.*, u.name AS passenger_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
+      WHERE t.status = 'REQUESTED' AND t."createdAt" > NOW() - INTERVAL '10 minutes'
+      ORDER BY t."createdAt" ASC LIMIT 40`;
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (let i = rows.length - 1; i >= 0 && out.length < 20; i--) {
+      const r = rows[i];
+      if (seen.has(r.passengerId)) continue;
+      seen.add(r.passengerId);
+      out.push(webTripRow(r, null, r.passenger_name));
+    }
+    return c.json({ trips: out });
+  } catch (e) {
+    console.error('incoming error:', e);
+    return c.json({ trips: [] });
+  }
+});
+
+// GET /api/v1/trips/history — Histórico (web)
+app.get('/api/v1/trips/history', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const p = String(c.req.query('passengerId') || '').slice(0, 64);
+  const d = String(c.req.query('driverId') || '').slice(0, 64);
+  try {
+    let did: string | undefined;
+    if (d) did = await driverIdFor(sql, d);
+    let rows: any[];
+    if (p && did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} OR t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
+    else if (p) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} ORDER BY t."createdAt" DESC LIMIT 30`;
+    else if (did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
+    else return c.json({ trips: [] });
+    return c.json({ trips: rows.map((t: any) => ({
+      id: t.id,
+      dest: String(t.dropoffAddress || '').replace(' · ', ' · '),
+      fare: t.finalFare != null ? Number(t.finalFare) : Number(t.fareEstimate),
+      cat: RIDE2CAT[t.rideType] || 'Económico',
+      status: NEON2WEB[t.status] || t.status,
+      by: t.cancelledBy || '', reason: t.cancelReason || '',
+      other: d ? (t.passenger_name || '') : (t.driver_name || ''),
+      ts: t.createdAt, from: t.pickupAddress || '',
+      pay: t.paymentMethod === 'CARD' ? 'Cartão' : 'Numerário',
+      stopsN: Array.isArray(t.stops) ? t.stops.length : 0,
+      stops: (Array.isArray(t.stops) ? t.stops : []).map((x: any) => ({ n: String(x.n || '').slice(0, 60) })),
+    })) });
+  } catch (e) {
+    console.error('history error:', e);
+    return c.json({ trips: [] });
+  }
+});
+
+// POST /api/v1/trips/:id/status — Transições da home (web)
+app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const id = c.req.param('id');
+  const b = await c.req.json().catch(() => ({}));
+  const st = String(b.status || '');
+  const neonSt = WEB2NEON[st];
+  const okNext: Record<string, string[]> = { ACCEPTED: ['REQUESTED'], DRIVER_ARRIVED: ['ACCEPTED'], IN_PROGRESS: ['DRIVER_ARRIVED'], COMPLETED: ['IN_PROGRESS'], CANCELLED: ['REQUESTED', 'ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'] };
+  if (!neonSt || !okNext[neonSt]) return c.json({ message: 'Transição inválida.' }, 400);
+  try {
+    const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
+    if (!cur.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+    const t = cur[0];
+    if (okNext[neonSt].indexOf(t.status) < 0) return c.json({ message: 'Transição inválida.' }, 400);
+    if (neonSt === 'ACCEPTED') {
+      const did = await driverIdFor(sql, String(b.driverId || ''));
+      if (!did) return c.json({ message: 'Só motoristas.' }, 403);
+      const busy = await sql`SELECT id FROM trips WHERE "driverId" = ${did} AND status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') LIMIT 1`;
+      if (busy.length) return c.json({ message: 'Já tens uma viagem ativa.' }, 400);
+      await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+    } else if (neonSt === 'DRIVER_ARRIVED') {
+      await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+    } else if (neonSt === 'IN_PROGRESS') {
+      await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+    } else if (neonSt === 'COMPLETED') {
+      await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+      if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
+    } else if (neonSt === 'CANCELLED') {
+      await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
+    }
+    return c.json({ ok: true, status: st });
+  } catch (e) {
+    console.error('trip status error:', e);
+    return c.json({ message: 'Falhou. Tenta de novo.' }, 500);
+  }
+});
+
+// POST /api/v1/trips/:id/position — Posição viva da passageira (web)
+app.post('/api/v1/trips/:id/position', requireAuth, async (c) => {
+  const id = c.req.param('id');
+  const b = await c.req.json().catch(() => ({}));
+  const la = Number(b.lat), lo = Number(b.lng);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
+  paxLive.set(id, { lat: la, lng: lo, ts: Date.now() });
+  return c.json({ ok: true });
 });
 
 // POST /api/v1/payments/create-intent — Create payment intent
