@@ -678,28 +678,28 @@ app.get('/api/v1/admin/users', adminMiddleware, async (c) => {
   const q = c.req.query('q');
   const offset = (page - 1) * limit;
 
-  const where: string[] = ['"isActive" = true'];
+  const where: string[] = ['u."isActive" = true'];
   const params: any[] = [];
-  if (role) { params.push(role); where.push(`role = $${params.length}`); }
-  if (q) { params.push(`%${q}%`); where.push(`(name ILIKE $${params.length} OR phone ILIKE $${params.length})`); }
+  if (role) { params.push(role); where.push(`u.role = $${params.length}`); }
+  if (q) { params.push(`%${q}%`); where.push(`(u.name ILIKE $${params.length} OR u.phone ILIKE $${params.length})`); }
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
 
 try {
     // Build query strings directly and use sql.query
-    const totalQuery = `SELECT COUNT(*)::int AS total FROM users ${whereSql}`;
-    const totalRes = await sql.query(totalQuery, []);
+    const totalQuery = `SELECT COUNT(*)::int AS total FROM users u ${whereSql}`;
+    const totalRes = await sql.query(totalQuery, params);
     const total = Number(totalRes[0]?.total || 0);
 
     const query = `
-      SELECT id, name, phone, role, "profilePhoto", "isVerified", "createdAt",
+      SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
         d.status AS driver_status, d.car_make, d.car_model, d.car_plate
-      FROM users
-      LEFT JOIN drivers d ON d."userId" = id
+      FROM users u
+      LEFT JOIN drivers d ON d."userId" = u.id
       ${whereSql}
-      ORDER BY "createdAt" DESC
+      ORDER BY u."createdAt" DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
-    const usersRes = await sql.query(query, []);
+    const usersRes = await sql.query(query, params);
     return c.json({ users: usersRes, total });
   } catch (e) {
     console.error('Admin users error:', e);
