@@ -1384,7 +1384,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
           const msgs = toks.map((r: any) => ({
             to: r.fcmToken, sound: 'default',
             title: '🔔 Novo pedido LadiesGo!',
-            body: `${pickupName} → ${destN} · ${fare} Kz`,
+            body: `${pickupName} → ${destN}${stops.length ? ` · +${stops.length} paragem${stops.length > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`,
             data: { tripId, type: 'new-trip' },
           })).filter((m: any) => m.to);
           if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
