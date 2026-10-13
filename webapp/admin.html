@@ -432,7 +432,7 @@ function renderDrvDetail(){try{var box=document.getElementById('drvDetail');if(!
 function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50)}
 document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}}catch(e){}});
 document.addEventListener('click',e=>{
-  const pg=e.target.closest('[data-pg]');if(pg){const k=pg.dataset.pg||null;try{if(k==='drivers'||k==='revenue'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');renderTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
+  const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='drivers'||k==='revenue'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');renderTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
   if(f){const k=f.dataset.f;mapFilter=mapFilter===k?null:k;load();return}
   const dv=e.target.closest('[data-drv]');
   if(dv){e.preventDefault();const k=dv.dataset.drv||null;selDrv=selDrv===k?null:k;goTab('drivers');renderDrivers();renderHist();return}
