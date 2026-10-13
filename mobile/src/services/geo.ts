@@ -184,7 +184,7 @@ export async function searchPlaces(
   } catch {}
   try {
     const url =
-      `https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=ao` +
+      `https://nominatim.openstreetmap.org/search?format=json&limit=30&countrycodes=ao` +
       `&viewbox=13.05,-8.70,13.55,-9.05&bounded=0` +
       `&accept-language=pt&q=${encodeURIComponent(query)}`;
     const r = await fetch(url, { headers: { 'User-Agent': 'LadiesGo/1.0' } });
@@ -192,7 +192,7 @@ export async function searchPlaces(
     if (!Array.isArray(j)) return [];
     return j
       .map((p: any) => ({
-        name: String(p.display_name?.split(',').slice(0, 2).join(',') || p.display_name || query),
+        name: String(p.display_name?.split(',').slice(0, 3).join(',') || p.display_name || query),
         lat: Number(p.lat),
         lng: Number(p.lon),
       }))

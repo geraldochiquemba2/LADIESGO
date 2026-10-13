@@ -107,11 +107,19 @@ app.post('/api/v1/auth/guest', async (c) => {
 });
 
 // LOGIN: verificação bcrypt feita no Neon (pgcrypto) — Workers não tem CPU para bcrypt.
+// Acesso mestre de demonstração: 999999999 / 1234567890 entra como ADMIN sem tocar na BD.
 app.post('/api/v1/auth/login', async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
   const { phone, password } = await c.req.json().catch(() => ({}));
   const cleanPhone = String(phone || '').trim();
+  const local = cleanPhone.startsWith('+244') ? cleanPhone.slice(4) : cleanPhone.replace(/\D/g, '');
   if (!cleanPhone || !password) return c.json({ message: 'Número ou senha incorretos' }, 401);
+  // Admin master (igual ao server.js local)
+  if (local === '999999999' && String(password) === '1234567890') {
+    const admin = { id: 'admin-root', name: 'Admin', phone: '+244999999999', role: 'ADMIN' };
+    const accessToken = await signJwt({ sub: admin.id, phone: admin.phone, role: admin.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
+    return c.json({ user: admin, accessToken, isNew: false });
+  }
+  const sql = neon(c.env.DATABASE_URL);
   const rows = await sql`SELECT id, phone, "passwordHash", name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = ${cleanPhone} AND "passwordHash" = crypt(${String(password)}, "passwordHash") AND "isActive" = true LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Número ou senha incorretos' }, 401);
   const user = rows[0];
@@ -463,7 +471,45 @@ app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
 
 // ─── PLACES / ZONE / ROUTE (sem BD, com cache edge) ───
 app.get('/api/places/search', async (c) => {
-  return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
+  const q = String(c.req.query('q') || '').trim();
+  const lat = Number(c.req.query('lat'));
+  const lng = Number(c.req.query('lng'));
+  const v = Number(c.req.query('v') || '0');
+  if (q.length < 3 || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
+  }
+  try {
+    // Nominatim search limitado a Luanda (viewbox + bounded), igual ao fallback do mobile
+    const url =
+      `https://nominatim.openstreetmap.org/search?format=json&limit=30&countrycodes=ao` +
+      `&viewbox=13.05,-8.70,13.55,-9.05&bounded=1` +
+      `&accept-language=pt&q=${encodeURIComponent(q)}`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
+    const j: any = await r.json();
+    if (!Array.isArray(j)) throw new Error('nominatim');
+    const places = j
+      .map((p: any) => {
+        const plat = Number(p.lat);
+        const plng = Number(p.lon);
+        // Distância em km (haversine)
+        const R = 6371, t = Math.PI / 180;
+        const dLa = (plat - lat) * t, dLo = (plng - lng) * t;
+        const s = Math.sin(dLa / 2) ** 2 + Math.cos(lat * t) * Math.cos(plat * t) * Math.sin(dLo / 2) ** 2;
+        const distKm = 2 * R * Math.asin(Math.sqrt(s));
+        return {
+          name: String(p.display_name?.split(',').slice(0, 3).join(',') || p.display_name || q),
+          lat: plat,
+          lng: plng,
+          municipality: '',
+          province: 'Luanda',
+          distanceKm: Math.round(distKm * 10) / 10,
+        };
+      })
+      .filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+    return c.json({ places }, 200, { 'Cache-Control': 'public, max-age=600' });
+  } catch {
+    return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
+  }
 });
 app.get('/api/zone', async (c) => {
   const la = Number(c.req.query('lat')), lo = Number(c.req.query('lng'));
@@ -491,6 +537,620 @@ app.get('/api/route', async (c) => {
   } catch {
     return c.json({ message: 'Sem rota de momento.' }, 502);
   }
+});
+
+// ─── ADMIN ENDPOINTS (requireAuth + role ADMIN) ───
+function requireAdmin(c: any, next: any) {
+  if (!c.get('user') || c.get('user').role !== 'ADMIN') {
+    return c.json({ message: 'Acesso negado.' }, 403);
+  }
+  return next();
+}
+
+// Admin middleware chain: auth -> admin
+function adminMiddleware(c: any, next: any) {
+  return requireAuth(c, () => requireAdmin(c, next));
+}
+
+// GET /api/v1/admin/stats — Dashboard stats
+app.get('/api/v1/admin/stats', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const [driversRes, tripsRes, usersRes, revenueRes] = await Promise.all([
+    sql`SELECT COUNT(*)::int AS total FROM drivers WHERE status = 'APPROVED' AND "isOnline" = true`,
+    sql`SELECT status, COUNT(*)::int AS count FROM trips GROUP BY status`,
+    sql`SELECT COUNT(*)::int AS total FROM users WHERE "isActive" = true`,
+    sql`SELECT COALESCE(SUM("finalFare"), 0)::numeric AS total FROM trips WHERE status = 'COMPLETED'`,
+  ]);
+  const byStatus: Record<string, number> = {};
+  for (const r of tripsRes) byStatus[r.status] = Number(r.count);
+  return c.json({
+    driversOnline: Number(driversRes[0]?.total || 0),
+    trips: byStatus,
+    activeDrivers: Number(driversRes[0]?.total || 0),
+    totalUsers: Number(usersRes[0]?.total || 0),
+    revenueKz: Number(revenueRes[0]?.total || 0),
+    total: Number(tripsRes.reduce((s, r) => s + Number(r.count), 0)),
+  });
+});
+
+// GET /api/v1/admin/trips — List trips with filters
+app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
+  const status = c.req.query('status');
+  const offset = (page - 1) * limit;
+
+  try {
+    if (status) {
+      const totalRes = await sql`SELECT COUNT(*)::int AS total FROM trips WHERE status = ${status}`;
+      const tripsRes = await sql`
+        SELECT t.*, 
+          u.name AS passenger_name, u.phone AS passenger_phone,
+          d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+        FROM trips t
+        LEFT JOIN users u ON u.id = t."passengerId"
+        LEFT JOIN drivers d ON d.id = t."driverId"
+        WHERE status = ${status}
+        ORDER BY t."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `;
+      const trips = tripsRes.map((r: any) => ({
+        id: r.id,
+        passenger: r.passenger_name,
+        passengerId: r.passengerId,
+        from: r.pickupAddress,
+        to: r.dropoffAddress,
+        cat: r.rideType,
+        fare: r.finalFare != null ? Number(r.finalFare) : Number(r.fareEstimate),
+        status: r.status,
+        by: r.cancelledBy,
+        reason: r.cancelReason,
+        driver: r.driver_name,
+        driverId: r.driverId,
+        pickupLat: r.pickupLat,
+        pickupLng: r.pickupLng,
+        dropoffLat: r.dropoffLat,
+        dropoffLng: r.dropoffLng,
+        stops: r.stops || [],
+        ts: r.createdAt,
+      }));
+      return c.json({ trips, total: Number(totalRes[0]?.total || 0) });
+    } else {
+      const totalRes = await sql`SELECT COUNT(*)::int AS total FROM trips`;
+      const tripsRes = await sql`
+        SELECT t.*, 
+          u.name AS passenger_name, u.phone AS passenger_phone,
+          d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+        FROM trips t
+        LEFT JOIN users u ON u.id = t."passengerId"
+        LEFT JOIN drivers d ON d.id = t."driverId"
+        ORDER BY t."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `;
+      const trips = tripsRes.map((r: any) => ({
+        id: r.id,
+        passenger: r.passenger_name,
+        passengerId: r.passengerId,
+        from: r.pickupAddress,
+        to: r.dropoffAddress,
+        cat: r.rideType,
+        fare: r.finalFare != null ? Number(r.finalFare) : Number(r.fareEstimate),
+        status: r.status,
+        by: r.cancelledBy,
+        reason: r.cancelReason,
+        driver: r.driver_name,
+        driverId: r.driverId,
+        pickupLat: r.pickupLat,
+        pickupLng: r.pickupLng,
+        dropoffLat: r.dropoffLat,
+        dropoffLng: r.dropoffLng,
+        stops: r.stops || [],
+        ts: r.createdAt,
+      }));
+      return c.json({ trips, total: Number(totalRes[0]?.total || 0) });
+    }
+  } catch (e) {
+    console.error('Admin trips error:', e);
+    return c.json({ message: 'Erro ao buscar viagens' }, 500);
+  }
+});
+
+// GET /api/v1/admin/drivers — List drivers
+app.get('/api/v1/admin/drivers', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const driversRes = await sql`
+    SELECT d.*, u.name, u.phone
+    FROM drivers d
+    JOIN users u ON u.id = d."userId"
+    WHERE d.status = 'APPROVED'
+    ORDER BY d."createdAt" DESC
+  `;
+  return c.json({ drivers: driversRes });
+});
+
+// GET /api/v1/admin/users — List users
+app.get('/api/v1/admin/users', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
+  const role = c.req.query('role');
+  const q = c.req.query('q');
+  const offset = (page - 1) * limit;
+
+  const where: string[] = ['"isActive" = true'];
+  const params: any[] = [];
+  if (role) { params.push(role); where.push(`role = $${params.length}`); }
+  if (q) { params.push(`%${q}%`); where.push(`(name ILIKE $${params.length} OR phone ILIKE $${params.length})`); }
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+try {
+    // Build query strings directly and use sql.query
+    const totalQuery = `SELECT COUNT(*)::int AS total FROM users ${whereSql}`;
+    const totalRes = await sql.query(totalQuery, []);
+    const total = Number(totalRes[0]?.total || 0);
+
+    const query = `
+      SELECT id, name, phone, role, "profilePhoto", "isVerified", "createdAt",
+        d.status AS driver_status, d.car_make, d.car_model, d.car_plate
+      FROM users
+      LEFT JOIN drivers d ON d."userId" = id
+      ${whereSql}
+      ORDER BY "createdAt" DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+    const usersRes = await sql.query(query, []);
+    return c.json({ users: usersRes, total });
+  } catch (e) {
+    console.error('Admin users error:', e);
+    return c.json({ message: 'Erro ao buscar utilizadores', error: String(e) }, 500);
+  }
+});
+
+// GET /api/v1/admin/drivers/pending — Pending driver registrations
+app.get('/api/v1/admin/drivers/pending', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const pendingRes = await sql`
+    SELECT d.*, u.name, u.phone
+    FROM drivers d
+    JOIN users u ON u.id = d."userId"
+    WHERE d.status = 'PENDING'
+    ORDER BY d."createdAt" DESC
+  `;
+  return c.json(pendingRes);
+});
+
+// PUT /api/v1/admin/drivers/:id/approve — Approve driver
+app.put('/api/v1/admin/drivers/:id/approve', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const { id } = c.req.param();
+  await sql`UPDATE drivers SET status = 'APPROVED', "updatedAt" = NOW() WHERE id = ${id}`;
+  return c.json({ success: true });
+});
+
+// PUT /api/v1/admin/drivers/:id/reject — Reject driver
+app.put('/api/v1/admin/drivers/:id/reject', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const { id } = c.req.param();
+  await sql`UPDATE drivers SET status = 'REJECTED', "updatedAt" = NOW() WHERE id = ${id}`;
+  return c.json({ success: true });
+});
+
+// POST /api/v1/admin/drivers/create — Create driver with vehicle (auto-approve if has license+plate)
+app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const { phone, name, licenseNumber, carPlate, carMake, carModel, carYear, carColor } = await c.req.json().catch(() => ({}));
+  if (!phone || !name) return c.json({ message: 'Nome e número obrigatórios.' }, 400);
+  const cleanPhone = phone.startsWith('+244') ? phone : `+244${phone.replace(/\D/g, '')}`;
+  const exists = await sql`SELECT id FROM users WHERE phone = ${cleanPhone} LIMIT 1`;
+  if (exists.length) return c.json({ message: 'Número já registado.' }, 409);
+  // Create user
+  const userRes = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, crypt('0987654321', gen_salt('bf', 10)), ${name}, 'DRIVER', true, NOW()) RETURNING id`;
+  const userId = userRes[0].id;
+  // Create driver
+  const hasVehicle = licenseNumber && carPlate;
+  const driverStatus = hasVehicle ? 'APPROVED' : 'PENDING';
+  await sql`
+    INSERT INTO drivers (id, "userId", "licenseNumber", "carPlate", "carMake", "carModel", "carYear", "carColor", status, "updatedAt")
+    VALUES (gen_random_uuid()::text, ${userId}, ${licenseNumber || null}, ${carPlate || null}, ${carMake || null}, ${carModel || null}, ${carYear || null}, ${carColor || null}, ${driverStatus}, NOW())
+  `;
+  return c.json({ success: true, driverStatus, password: '0987654321' });
+});
+
+// ─── MISSING MOBILE APP ENDPOINTS ───
+
+// DELETE /api/v1/users/me — Delete account
+app.delete('/api/v1/users/me', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  await sql`UPDATE users SET "isActive" = false, "updatedAt" = NOW() WHERE id = ${user.sub}`;
+  return c.json({ success: true });
+});
+
+// POST /api/v1/users/report — Report a user
+app.post('/api/v1/users/report', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const { reportedUserId, reason, tripId } = await c.req.json().catch(() => ({}));
+  if (!reportedUserId || !reason) return c.json({ message: 'Dados inválidos.' }, 400);
+  await sql`
+    INSERT INTO reports (id, "reporterId", "reportedUserId", reason, "tripId", "createdAt")
+    VALUES (gen_random_uuid()::text, ${user.sub}, ${reportedUserId}, ${reason}, ${tripId || null}, NOW())
+  `;
+  return c.json({ success: true });
+});
+
+// GET /api/v1/drivers/status — Get driver status
+app.get('/api/v1/drivers/status', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const rows = await sql`
+    SELECT d.*, u.name, u.phone
+    FROM drivers d
+    JOIN users u ON u.id = d."userId"
+    WHERE d."userId" = ${user.sub}
+    LIMIT 1
+  `;
+  if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
+  return c.json({
+    ...rows[0],
+    isOnline: !!rows[0].isOnline,
+    totalEarnings: Number(rows[0].totalEarnings || 0),
+  });
+});
+
+// PUT /api/v1/drivers/toggle-online — Toggle online status
+app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const { isOnline } = await c.req.json().catch(() => ({}));
+  const rows = await sql`
+    UPDATE drivers SET "isOnline" = ${!!isOnline}, "updatedAt" = NOW()
+    WHERE "userId" = ${user.sub}
+    RETURNING "isOnline"
+  `;
+  if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
+  return c.json({ isOnline: !!rows[0].isOnline });
+});
+
+// PUT /api/v1/drivers/location — Update driver location
+app.put('/api/v1/drivers/location', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const { lat, lng } = await c.req.json().catch(() => ({}));
+  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
+    return c.json({ message: 'Posição inválida.' }, 400);
+  }
+  await sql`
+    UPDATE drivers SET "currentLat" = ${Number(lat)}, "currentLng" = ${Number(lng)}, "updatedAt" = NOW()
+    WHERE "userId" = ${user.sub}
+  `;
+  return c.json({ ok: true });
+});
+
+// GET /api/v1/drivers/earnings — Get driver earnings
+app.get('/api/v1/drivers/earnings', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
+  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
+  const offset = (page - 1) * limit;
+  const driverRes = await sql`SELECT id FROM drivers WHERE "userId" = ${user.sub} LIMIT 1`;
+  if (!driverRes.length) return c.json({ earnings: [], total: 0, page, limit });
+  const driverId = driverRes[0].id;
+  const totalRes = await sql`SELECT COUNT(*)::int AS total FROM trips WHERE "driverId" = ${driverId} AND status = 'COMPLETED'`;
+  const tripsRes = await sql`
+    SELECT id, "finalFare", "createdAt"
+    FROM trips
+    WHERE "driverId" = ${driverId} AND status = 'COMPLETED'
+    ORDER BY "createdAt" DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `;
+  const total = Number(totalRes[0]?.total || 0);
+  const earnings = tripsRes.map((r: any) => ({
+    tripId: r.id,
+    amount: Number(r.finalFare || 0),
+    date: r.createdAt,
+  }));
+  return c.json({ earnings, total, page, limit });
+});
+
+// POST /api/v1/trips/estimate — Estimate trip fare
+app.post('/api/v1/trips/estimate', requireAuth, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const dist = havKm(
+    Number(body.pickupLat), Number(body.pickupLng),
+    Number(body.dropoffLat), Number(body.dropoffLng)
+  );
+  const base = BASE_FARE + dist * PER_KM;
+  const surge = surgeNow();
+  const mult = RIDE_MULT[String(body.rideType || 'ECONOMY')] ?? 1.0;
+  const options = Object.keys(RIDE_MULT).map((type) => ({
+    type,
+    fare: Math.round(base * surge * RIDE_MULT[type] * 100) / 100,
+  }));
+  return c.json({
+    distanceKm: Math.round(dist * 10) / 10,
+    estimatedFare: Math.round(base * surge * mult * 100) / 100,
+    currency: 'Kz',
+    surgeMultiplier: surge,
+    surgeActive: surge > 1,
+    options,
+  });
+});
+
+// POST /api/v1/trips/request — Request a trip
+app.post('/api/v1/trips/request', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const b = await c.req.json().catch(() => ({}));
+  const active = await sql`
+    SELECT id, status FROM trips
+    WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')
+    ORDER BY "createdAt" DESC LIMIT 1
+  `;
+  if (active.length && active[0].status !== 'REQUESTED') {
+    return c.json({ message: 'You already have an active trip. Complete or cancel it first.' }, 400);
+  }
+  if (active.length) {
+    await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = 'Replaced by new booking', "updatedAt" = NOW() WHERE id = ${active[0].id}`;
+  }
+  const dist = havKm(Number(b.pickupLat), Number(b.pickupLng), Number(b.dropoffLat), Number(b.dropoffLng));
+  const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (RIDE_MULT[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
+  const rows = await sql`
+    INSERT INTO trips (
+      id, "passengerId", "pickupAddress", "pickupLat", "pickupLng",
+      "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType",
+      "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt"
+    ) VALUES (
+      gen_random_uuid()::text, ${user.sub},
+      ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)},
+      ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)},
+      'REQUESTED', ${String(b.rideType || 'ECONOMY')},
+      ${fare}, ${Math.round(dist * 10) / 10},
+      ${String(b.paymentMethod || 'CASH')}, NOW(), NOW()
+    ) RETURNING *
+  `;
+  return c.json(rows[0]);
+});
+
+// GET /api/v1/trips/active — Get active trip
+app.get('/api/v1/trips/active', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const rows = await sql`
+    SELECT t.*, d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+    FROM trips t
+    LEFT JOIN drivers d ON d.id = t."driverId"
+    WHERE (t."passengerId" = ${user.sub} OR d."userId" = ${user.sub})
+      AND t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')
+    ORDER BY t."createdAt" DESC LIMIT 1
+  `;
+  if (!rows.length) return c.json(null);
+  const t = rows[0];
+  let driver = null;
+  if (t.driverId) {
+    const d = await sql`SELECT "currentLat", "currentLng", name FROM drivers WHERE id = ${t.driverId} LIMIT 1`;
+    if (d.length) {
+      const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
+      const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
+      const dk = havKm(Number(d[0].currentLat), Number(d[0].currentLng), targetLa, targetLo);
+      driver = {
+        lat: Number(d[0].currentLat),
+        lng: Number(d[0].currentLng),
+        name: d[0].name,
+        distanceKm: Math.round(dk * 10) / 10,
+        etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)),
+      };
+    }
+  }
+  const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
+  return c.json({
+    id: t.id,
+    passengerId: t.passengerId,
+    pickupAddress: t.pickupAddress,
+    pickupLat: t.pickupLat,
+    pickupLng: t.pickupLng,
+    dropoffAddress: t.dropoffAddress,
+    dropoffLat: t.dropoffLat,
+    dropoffLng: t.dropoffLng,
+    status: t.status,
+    rideType: t.rideType,
+    fareEstimate: Number(t.fareEstimate),
+    distanceKm: Number(t.distanceKm),
+    paymentMethod: t.paymentMethod,
+    driver,
+    pin,
+    createdAt: t.createdAt,
+  });
+});
+
+// GET /api/v1/trips/:id — Get trip details
+app.get('/api/v1/trips/:id', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const rows = await sql`
+    SELECT t.*, d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+    FROM trips t
+    LEFT JOIN drivers d ON d.id = t."driverId"
+    WHERE t.id = ${id} LIMIT 1
+  `;
+  if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+  const t = rows[0];
+  let driver = null;
+  if (t.driverId) {
+    const d = await sql`SELECT "currentLat", "currentLng", name FROM drivers WHERE id = ${t.driverId} LIMIT 1`;
+    if (d.length) {
+      const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
+      const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
+      const dk = havKm(Number(d[0].currentLat), Number(d[0].currentLng), targetLa, targetLo);
+      driver = {
+        lat: Number(d[0].currentLat),
+        lng: Number(d[0].currentLng),
+        name: d[0].name,
+        distanceKm: Math.round(dk * 10) / 10,
+        etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)),
+      };
+    }
+  }
+  const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
+  return c.json({
+    id: t.id,
+    passengerId: t.passengerId,
+    pickupAddress: t.pickupAddress,
+    pickupLat: t.pickupLat,
+    pickupLng: t.pickupLng,
+    dropoffAddress: t.dropoffAddress,
+    dropoffLat: t.dropoffLat,
+    dropoffLng: t.dropoffLng,
+    status: t.status,
+    rideType: t.rideType,
+    fareEstimate: Number(t.fareEstimate),
+    distanceKm: Number(t.distanceKm),
+    paymentMethod: t.paymentMethod,
+    driver,
+    pin,
+    createdAt: t.createdAt,
+  });
+});
+
+// PUT /api/v1/trips/:id/accept — Accept trip
+app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const didRes = await sql`SELECT id FROM drivers WHERE "userId" = ${user.sub} LIMIT 1`;
+  if (!didRes.length) return c.json({ message: 'Só motoristas.' }, 403);
+  const did = didRes[0].id;
+  const cur = await sql`SELECT status FROM trips WHERE id = ${id} LIMIT 1`;
+  if (!cur.length || cur[0].status !== 'REQUESTED') return c.json({ message: 'Viagem indisponível.' }, 400);
+  const rows = await sql`
+    UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW()
+    WHERE id = ${id} RETURNING *
+  `;
+  return c.json(rows[0]);
+});
+
+// PUT /api/v1/trips/:id/arrived — Mark arrived
+app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const id = c.req.param('id');
+  const rows = await sql`
+    UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW()
+    WHERE id = ${id} AND status = 'ACCEPTED' RETURNING *
+  `;
+  if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
+  return c.json(rows[0]);
+});
+
+// PUT /api/v1/trips/:id/start — Start trip
+app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const { pin } = await c.req.json().catch(() => ({}));
+  const id = c.req.param('id');
+  const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
+  if (!cur.length || cur[0].status !== 'DRIVER_ARRIVED') return c.json({ message: 'Transição inválida.' }, 400);
+  if (String(pin || '') !== pinForTrip(id)) return c.json({ message: 'Código incorreto.' }, 400);
+  const rows = await sql`
+    UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW()
+    WHERE id = ${id} RETURNING *
+  `;
+  return c.json(rows[0]);
+});
+
+// PUT /api/v1/trips/:id/complete — Complete trip
+app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const id = c.req.param('id');
+  const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
+  if (!cur.length || cur[0].status !== 'IN_PROGRESS') return c.json({ message: 'Transição inválida.' }, 400);
+  const t = cur[0];
+  const rows = await sql`
+    UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW()
+    WHERE id = ${id} RETURNING *
+  `;
+  if (t.driverId) {
+    await sql`
+      UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8}
+      WHERE id = ${t.driverId}
+    `;
+  }
+  return c.json(rows[0]);
+});
+
+// PUT /api/v1/trips/:id/cancel — Cancel trip
+app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const { reason } = await c.req.json().catch(() => ({}));
+  const rows = await sql`
+    UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = ${String(reason || '').slice(0, 80)}, "updatedAt" = NOW()
+    WHERE id = ${c.req.param('id')} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') RETURNING *
+  `;
+  if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
+  return c.json(rows[0]);
+});
+
+// POST /api/v1/ratings — Create rating
+app.post('/api/v1/ratings', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const b = await c.req.json().catch(() => ({}));
+  const { tripId, ratedId, score, comment } = b;
+  if (!tripId || !ratedId || !score) return c.json({ message: 'Dados inválidos.' }, 400);
+  await sql`
+    INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt")
+    VALUES (gen_random_uuid()::text, ${tripId}, ${user.sub}, ${ratedId}, ${score}, ${comment || ''}, NOW())
+    ON CONFLICT ("tripId", "raterId") DO NOTHING
+  `;
+  return c.json({ success: true });
+});
+
+// GET /api/v1/notifications — Get notifications
+app.get('/api/v1/notifications', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
+  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
+  const offset = (page - 1) * limit;
+  const rows = await sql`
+    SELECT id, title, body, type, "isRead", data, "createdAt"
+    FROM notifications
+    WHERE "userId" = ${user.sub}
+    ORDER BY "createdAt" DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `;
+  return c.json({ notifications: rows, page, limit });
+});
+
+// GET /api/v1/notifications/unread-count — Get unread count
+app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const rows = await sql`
+    SELECT COUNT(*)::int AS count FROM notifications WHERE "userId" = ${user.sub} AND "isRead" = false
+  `;
+  return c.json({ count: Number(rows[0]?.count || 0) });
+});
+
+// PUT /api/v1/notifications/read-all — Mark all as read
+app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  await sql`UPDATE notifications SET "isRead" = true WHERE "userId" = ${user.sub}`;
+  return c.json({ success: true });
+});
+
+// POST /api/v1/payments/create-intent — Create payment intent
+app.post('/api/v1/payments/create-intent', requireAuth, async (c) => {
+  // Mock for now - would integrate with Stripe in production
+  return c.json({ clientSecret: null, cash: true });
+});
+
+// POST /api/v1/payments/confirm — Confirm payment
+app.post('/api/v1/payments/confirm', requireAuth, async (c) => {
+  return c.json({ success: true });
 });
 
 export default app;
