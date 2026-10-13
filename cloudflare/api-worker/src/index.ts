@@ -595,6 +595,25 @@ app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
   const clean = String(text || '').trim().slice(0, 300);
   if (!clean) return c.json({ message: 'Mensagem vazia.' }, 400);
   await sql`INSERT INTO chat_messages (id, "tripId", "senderId", "senderName", text) VALUES (gen_random_uuid()::text, ${id}, ${user.sub}, ${String(from || '').slice(0, 40) || 'Eu'}, ${clean})`;
+  // Avisa a outra parte (não bloqueia a resposta).
+  c.executionCtx.waitUntil((async () => {
+    try {
+      const t = await sql`SELECT "passengerId", "driverId" FROM trips WHERE id = ${id} LIMIT 1`;
+      if (!t.length) return;
+      let other: string | null = null;
+      if (t[0].passengerId === user.sub && t[0].driverId) {
+        const d = await sql`SELECT "userId" FROM drivers WHERE id = ${t[0].driverId} LIMIT 1`;
+        other = d[0]?.userId || null;
+      } else if (t[0].passengerId !== user.sub) {
+        other = t[0].passengerId;
+      }
+      if (!other || other === user.sub) return;
+      const u = await sql`SELECT "fcmToken" FROM users WHERE id = ${other} LIMIT 1`;
+      const tok = u[0]?.fcmToken;
+      if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
+      await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: tok, sound: 'default', title: '💬 Nova mensagem — LadiesGo!', body: clean.slice(0, 120), data: { tripId: id, type: 'chat' } }]) });
+    } catch {}
+  })());
   return c.json({ ok: true });
 });
 
