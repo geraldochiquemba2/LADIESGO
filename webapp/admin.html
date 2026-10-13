@@ -107,7 +107,7 @@
   <section id="sec-cats" style="display:none">
     <h2>Categorias de viatura</h2>
     <p class="mut">Nome e cor aparecem na app; o multiplicador define o preço (base × mult). O código é fixo.</p>
-    <table><thead><tr><th>Código</th><th>Nome</th><th>Cor</th><th>Mult.</th><th></th></tr></thead><tbody id="cats"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Código</th><th>Nome</th><th>Cor</th><th>Mult.</th><th>Exemplo 1 km</th><th></th></tr></thead><tbody id="cats"><tr><td colspan="6" class="mut">A carregar…</td></tr></tbody></table>
     <div class="mut" id="catMsg" style="margin:8px 0"></div>
   </section>
   <section id="sec-new" style="display:none">
@@ -253,8 +253,9 @@ async function decide(id,ok){
     if(!r.ok)throw 0;load();
   }catch(e){alert('Falhou a decisão.')}
 }
+function catEx(mult){const m=parseFloat(String(mult).replace(',','.'));if(!Number.isFinite(m))return'—';return '≈ '+fmt(Math.max(900,Math.round((500+400*1+70*3)*m/100)*100))+' Kz';}
 function renderCats(){
-  $('cats').innerHTML=CATS.map(x=>'<tr><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button></td></tr>').join('')||'<tr><td colspan="5" class="mut">Sem categorias.</td></tr>';
+  $('cats').innerHTML=CATS.map(x=>'<tr><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" oninput="document.getElementById(\'ce_'+esc(x.code||'')+'\').textContent=catEx(this.value)" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td class="mut" id="ce_'+esc(x.code||'')+'">'+catEx(x.mult)+'<br><span class="mut sm">1 km × '+esc(x.mult||'')+'</span></td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button></td></tr>').join('')||'<tr><td colspan="6" class="mut">Sem categorias.</td></tr>';
 }
 async function saveCat(code){
   const m=$('catMsg');if(m)m.textContent='';
