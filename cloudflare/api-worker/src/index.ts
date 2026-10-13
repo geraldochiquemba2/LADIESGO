@@ -587,10 +587,11 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
       const tripsRes = await sql`
         SELECT t.*, 
           u.name AS passenger_name, u.phone AS passenger_phone,
-          d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+          du.name AS driver_name, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
         FROM trips t
         LEFT JOIN users u ON u.id = t."passengerId"
         LEFT JOIN drivers d ON d.id = t."driverId"
+        LEFT JOIN users du ON du.id = d."userId"
         WHERE status = ${status}
         ORDER BY t."createdAt" DESC
         LIMIT ${limit} OFFSET ${offset}
@@ -621,10 +622,11 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
       const tripsRes = await sql`
         SELECT t.*, 
           u.name AS passenger_name, u.phone AS passenger_phone,
-          d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+          du.name AS driver_name, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
         FROM trips t
         LEFT JOIN users u ON u.id = t."passengerId"
         LEFT JOIN drivers d ON d.id = t."driverId"
+        LEFT JOIN users du ON du.id = d."userId"
         ORDER BY t."createdAt" DESC
         LIMIT ${limit} OFFSET ${offset}
       `;
@@ -686,42 +688,42 @@ try {
     if (role && like) {
       totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true AND u.role = ${role} AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})`;
       usersRes = await sql`
-        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
-          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
-        FROM users u
-        LEFT JOIN drivers d ON d."userId" = u.id
-        WHERE u."isActive" = true AND u.role = ${role} AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})
+      SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+        d.status AS driver_status, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+      FROM users u
+      LEFT JOIN drivers d ON d."userId" = u.id
+      WHERE u."isActive" = true AND u.role = ${role} AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})
         ORDER BY u."createdAt" DESC
         LIMIT ${limit} OFFSET ${offset}`;
     } else if (role) {
       totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true AND u.role = ${role}`;
       usersRes = await sql`
-        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
-          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
-        FROM users u
-        LEFT JOIN drivers d ON d."userId" = u.id
-        WHERE u."isActive" = true AND u.role = ${role}
+      SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+        d.status AS driver_status, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+      FROM users u
+      LEFT JOIN drivers d ON d."userId" = u.id
+      WHERE u."isActive" = true AND u.role = ${role}
         ORDER BY u."createdAt" DESC
         LIMIT ${limit} OFFSET ${offset}`;
     } else if (like) {
       totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})`;
       usersRes = await sql`
-        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
-          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
-        FROM users u
-        LEFT JOIN drivers d ON d."userId" = u.id
-        WHERE u."isActive" = true AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})
+      SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+        d.status AS driver_status, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+      FROM users u
+      LEFT JOIN drivers d ON d."userId" = u.id
+      WHERE u."isActive" = true AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})
         ORDER BY u."createdAt" DESC
         LIMIT ${limit} OFFSET ${offset}`;
     } else {
       totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true`;
       usersRes = await sql`
-        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
-          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
-        FROM users u
-        LEFT JOIN drivers d ON d."userId" = u.id
-        WHERE u."isActive" = true
-        ORDER BY u."createdAt" DESC
+      SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+        d.status AS driver_status, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+      FROM users u
+      LEFT JOIN drivers d ON d."userId" = u.id
+      WHERE u."isActive" = true
+      ORDER BY u."createdAt" DESC
         LIMIT ${limit} OFFSET ${offset}`;
     }
     const total = Number(totalRes[0]?.total || 0);
@@ -944,9 +946,10 @@ app.get('/api/v1/trips/active', requireAuth, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const user = c.get('user');
   const rows = await sql`
-    SELECT t.*, d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+    SELECT t.*, du.name AS driver_name
     FROM trips t
     LEFT JOIN drivers d ON d.id = t."driverId"
+    LEFT JOIN users du ON du.id = d."userId"
     WHERE (t."passengerId" = ${user.sub} OR d."userId" = ${user.sub})
       AND t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')
     ORDER BY t."createdAt" DESC LIMIT 1
@@ -955,7 +958,7 @@ app.get('/api/v1/trips/active', requireAuth, async (c) => {
   const t = rows[0];
   let driver = null;
   if (t.driverId) {
-    const d = await sql`SELECT "currentLat", "currentLng", name FROM drivers WHERE id = ${t.driverId} LIMIT 1`;
+    const d = await sql`SELECT d."currentLat", d."currentLng", u.name FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${t.driverId} LIMIT 1`;
     if (d.length) {
       const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
       const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
@@ -996,16 +999,17 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
   const rows = await sql`
-    SELECT t.*, d.name AS driver_name, d.car_make, d.car_model, d.car_plate
+    SELECT t.*, du.name AS driver_name
     FROM trips t
     LEFT JOIN drivers d ON d.id = t."driverId"
+    LEFT JOIN users du ON du.id = d."userId"
     WHERE t.id = ${id} LIMIT 1
   `;
   if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   const t = rows[0];
   let driver = null;
   if (t.driverId) {
-    const d = await sql`SELECT "currentLat", "currentLng", name FROM drivers WHERE id = ${t.driverId} LIMIT 1`;
+    const d = await sql`SELECT d."currentLat", d."currentLng", u.name FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${t.driverId} LIMIT 1`;
     if (d.length) {
       const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
       const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
