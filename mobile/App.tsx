@@ -15,7 +15,7 @@ import { BG_LOCATION_TASK } from './src/services/bgLocation';
 // localização, notificações com som, e upload de fotos/documentos.
 // ?v= rebenta a cache da WebView: sem isto o iOS servia o HTML antigo
 // e as melhorias do mapa não apareciam. Aumenta a cada deploy do site.
-const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261012';
+const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261013';
 const API_URL = 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
 const EAS_PROJECT_ID = 'ec5885e0-c677-4023-b65a-6642fe20f3fd';
 
