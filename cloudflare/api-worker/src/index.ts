@@ -256,7 +256,7 @@ app.get('/api/v1/drivers/nearby', async (c) => {
     try { await sql`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cats JSONB`; } catch {}
   let rows: any[];
   try {
-    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL LIMIT 100`;
+    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL AND d.cats IS NOT NULL AND d.cats::text NOT IN ('null', '[]') LIMIT 100`;
   } catch {
     rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL LIMIT 100`;
   }
