@@ -1572,12 +1572,17 @@ async function webDriverInfo(sql: any, driverId: string | null) {
     FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} LIMIT 1`;
   if (!d.length) return null;
   const r = d[0];
+  let avg = r.rating != null ? Number(r.rating) : 5;
+  try {
+    const ar = await sql`SELECT COALESCE(AVG(rt.score), 0)::float AS a, COUNT(*)::int AS n FROM ratings rt JOIN trips t ON t.id = rt."tripId" WHERE t."driverId" = ${driverId}`;
+    if (ar[0] && Number(ar[0].n) > 0) avg = Math.round(Number(ar[0].a) * 10) / 10;
+  } catch {}
   return {
     lat: r.currentLat != null ? Number(r.currentLat) : null,
     lng: r.currentLng != null ? Number(r.currentLng) : null,
     name: r.name || 'Motorista',
     phone: r.phone || '',
-    rating: r.rating != null ? Number(r.rating) : 5,
+    rating: avg,
     totalTrips: Number(r.totalTrips || 0),
     carMake: r.carMake || '', carModel: r.carModel || '', carColor: r.carColor || '', carPlate: r.carPlate || '',
   };
