@@ -1671,6 +1671,11 @@ export class TripRinger {
       if (!rows.length) return;
       if (rows.length === 1) {
         const t = rows[0];
+        // Já há conversa: só o recetor é avisado por mensagem; não insistir aqui.
+        try {
+          const ch = await sql`SELECT id FROM chat_messages WHERE "tripId" = ${t.id} AND "createdAt" > NOW() - INTERVAL '3 minutes' LIMIT 1`;
+          if (ch.length) { await this.state.storage.setAlarm(Date.now() + 3000); return; }
+        } catch {}
         const addr = String(t.dropoffAddress || 'Luanda');
         const cut = addr.indexOf(' · ');
         const { byCode } = await catMaps(sql);
