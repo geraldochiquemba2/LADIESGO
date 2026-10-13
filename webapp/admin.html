@@ -341,7 +341,7 @@ function drawMap(){
   layerG.clearLayers();if(roadLine){map.removeLayer(roadLine);roadLine=null}
   const enRoute={};ALL.filter(matchTrip).forEach(t=>{if((t.status==='accepted'||t.status==='arrived')&&t.driverId)enRoute[t.driverId]=t});
   const drvMarks={};
-  DRV.filter(x=>x.lat!=null&&x.lng!=null).filter(matchDrv).forEach(x=>{
+  DRV.filter(x=>x.lat!=null&&x.lng!=null).filter(x=>x.isOnline!==false).filter(matchDrv).forEach(x=>{
     const tr=enRoute[x.id];const yw=!!tr;const on=x.isOnline!==false;const fc=yw?'#eab308':(on?'#12a150':'#9aa0a6');
     const car=[x.carPlate,x.carMake].filter(Boolean).join(' · ');
     const mk=L.circleMarker([x.lat,x.lng],{radius:9,color:'#fff',weight:3,fillColor:fc,fillOpacity:1});
