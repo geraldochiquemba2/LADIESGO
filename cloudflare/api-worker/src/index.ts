@@ -678,28 +678,53 @@ app.get('/api/v1/admin/users', adminMiddleware, async (c) => {
   const q = c.req.query('q');
   const offset = (page - 1) * limit;
 
-  const where: string[] = ['u."isActive" = true'];
-  const params: any[] = [];
-  if (role) { params.push(role); where.push(`u.role = $${params.length}`); }
-  if (q) { params.push(`%${q}%`); where.push(`(u.name ILIKE $${params.length} OR u.phone ILIKE $${params.length})`); }
-  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const like = q ? `%${q}%` : null;
 
 try {
-    // Build query strings directly and use sql.query
-    const totalQuery = `SELECT COUNT(*)::int AS total FROM users u ${whereSql}`;
-    const totalRes = await sql.query(totalQuery, params);
+    // Filtros dinâmicos com template tags (mesmo padrão do resto do ficheiro).
+    let totalRes, usersRes;
+    if (role && like) {
+      totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true AND u.role = ${role} AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})`;
+      usersRes = await sql`
+        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
+        FROM users u
+        LEFT JOIN drivers d ON d."userId" = u.id
+        WHERE u."isActive" = true AND u.role = ${role} AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})
+        ORDER BY u."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}`;
+    } else if (role) {
+      totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true AND u.role = ${role}`;
+      usersRes = await sql`
+        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
+        FROM users u
+        LEFT JOIN drivers d ON d."userId" = u.id
+        WHERE u."isActive" = true AND u.role = ${role}
+        ORDER BY u."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}`;
+    } else if (like) {
+      totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})`;
+      usersRes = await sql`
+        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
+        FROM users u
+        LEFT JOIN drivers d ON d."userId" = u.id
+        WHERE u."isActive" = true AND (u.name ILIKE ${like} OR u.phone ILIKE ${like})
+        ORDER BY u."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}`;
+    } else {
+      totalRes = await sql`SELECT COUNT(*)::int AS total FROM users u WHERE u."isActive" = true`;
+      usersRes = await sql`
+        SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
+          d.status AS driver_status, d.car_make, d.car_model, d.car_plate
+        FROM users u
+        LEFT JOIN drivers d ON d."userId" = u.id
+        WHERE u."isActive" = true
+        ORDER BY u."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}`;
+    }
     const total = Number(totalRes[0]?.total || 0);
-
-    const query = `
-      SELECT u.id, u.name, u.phone, u.role, u."profilePhoto", u."isVerified", u."createdAt",
-        d.status AS driver_status, d.car_make, d.car_model, d.car_plate
-      FROM users u
-      LEFT JOIN drivers d ON d."userId" = u.id
-      ${whereSql}
-      ORDER BY u."createdAt" DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
-    const usersRes = await sql.query(query, params);
     return c.json({ users: usersRes, total });
   } catch (e) {
     console.error('Admin users error:', e);

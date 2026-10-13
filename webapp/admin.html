@@ -139,9 +139,21 @@ var CAT_PT={ECONOMY:'Económico',COMFORT:'Conforto',PREMIUM:'Premium'};
 
 const ah=()=>{try{const t=localStorage.getItem('taxi_token');return t?{Authorization:'Bearer '+t}:{}}catch(e){return{}}};
 function login(){
+  const err=$('loginErr');if(err)err.textContent='';
   const ph=($('admPhone').value||'').replace(/\D/g,''),pw=$('admPass').value||'';
-  if(ph==='999999999'&&pw==='1234567890'){try{sessionStorage.setItem('lg_admin','1')}catch(e){}boot();}
-  else $('loginErr').textContent='Credenciais inválidas.';
+  const btn=$('admGo');if(btn){btn.disabled=true;btn.textContent='A entrar…';}
+  (async()=>{
+    try{
+      const phone=ph.indexOf('244')===0?('+'+ph):('+244'+ph);
+      const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:phone,password:pw})});
+      const j=await r.json().catch(()=>null);
+      if(!r.ok||!j||!j.accessToken)throw new Error((j&&j.message)||'Credenciais inválidas.');
+      if(j.user&&j.user.role&&j.user.role!=='ADMIN')throw new Error('Esta conta não é admin.');
+      try{localStorage.setItem('taxi_token',j.accessToken);if(j.user)localStorage.setItem('taxi_user',JSON.stringify(j.user));sessionStorage.setItem('lg_admin','1');}catch(e){}
+      boot();
+    }catch(e){if(err)err.textContent=(e&&e.message)||'Credenciais inválidas.';}
+    finally{if(btn){btn.disabled=false;btn.textContent='Entrar';}}
+  })();
 }
 function logout(){try{sessionStorage.removeItem('lg_admin');localStorage.removeItem('taxi_token');localStorage.removeItem('taxi_user')}catch(e){}location.href='/app';}
 
@@ -402,7 +414,9 @@ $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('admOut').addEventListener('click',logout);
 try{
-  if(sessionStorage.getItem('lg_admin')==='1')boot();
+  const hasTok=(()=>{try{return !!localStorage.getItem('taxi_token');}catch(e){return false;}})();
+  if(!hasTok){try{sessionStorage.removeItem('lg_admin');}catch(e){}}
+  else if(sessionStorage.getItem('lg_admin')==='1')boot();
   else{const u=JSON.parse(localStorage.getItem('taxi_user')||'null');if(u&&u.role==='ADMIN'){try{sessionStorage.setItem('lg_admin','1')}catch(_){}boot();}}
 }catch(e){}
 </script>
