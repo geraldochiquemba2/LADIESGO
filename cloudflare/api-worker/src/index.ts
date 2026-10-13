@@ -1403,10 +1403,13 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW())
       RETURNING id`;
     const tripId = rows[0].id;
-    // Push imediato (o cron de 1 min repete enquanto estiver pendente).
+    // Push imediato + arranque do toca-toca de 3s (não bloqueia a resposta).
     try {
       const destN = String(b.destN || '').slice(0, 60);
-      c.executionCtx.waitUntil(pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!'));
+      c.executionCtx.waitUntil((async () => {
+        await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!');
+        await ringStart(c.env, tripId);
+      })());
     } catch {}
     return c.json({ id: tripId });
   } catch (e) {
@@ -1445,6 +1448,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
     } else if (neonSt === 'CANCELLED') {
       await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
     }
+    try { await ringStop(c.env, id); } catch {}
     return c.json({ ok: true, status: st });
   } catch (e) {
     console.error('trip status error:', e);
@@ -1472,24 +1476,58 @@ async function pushTripToDrivers(sql: any, tripId: string, pickupName: string, d
   } catch {}
 }
 
-// Cron (1 min): repete o push dos pedidos pendentes — tipo chamada.
-// Pede imediato cobre 0–45s; aqui cobre 45s–6min; aceitar/cancelar para o ciclo.
-async function repeatPendingPushes(env: Env) {
-  try {
-    const sql = neon(env.DATABASE_URL);
-    const rows = await sql`
-      SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "createdAt" FROM trips
-      WHERE status = 'REQUESTED' AND "createdAt" < NOW() - INTERVAL '45 seconds' AND "createdAt" > NOW() - INTERVAL '6 minutes'
-      ORDER BY "createdAt" DESC LIMIT 20`;
-    for (const t of rows) {
+// Toca-toca por viagem: alarme encadeado de 3s enquanto o pedido estiver
+// pendente. Pára sozinho ao aceitar/cancelar/concluir ou aos ~4 min.
+export class TripRinger {
+  state: any;
+  env: any;
+  constructor(state: any, env: any) {
+    this.state = state;
+    this.env = env;
+  }
+  async fetch(req: any) {
+    const u = new URL(req.url);
+    if (u.pathname.endsWith('/cancel')) {
+      try { await this.state.storage.deleteAlarm(); } catch {}
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    const tripId = u.searchParams.get('tripId') || '';
+    if (!tripId) return new Response('{"message":"sem trip"}', { status: 400 });
+    await this.state.storage.put('tripId', tripId);
+    await this.state.storage.setAlarm(Date.now() + 3000);
+    return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+  }
+  async alarm() {
+    try {
+      const tripId: string = await this.state.storage.get('tripId');
+      if (!tripId) return;
+      const sql = neon(this.env.DATABASE_URL);
+      const st = await sql`SELECT id, status, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "createdAt" FROM trips WHERE id = ${tripId} LIMIT 1`;
+      if (!st.length || st[0].status !== 'REQUESTED') return;
+      if (Date.now() - new Date(st[0].createdAt).getTime() > 4 * 60 * 1000) return;
+      const t = st[0];
       const addr = String(t.dropoffAddress || 'Luanda');
       const cut = addr.indexOf(' · ');
-      const stopsN = Array.isArray(t.stops) ? t.stops.length : 0;
-      await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, stopsN, Number(t.fareEstimate || 0), '🔔 Pedido a aguardar — LadiesGo!');
+      await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Pedido a aguardar — LadiesGo!');
+      await this.state.storage.setAlarm(Date.now() + 3000);
+    } catch {
+      try { await this.state.storage.setAlarm(Date.now() + 10000); } catch {}
     }
-  } catch (e) {
-    console.error('cron push error:', e);
   }
+}
+
+async function ringStart(env: any, tripId: string) {
+  try {
+    const stub = env.RINGER.get(env.RINGER.idFromName(tripId));
+    await stub.fetch(`https://ringer/schedule?tripId=${tripId}`);
+  } catch {}
+}
+
+async function ringStop(env: any, tripId: string) {
+  try {
+    const stub = env.RINGER.get(env.RINGER.idFromName(tripId));
+    await stub.fetch('https://ringer/cancel');
+  } catch {}
 }
 
 // POST /api/v1/payments/create-intent — Create payment intent
@@ -1505,7 +1543,4 @@ app.post('/api/v1/payments/confirm', requireAuth, async (c) => {
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: any, env: Env, ctx: any) {
-    ctx.waitUntil(repeatPendingPushes(env));
-  },
 };

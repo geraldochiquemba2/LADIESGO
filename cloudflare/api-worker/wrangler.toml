@@ -5,8 +5,12 @@ compatibility_date = "2025-06-01"
 [vars]
 JWT_EXPIRES_IN = "7d"
 
-[triggers]
-crons = ["* * * * *"]
+[durable_objects]
+bindings = [{ name = "RINGER", class_name = "TripRinger" }]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["TripRinger"]
 
 # Segredos (nunca commitar):
 # wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require
