@@ -198,6 +198,10 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));
+  // Token único por aparelho: limpa-o das outras contas (senão o próprio recebe os pushes).
+  if (body?.fcmToken) {
+    try { await sql`UPDATE users SET "fcmToken" = NULL, "updatedAt" = NOW() WHERE "fcmToken" = ${body.fcmToken} AND id != ${user.sub}`; } catch {}
+  }
   const rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "updatedAt" = NOW() WHERE id = ${user.sub} RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
   return c.json(rows[0] || {});
 });
