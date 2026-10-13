@@ -282,6 +282,65 @@ app.post('/api/v1/trips/request', requireAuth, async (c) => {
   const rows = await sql`INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt") VALUES (gen_random_uuid()::text, ${user.sub}, ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)}, ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)}, 'REQUESTED', ${String(b.rideType || 'ECONOMY')}, ${fare}, ${Math.round(dist * 10) / 10}, ${String(b.paymentMethod || 'CASH')}, NOW(), NOW()) RETURNING *`;
   return c.json(rows[0]);
 });
+// GET /api/v1/trips/incoming — Pedidos pendentes para a motorista (web)
+// (Registado antes de /:id: o Hono serve o primeiro registo em caso de colisão.)
+app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const user = c.get('user');
+  const qDriver = String(c.req.query('driverId') || '');
+  try {
+    const did = await driverIdFor(sql, qDriver || user.sub);
+    if (!did) return c.json({ trips: [] });
+    const rows = await sql`
+      SELECT t.*, u.name AS passenger_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
+      WHERE t.status = 'REQUESTED' AND t."createdAt" > NOW() - INTERVAL '10 minutes'
+      ORDER BY t."createdAt" ASC LIMIT 40`;
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (let i = rows.length - 1; i >= 0 && out.length < 20; i--) {
+      const r = rows[i];
+      if (seen.has(r.passengerId)) continue;
+      seen.add(r.passengerId);
+      out.push(webTripRow(r, null, r.passenger_name));
+    }
+    return c.json({ trips: out });
+  } catch (e) {
+    console.error('incoming error:', e);
+    return c.json({ trips: [] });
+  }
+});
+
+// GET /api/v1/trips/history — Histórico (web)
+app.get('/api/v1/trips/history', requireAuth, async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const p = String(c.req.query('passengerId') || '').slice(0, 64);
+  const d = String(c.req.query('driverId') || '').slice(0, 64);
+  try {
+    let did: string | undefined;
+    if (d) did = await driverIdFor(sql, d);
+    let rows: any[];
+    if (p && did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} OR t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
+    else if (p) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} ORDER BY t."createdAt" DESC LIMIT 30`;
+    else if (did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
+    else return c.json({ trips: [] });
+    return c.json({ trips: rows.map((t: any) => ({
+      id: t.id,
+      dest: String(t.dropoffAddress || ''),
+      fare: t.finalFare != null ? Number(t.finalFare) : Number(t.fareEstimate),
+      cat: RIDE2CAT[t.rideType] || 'Económico',
+      status: NEON2WEB[t.status] || t.status,
+      by: t.cancelledBy || '', reason: t.cancelReason || '',
+      other: d ? (t.passenger_name || '') : (t.driver_name || ''),
+      ts: t.createdAt, from: t.pickupAddress || '',
+      pay: t.paymentMethod === 'CARD' ? 'Cartão' : 'Numerário',
+      stopsN: Array.isArray(t.stops) ? t.stops.length : 0,
+      stops: (Array.isArray(t.stops) ? t.stops : []).map((x: any) => ({ n: String(x.n || '').slice(0, 60) })),
+    })) });
+  } catch (e) {
+    console.error('history error:', e);
+    return c.json({ trips: [] });
+  }
+});
 app.get('/api/v1/trips/active', requireAuth, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
   const user = c.get('user');
@@ -1310,65 +1369,6 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
   } catch (e) {
     console.error('request-web error:', e);
     return c.json({ message: 'Falhou o pedido. Tenta de novo.' }, 500);
-  }
-});
-
-// GET /api/v1/trips/incoming — Pedidos pendentes para a motorista (web)
-app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
-  const user = c.get('user');
-  const qDriver = String(c.req.query('driverId') || '');
-  try {
-    const did = await driverIdFor(sql, qDriver || user.sub);
-    if (!did) return c.json({ trips: [] });
-    const rows = await sql`
-      SELECT t.*, u.name AS passenger_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
-      WHERE t.status = 'REQUESTED' AND t."createdAt" > NOW() - INTERVAL '10 minutes'
-      ORDER BY t."createdAt" ASC LIMIT 40`;
-    const seen = new Set<string>();
-    const out: any[] = [];
-    for (let i = rows.length - 1; i >= 0 && out.length < 20; i--) {
-      const r = rows[i];
-      if (seen.has(r.passengerId)) continue;
-      seen.add(r.passengerId);
-      out.push(webTripRow(r, null, r.passenger_name));
-    }
-    return c.json({ trips: out });
-  } catch (e) {
-    console.error('incoming error:', e);
-    return c.json({ trips: [] });
-  }
-});
-
-// GET /api/v1/trips/history — Histórico (web)
-app.get('/api/v1/trips/history', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
-  const p = String(c.req.query('passengerId') || '').slice(0, 64);
-  const d = String(c.req.query('driverId') || '').slice(0, 64);
-  try {
-    let did: string | undefined;
-    if (d) did = await driverIdFor(sql, d);
-    let rows: any[];
-    if (p && did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} OR t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
-    else if (p) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} ORDER BY t."createdAt" DESC LIMIT 30`;
-    else if (did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
-    else return c.json({ trips: [] });
-    return c.json({ trips: rows.map((t: any) => ({
-      id: t.id,
-      dest: String(t.dropoffAddress || '').replace(' · ', ' · '),
-      fare: t.finalFare != null ? Number(t.finalFare) : Number(t.fareEstimate),
-      cat: RIDE2CAT[t.rideType] || 'Económico',
-      status: NEON2WEB[t.status] || t.status,
-      by: t.cancelledBy || '', reason: t.cancelReason || '',
-      other: d ? (t.passenger_name || '') : (t.driver_name || ''),
-      ts: t.createdAt, from: t.pickupAddress || '',
-      pay: t.paymentMethod === 'CARD' ? 'Cartão' : 'Numerário',
-      stopsN: Array.isArray(t.stops) ? t.stops.length : 0,
-      stops: (Array.isArray(t.stops) ? t.stops : []).map((x: any) => ({ n: String(x.n || '').slice(0, 60) })),
-    })) });
-  } catch (e) {
-    console.error('history error:', e);
-    return c.json({ trips: [] });
   }
 });
 
