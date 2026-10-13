@@ -263,13 +263,13 @@ function renderCats(){
 async function addCat(){
   const m=$('catMsg');if(m){m.textContent='';m.style.color='';}
   const gv=id=>{try{return ($(id)||{}).value||'';}catch(e){return'';}};
-  const body={name:gv('ncName').trim(),color:gv('ncColor'),mult:parseFloat(String(gv('ncMult')).replace(',','.'))};
+  const body={name:gv('ncName').trim(),color:gv('ncColor'),mult:gv('ncMult').trim()==='' ? 1 : parseFloat(String(gv('ncMult')).replace(',','.'))};
   if(body.name.length<2){if(m)m.textContent='Escreve o nome.';return;}
   try{
     const r=await fetch('/api/v1/admin/categories',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body)});
     const j=await r.json().catch(()=>null);
     if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
-    try{$('ncName').value='';$('ncMult').value='';}catch(e){}
+    try{$('ncName').value='';$('ncMult').value='';if(document.activeElement)document.activeElement.blur();}catch(e){}
     toast('Categoria criada ✓','ok');load();
   }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Falhou ao criar.',false);}
 }
@@ -283,7 +283,7 @@ async function saveCat(code){
     const j=await r.json().catch(()=>null);
     if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
     if(m){m.textContent='✓ Categoria atualizada.';m.style.color='#12a150';}
-    toast('Categoria atualizada ✓','ok');load();
+    toast('Categoria atualizada ✓','ok');try{if(document.activeElement)document.activeElement.blur();}catch(e){}load();
   }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Falhou ao guardar.',false);}
 }
 function renderUsers(){
