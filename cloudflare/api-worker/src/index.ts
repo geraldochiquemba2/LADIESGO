@@ -872,7 +872,28 @@ app.get('/api/places/search', async (c) => {
   if (q.length < 3 || !Number.isFinite(lat) || !Number.isFinite(lng)) {
     return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
   }
+  const pkey = 'places:' + q.toLowerCase() + ':' + Math.round(lat * 1000) / 1000 + ',' + Math.round(lng * 1000) / 1000;
+  const phit = await cacheGet(c, pkey);
+  if (phit) return phit;
   try {
+    // Photon primeiro (livre, sem chave); Nominatim a seguir.
+    try {
+      const pr = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lat=${lat}&lon=${lng}&limit=20&lang=pt`, { signal: AbortSignal.timeout(8000) });
+      const pj: any = await pr.json();
+      const feats = Array.isArray(pj?.features) ? pj.features : [];
+      if (feats.length) {
+        const R = 6371, t = Math.PI / 180;
+        const pplaces = feats.map((f: any) => {
+          const co = f?.geometry?.coordinates || [];
+          const plat = Number(co[1]), plng = Number(co[0]);
+          const pp = f?.properties || {};
+          const dLa = (plat - lat) * t, dLo = (plng - lng) * t;
+          const s = Math.sin(dLa / 2) ** 2 + Math.cos(lat * t) * Math.cos(plat * t) * Math.sin(dLo / 2) ** 2;
+          return { name: String(pp.name || q), lat: plat, lng: plng, municipality: String(pp.city || pp.county || ''), province: String(pp.state || 'Luanda'), distanceKm: Math.round(2 * R * Math.asin(Math.sqrt(s)) * 10) / 10 };
+        }).filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        if (pplaces.length) return cachePut(c, pkey, 604800, { places: pplaces });
+      }
+    } catch {}
     // Nominatim search limitado a Luanda (viewbox + bounded), igual ao fallback do mobile
     const url =
       `https://nominatim.openstreetmap.org/search?format=json&limit=30&countrycodes=ao` +
@@ -900,7 +921,7 @@ app.get('/api/places/search', async (c) => {
         };
       })
       .filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
-    return c.json({ places }, 200, { 'Cache-Control': 'public, max-age=600' });
+    return cachePut(c, pkey, 604800, { places });
   } catch {
     return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
   }
@@ -925,9 +946,27 @@ function offlineZone(la: number, lo: number): string {
   }
   return best;
 }
+// Cache real (Cache API): corta 70-90% das chamadas externas repetidas.
+// Chaves quantizadas para a mesma rota/zona/pesquisa partilhar entrada.
+async function cacheGet(c: any, key: string): Promise<Response | null> {
+  try {
+    const hit = await caches.default.match(new Request('https://cache.local/' + key));
+    return hit || null;
+  } catch { return null; }
+}
+async function cachePut(c: any, key: string, ttlSec: number, obj: any): Promise<Response> {
+  const res = c.json(obj, 200, { 'Cache-Control': `public, max-age=${ttlSec}` });
+  try {
+    c.executionCtx.waitUntil(caches.default.put(new Request('https://cache.local/' + key), res.clone()));
+  } catch {}
+  return res;
+}
 app.get('/api/zone', async (c) => {
   const la = Number(c.req.query('lat')), lo = Number(c.req.query('lng'));
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Pedido inválido.' }, 400);
+  const zkey = 'zone:' + Math.round(la * 10000) / 10000 + ',' + Math.round(lo * 10000) / 10000;
+  const zhit = await cacheGet(c, zkey);
+  if (zhit) return zhit;
   let zone = '';
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${la}&lon=${lo}&format=json&zoom=14`, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
@@ -935,22 +974,20 @@ app.get('/api/zone', async (c) => {
     const a = j?.address || {};
     zone = a.suburb || a.neighbourhood || a.quarter || a.city_district || a.town || a.city || '';
   } catch {}
-  if (!zone) {
-    try {
-      const br = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${la}&longitude=${lo}&localityLanguage=pt`, { signal: AbortSignal.timeout(8000) });
-      const bj: any = await br.json();
-      zone = bj.locality || bj.city || bj.principalSubdivision || '';
-    } catch {}
-  }
+  // BigDataCloud removido aqui (402 quando chamado do servidor); offlineZone local cobre.
   if (!zone) zone = offlineZone(la, lo);
-  return c.json({ zone }, 200, { 'Cache-Control': 'public, max-age=86400' });
+  return cachePut(c, zkey, 2592000, { zone });
 });
 app.get('/api/route', async (c) => {
   const from = String(c.req.query('from') || '').split(',').map(Number);
   const to = String(c.req.query('to') || '').split(',').map(Number);
   if (from.length !== 2 || to.length !== 2 || ![...from, ...to].every(Number.isFinite)) return c.json({ message: 'Pedido inválido.' }, 400);
+  const qf = (n: number) => Math.round(n * 1000) / 1000;
+  const rkey = 'route:' + qf(from[0]) + ',' + qf(from[1]) + '|' + qf(to[0]) + ',' + qf(to[1]);
+  const rhit = await cacheGet(c, rkey);
+  if (rhit) return rhit;
   try {
-    const q = `${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`;
+    const q = `${qf(from[1])},${qf(from[0])};${qf(to[1])},${qf(to[0])}?overview=full&geometries=geojson`;
     const bases = [
       'https://router.project-osrm.org/route/v1/driving/',
       'https://routing.openstreetmap.de/routed-car/route/v1/driving/',
@@ -960,7 +997,7 @@ app.get('/api/route', async (c) => {
         const r = await fetch(base + q, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(6000) });
         const j: any = await r.json();
         const g = j?.routes?.[0]?.geometry?.coordinates;
-        if (g?.length) return c.json({ points: g.map((p: number[]) => [p[1], p[0]]), distance_m: j.routes[0].distance, duration_s: j.routes[0].duration }, 200, { 'Cache-Control': 'public, max-age=600' });
+        if (g?.length) return cachePut(c, rkey, 3600, { points: g.map((p: number[]) => [p[1], p[0]]), distance_m: j.routes[0].distance, duration_s: j.routes[0].duration });
       } catch {}
     }
     return c.json({ message: 'Sem rota de momento.' }, 502);

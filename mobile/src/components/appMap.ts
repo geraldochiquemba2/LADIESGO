@@ -1,13 +1,12 @@
 import type { CameraRef } from '@maplibre/maplibre-react-native';
 
-// Estilo claro CARTO "Positron" (bom contraste de dia em Luanda, mesma
-// estratégia da web que usa OSM standard + fallback CARTO light).
-// Attribution "© OpenStreetMap © CARTO" is shown via <MapAttribution />.
-export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
+// Estilo OSM Liberty do OpenFreeMap (sem chave, sem conta) como primário;
+// fallback CARTO Positron (com CARTO_KEY de geo.ts quando preenchida).
+// Attribution "© OpenStreetMap contributors" via <MapAttribution />.
+export const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 
-// Fallback se o Positron falhar (onDidFailLoadingMap): estilo OSM Liberty.
-// Equivalente ao fallback OSM -> CARTO da web (ladiesgo-home.html).
-export const MAP_STYLE_FALLBACK = 'https://tiles.openfreemap.org/styles/liberty';
+// Fallback se o Liberty falhar (onDidFailLoadingMap).
+export const MAP_STYLE_FALLBACK = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
 
 // Fit the camera around a set of [lng, lat] coordinates (replaces
 // react-native-maps fitToCoordinates). Padding is in screen points.
