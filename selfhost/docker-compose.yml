@@ -1,0 +1,323 @@
+# LadiesGo — mapas/serviços próprios (Luanda, Angola)
+# VPS alvo: Oracle Always Free Ampere A1 ARM, 2 CPU + 12 GB RAM, Ubuntu 22.04/24.04
+# Uso: docker compose up -d   (ver README-DEPLOY.md — passo a passo)
+#
+# Convenções:
+#  - Só o nginx publica portas no host (80/443). O resto fala na rede interna
+#    `ladiesgo-net` e só expõe 127.0.0.1 para debug local (sem abrir à internet).
+#  - Versões PINNED (não usar :latest) para deploys repetíveis em ARM.
+#  - `mem_limit` é teto conservador; soma dos tetos ~11.5 GB, uso real ~6-8 GB.
+#  - Dados OSM de Angola vivem em ./data (bind mount) para poderes apagar/regerar
+#    sem perder o volume do Postgres.
+
+name: ladiesgo-maps
+
+networks:
+  ladiesgo-net:
+    driver: bridge
+
+volumes:
+  postgres-data:      # dados do app (Postgres+PostGIS). É O ÚNICO volume com backup diário.
+  opensearch-data:    # índice do Photon (regenerável a partir do .osm.pbf; sem backup).
+  photon-data:        # snapshot/lock do Photon (regenerável; sem backup).
+  osrm-data:          # .osrm* gerados por osrm-extract/partition/customize (regeneráveis).
+  nginx-cache:        # cache de proxy (rotas/pesquisa/tiles). Apagável sem risco.
+  letsencrypt:        # certs TLS do certbot. INCLUIR num backup manual (ver README).
+  tiles-config:       # config.json + estilos do tileserver-gl (versionado em git).
+
+services:
+  # ---------------------------------------------------------------------------
+  # OSRM — routing car (Angola, perfil car.lua + MLD). Porta interna 5000.
+  # Volume: osrm-data:/data contém angola-latest.osrm* (gerados no build, ver README §6).
+  # Memória: runtime ~1-2 GB (Angola MLD); teto 4g para picos de query concorrente.
+  # Rota pública: https://maps.TEUDOMINIO/route/v1/driving/... (via nginx /route/).
+  # ---------------------------------------------------------------------------
+  osrm:
+    image: osrm/osrm-backend:v5.27.1
+    container_name: ladiesgo-osrm
+    command: osrm-routed --algorithm mld --max-table-size 8000 /data/angola-latest.osrm
+    restart: unless-stopped
+    mem_limit: 4g
+    mem_reservation: 1g
+    cpus: 1.5
+    networks:
+      - ladiesgo-net
+    volumes:
+      - osrm-data:/data:ro
+    ports:
+      - "127.0.0.1:5000:5000" # só localhost p/ debug; público passa pelo nginx :80/:443
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/route/v1/driving/13.2344,-8.8383;13.2344,-8.8383?overview=false || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # OpenSearch — backend do Photon. Porta interna 9200 (NÃO expor ao público).
+  # Volume: opensearch-data (índice; regenerável).
+  # Memória: heap fixo 1g (OPENSEARCH_JAVA_OPTS) + teto 2g. single-node, sem security.
+  # NOTA ARM: imagem oficial suporta linux/arm64 desde 1.x; 2.15.0 testada em Ampere.
+  # ---------------------------------------------------------------------------
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    container_name: ladiesgo-opensearch
+    restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 1g
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+      - DISABLE_SECURITY_PLUGIN=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    networks:
+      - ladiesgo-net
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      - "127.0.0.1:9200:9200" # debug local apenas
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Photon — geocode/search (Angola). Porta interna 2322.
+  # Volume: photon-data:/photon/data (import feito uma vez, ver README §6 passo C).
+  # Memória: heap 1g, teto 2g. Depende de opensearch healthy.
+  # Rota pública: https://maps.TEUDOMINIO/search/api?q=... e /search/reverse?lat=..&lon=..
+  #   (nginx tira o prefixo /search/ antes de entregar ao Photon).
+  # Versão pinned 0.7.2 (komoot, arm64). Línguas: en,pt,fr (ver build-angola-data.sh).
+  # ---------------------------------------------------------------------------
+  photon:
+    image: ghcr.io/komoot/photon:0.7.2
+    container_name: ladiesgo-photon
+    command:
+      - "-listen"
+      - "0.0.0.0:2322"
+      - "-data-dir"
+      - "/photon/data"
+      - "-opensearch"
+      - "http://opensearch:9200"
+      - "-languages"
+      - "en,pt,fr"
+      - "-max-results"
+      - "20"
+    restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 512m
+    networks:
+      - ladiesgo-net
+    volumes:
+      - photon-data:/photon/data
+    ports:
+      - "127.0.0.1:2322:2322" # debug local apenas
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      - JAVA_OPTS=-Xms1g -Xmx1g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf 'http://localhost:2322/api?q=Luanda&limit=1' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Tileserver-GL — vetor + raster (Angola .mbtiles). Porta interna 8080.
+  # Volume: ./data/tiles:/data:ro contém angola.mbtiles + config.json (ver README §6 D).
+  #   ATENÇÃO: é ./data/tiles (bind), não volume nomeado — para gerares o .mbtiles
+  #   no host e o container ler sem `docker cp`.
+  # Memória: teto 2g (render raster consome em picos; vetor é leve).
+  # Rota pública: https://maps.TEUDOMINIO/tiles/styles/... , /tiles/data/... , /tiles/fonts/...
+  # ---------------------------------------------------------------------------
+  tileserver:
+    image: maptiler/tileserver-gl:v4.12.0
+    container_name: ladiesgo-tileserver
+    command: ["--config", "/data/config.json", "--verbose"]
+    restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 512m
+    networks:
+      - ladiesgo-net
+    volumes:
+      - ./data/tiles:/data:ro
+    ports:
+      - "127.0.0.1:8080:8080" # debug local apenas
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Postgres 16 + PostGIS 3.4 — dados do APP (não OSM). Porta interna 5432.
+  # Volume: postgres-data (O ÚNICO com backup diário via backup-postgres.sh + cron).
+  # Memória: shared_buffers 512MB + teto 2g; chega para <100k viagens/mês.
+  # Credenciais via .env (POSTGRES_USER/PASSWORD/DB). Nunca commitar o .env real.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: ladiesgo-postgres
+    restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 512m
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "max_connections=100"
+    networks:
+      - ladiesgo-net
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backups:/backups
+    ports:
+      - "127.0.0.1:5432:5432" # debug local (psql); app externo usa túnel SSH, nunca 0.0.0.0
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-ladiesgo}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD no .env}
+      - POSTGRES_DB=${POSTGRES_DB:-ladiesgo}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    healthcheck:
+      test: ["CMD-SHELL-SH", "pg_isready -U $${POSTGRES_USER:-ladiesgo} -d $${POSTGRES_DB:-ladiesgo}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Nginx — único ponto de entrada público. Portas 80/443 no host.
+  # Faz: proxy + cache (1h rotas / 7d pesquisa / 30d tiles) + rate-limit + TLS.
+  # Volumes: ./nginx.conf (este exemplo), nginx-cache (cache), letsencrypt (certs),
+  #   ./data/tiles não precisa aqui (vai via proxy ao tileserver).
+  # Certs: emitidos pelo serviço `certbot` (profile tools). Ver README §8:
+  #   1º boot é SÓ http (bloco :443 comentado), depois descomenta e `nginx -s reload`.
+  # Memória: 512m chegam (cache em disco, não em RAM).
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27.4-alpine
+    container_name: ladiesgo-nginx
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 64m
+    networks:
+      - ladiesgo-net
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx-cache:/var/cache/nginx
+      - letsencrypt:/etc/letsencrypt:ro
+      - ./certbot-www:/var/www/certbot:ro
+    depends_on:
+      - osrm
+      - photon
+      - tileserver
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Certbot — EMISSÃO/RENOVAÇÃO TLS (one-shot, não fica ligado).
+  # Uso: docker compose --profile tools run --rm certbot certonly ... (ver README §8)
+  # Volume letsencrypt partilhado com nginx; webroot em ./certbot-www.
+  # Versão pinned v2.11.0. EMAIL e DOMAIN vêm do .env.
+  # ---------------------------------------------------------------------------
+  certbot:
+    image: certbot/certbot:v2.11.0
+    container_name: ladiesgo-certbot
+    profiles:
+      - tools
+    mem_limit: 512m
+    networks:
+      - ladiesgo-net
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - ./certbot-www:/var/www/certbot
+    env_file:
+      - .env
+    entrypoint: ""
+    command: ["certbot", "--version"]
+
+  # ---------------------------------------------------------------------------
+  # Watchtower — ACTUALIZAÇÕES AUTOMÁTICAS (OPCIONAL, desligado por defeito).
+  # Por defeito usa-se actualização MANUAL (`docker compose pull && up -d`, ver README §11)
+  # para não reiniciar o routing a meio do dia. Para ligar:
+  #   docker compose --profile updates up -d watchtower
+  # Só actualiza containers com label `com.centurylinklabs.watchtower.enable=true`
+  # (ninguém tem esse label por defeito → seguro). Roda às 04:00 Africa/Luanda.
+  # Teto 256m. NÃO activa sem ler README §11.
+  # ---------------------------------------------------------------------------
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    container_name: ladiesgo-watchtower
+    profiles:
+      - updates
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 32m
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - TZ=Africa/Luanda
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_WARN_ON_HEAD_FAILURE=always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"

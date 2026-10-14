@@ -6,11 +6,15 @@ compatibility_date = "2025-06-01"
 JWT_EXPIRES_IN = "7d"
 
 [durable_objects]
-bindings = [{ name = "RINGER", class_name = "TripRinger" }]
+bindings = [{ name = "RINGER", class_name = "TripRinger" }, { name = "TRIPPUSH", class_name = "TripPush" }]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TripRinger"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TripPush"]
 
 # Segredos (nunca commitar):
 # wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require

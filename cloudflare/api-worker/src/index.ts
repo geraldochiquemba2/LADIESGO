@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { neon } from '@neondatabase/serverless';
 
-type Env = { DATABASE_URL: string; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string };
+type Env = { DATABASE_URL: string; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -519,6 +519,54 @@ app.get('/api/v1/trips/active', requireAuth, async (c) => {
   const user = c.get('user');
   const rows = await sql`SELECT t.* FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND (t."passengerId" = ${user.sub} OR d."userId" = ${user.sub}) ORDER BY t."createdAt" DESC LIMIT 1`;
   return c.json(rows[0] || null);
+});
+// ─── LIVE PUSH BASE (WS hibernável, 1 DO por viagem; polling REST continua) ───
+// GET /api/v1/trips/:id/live → upgrade WS para o TripPush do tripId.
+// Auth + verificação de participante como nas rotas /call e /chat.
+// (Registado antes de /:id: o Hono serve o primeiro registo em caso de colisão.)
+// Hook best-effort REST → DO para as transições chamarem sem bloquear a
+// resposta. BASE: ainda NÃO ligado nas transições para não mexer no REST —
+// o DO aprende o status por leitura Neon esporádica (≤1/15s por viagem ativa)
+// e em {"t":"state"}. Quando ligares, chama notifyTripPush(env, id, status)
+// após cada UPDATE de accept/arrived/start/complete/cancel.
+async function notifyTripPush(env: any, tripId: string, status: string) {
+  try {
+    const ns: any = (env as any).TRIPPUSH;
+    if (!ns || !ns.get) return;
+    const stub = ns.get(ns.idFromName(`trip:${tripId}`));
+    await stub.fetch(new Request('https://trip-push/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }));
+  } catch {}
+}
+app.get('/api/v1/trips/:id/live', async (c) => {
+  const id = c.req.param('id');
+  let user: any = null;
+  try {
+    const ah = c.req.header('Authorization') || '';
+    let tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+    if (!tok) tok = String(c.req.query('token') || '');
+    if (tok) user = await verifyJwt(tok, (c.env as any).JWT_SECRET);
+  } catch {}
+  if (!user?.sub) return c.json({ message: 'Não autenticado.' }, 401);
+  if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
+    return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.', usage: `/api/v1/trips/${id}/live` }, 426);
+  const sql = neon(c.env.DATABASE_URL);
+  const t = await sql`SELECT t."passengerId", d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${id} LIMIT 1`;
+  if (!t.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+  const isDriver = !!t[0].driverUserId && t[0].driverUserId === user.sub;
+  const isPax = t[0].passengerId === user.sub;
+  if (!isDriver && !isPax) return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
+  const ns: any = (c.env as any).TRIPPUSH;
+  if (!ns || !ns.get) return c.json({ message: 'Push em tempo real indisponível.' }, 503);
+  const stub = ns.get(ns.idFromName(`trip:${id}`));
+  const fwd = new Headers();
+  for (const h of ['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']) {
+    const v = c.req.header(h);
+    if (v) fwd.set(h, v);
+  }
+  fwd.set('X-Trip-Id', id);
+  fwd.set('X-User-Id', String(user.sub || ''));
+  fwd.set('X-Is-Driver', isDriver ? '1' : '0');
+  return stub.fetch(new Request(`https://trip-push/${id}`, { method: 'GET', headers: fwd }));
 });
 app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const sql = neon(c.env.DATABASE_URL);
@@ -2126,6 +2174,158 @@ export class TripRinger {
     } catch {
       try { await this.state.storage.setAlarm(Date.now() + 10000); } catch {}
     }
+  }
+}
+
+// ─── TripPush: 1 DO por viagem (id `trip:<tripId>`), WS em HIBERNAÇÃO ───
+// Classe NOVA de propósito (não estende o TripRinger: ele é singleton global
+// de alarmes/push Expo com lógica de oferta — misturar partia-o).
+// Memória do DO: posição viva + throttle + cache de estado. Nada de GPS no Neon.
+// Neon: só leituras esporádicas de estado (≤1/15s por viagem ativa) e via
+// POST /notify das transições (hook notifyTripPush); escritas Neon continuam
+// exclusivas do REST existente (accept/arrived/start/complete/cancel).
+const PUSH_GPS_MIN_MS = 10_000;
+const PUSH_STATUS_TTL_MS = 15_000;
+export class TripPush {
+  state: any;
+  env: any;
+  driver: { lat: number; lng: number; ts: number } | null = null;
+  lastFixAt = 0;
+  status: string | null = null;
+  statusAt = 0;
+  tripCache: any = null;
+  tripId: string | null = null;
+  constructor(state: any, env: any) {
+    this.state = state;
+    this.env = env;
+    try {
+      // Keep-alive sem acordar o DO.
+      this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+    } catch {}
+  }
+  async fetch(req: any) {
+    const u = new URL(req.url);
+    if (req.method === 'POST' && u.pathname.endsWith('/notify')) {
+      // Rede interna Worker→DO (transições). Sem auth por desenho.
+      try {
+        const b: any = await req.json().catch(() => ({}));
+        const st = String(b?.status || '').toUpperCase().slice(0, 20);
+        if (st) {
+          const changed = this.status !== st;
+          this.status = st;
+          this.statusAt = Date.now();
+          if (changed) this.broadcast({ t: 'status', status: st });
+        }
+      } catch {}
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
+      return new Response('Expected websocket', { status: 426 });
+    const tripId = String(req.headers.get('X-Trip-Id') || u.pathname.split('/').pop() || '').slice(0, 64);
+    if (!tripId) return new Response('Missing trip', { status: 400 });
+    this.tripId = tripId;
+    try { await this.state.storage.put('tripId', tripId); } catch {}
+    const uid = String(req.headers.get('X-User-Id') || '');
+    const tag = req.headers.get('X-Is-Driver') === '1' ? 'driver' : 'pax';
+    const pair: any = new WebSocketPair();
+    const client = pair[0], server = pair[1];
+    try {
+      this.state.acceptWebSocket(server, [tag, `u:${uid.slice(0, 32)}`]);
+    } catch {
+      return new Response('WS failed', { status: 500 });
+    }
+    return new Response(null, { status: 101, webSocket: client });
+  }
+  async webSocketOpen(ws: any) {
+    if (!this.tripId) {
+      try { this.tripId = await this.state.storage.get('tripId'); } catch {}
+    }
+    try {
+      const hello: any = { t: 'hello', tripId: this.tripId };
+      if (this.status) hello.status = this.status;
+      if (this.driver && Date.now() - this.driver.ts < 120000) hello.driver = { lat: this.driver.lat, lng: this.driver.lng };
+      ws.send(JSON.stringify(hello));
+    } catch {}
+    try { await this.refreshStatus(false); } catch {}
+  }
+  async webSocketMessage(ws: any, raw: any) {
+    let m: any;
+    try { m = JSON.parse(typeof raw === 'string' ? raw : String(raw)); } catch { return; }
+    if (!m || typeof m !== 'object') return;
+    if (m.t === 'gps') { await this.onGps(ws, m).catch(() => {}); return; }
+    if (m.t === 'chat') {
+      const text = String((m as any).text || '').trim().slice(0, 300);
+      if (!text) return;
+      // Efémero: difunde já; persistência continua no REST POST /:id/chat (fonte de verdade).
+      this.broadcast({ t: 'chat', text, ts: Date.now() });
+      return;
+    }
+    if (m.t === 'state') {
+      await this.refreshStatus(true).catch(() => null);
+      try { ws.send(JSON.stringify({ t: 'state', status: this.status, driver: this.driver ? { lat: this.driver.lat, lng: this.driver.lng } : null, etaMin: this.etaMin(), ts: Date.now() })); } catch {}
+      return;
+    }
+    // Resto ignora.
+  }
+  async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {}
+  async webSocketError(ws: any, _err: any) { try { ws.close(1011, 'err'); } catch {} }
+  async onGps(ws: any, m: any) {
+    // Só motorista envia: tag atribuída no upgrade (X-Is-Driver) + claim role. Resto ignora.
+    let tags: string[] = [];
+    try { tags = this.state.getTags(ws) || []; } catch {}
+    const claimed = String(m?.role || '').toLowerCase();
+    if (tags.indexOf('driver') < 0 || claimed !== 'driver') return;
+    const la = Number(m?.lat), lo = Number(m?.lng);
+    if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return;
+    const now = Date.now();
+    if (now - this.lastFixAt < PUSH_GPS_MIN_MS) return; // máx 1 fix/10s
+    this.lastFixAt = now;
+    this.driver = { lat: la, lng: lo, ts: now };
+    // SÓ memória do DO — nada no Neon por fix.
+    this.broadcast({ t: 'driver', lat: la, lng: lo, ts: now });
+    const eta = this.etaMin();
+    if (eta != null) this.broadcast({ t: 'eta', min: eta });
+    // Aprende o status sem tocar no REST (leitura esporádica dentro do TTL).
+    await this.refreshStatus(false);
+  }
+  async refreshStatus(force: boolean) {
+    const now = Date.now();
+    if (!force && now - this.statusAt < PUSH_STATUS_TTL_MS) return this.status;
+    if (!this.tripId) {
+      try { this.tripId = await this.state.storage.get('tripId'); } catch {}
+    }
+    if (!this.tripId) return this.status;
+    const sql = neon(this.env.DATABASE_URL);
+    const rows = await sql`SELECT status, "pickupLat", "pickupLng", "dropoffLat", "dropoffLng" FROM trips WHERE id = ${this.tripId} LIMIT 1`;
+    this.statusAt = now;
+    if (!rows.length) return this.status;
+    const r: any = rows[0];
+    this.tripCache = r;
+    if (r.status && r.status !== this.status) {
+      this.status = r.status;
+      this.broadcast({ t: 'status', status: r.status });
+      const eta = this.etaMin();
+      if (eta != null) this.broadcast({ t: 'eta', min: eta });
+    }
+    return this.status;
+  }
+  etaMin(): number | null {
+    try {
+      if (!this.driver || !this.tripCache) return null;
+      const st = String(this.status || '');
+      const tLa = Number(st === 'IN_PROGRESS' ? this.tripCache.dropoffLat : this.tripCache.pickupLat);
+      const tLo = Number(st === 'IN_PROGRESS' ? this.tripCache.dropoffLng : this.tripCache.pickupLng);
+      if (!Number.isFinite(tLa) || !Number.isFinite(tLo)) return null;
+      const dk = havKm(this.driver.lat, this.driver.lng, tLa, tLo);
+      return Math.max(1, Math.ceil((dk / 30) * 60));
+    } catch { return null; }
+  }
+  broadcast(obj: any) {
+    let msg = '';
+    try { msg = JSON.stringify(obj); } catch { return; }
+    let socks: any[] = [];
+    try { socks = this.state.getWebSockets(); } catch { return; }
+    for (const s of socks) { try { s.send(msg); } catch {} }
   }
 }
 
