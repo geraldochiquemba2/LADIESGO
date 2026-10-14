@@ -8,7 +8,6 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.10.4",
     "hono": "^4.7.5"
   },
   "devDependencies": {

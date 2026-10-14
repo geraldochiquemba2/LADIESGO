@@ -5,8 +5,15 @@ compatibility_date = "2025-06-01"
 [vars]
 JWT_EXPIRES_IN = "7d"
 
+# D1 (SQLite) — substitui o Neon Postgres. Sem cartão, sem relógio de compute.
+[[d1_databases]]
+binding = "DB"
+database_name = "ladiesgo"
+database_id = "84893b8b-5661-4fbc-a6aa-810ffbc1ab38"
+migrations_dir = "migrations"
+
 [durable_objects]
-bindings = [{ name = "RINGER", class_name = "TripRinger" }, { name = "TRIPPUSH", class_name = "TripPush" }]
+bindings = [{ name = "RINGER", class_name = "TripRinger" }, { name = "TRIPPUSH", class_name = "TripPush" }, { name = "REQUESTSHUB", class_name = "RequestsHub" }, { name = "DRIVERGEO", class_name = "DriverGeo" }]
 
 [[migrations]]
 tag = "v1"
@@ -15,6 +22,14 @@ new_sqlite_classes = ["TripRinger"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["TripPush"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["RequestsHub"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["DriverGeo"]
 
 # Segredos (nunca commitar):
 # wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require

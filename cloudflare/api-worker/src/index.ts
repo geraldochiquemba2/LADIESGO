@@ -2,9 +2,9 @@
 // Sem Render. Contratos 1:1 com mobile/src/services/api.ts.
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { neon } from '@neondatabase/serverless';
+import { makeSql as neon, d1metrics, resetD1Metrics } from './db';
 
-type Env = { DATABASE_URL: string; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; DEBUG_KEY?: string };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -51,6 +51,32 @@ async function verifyJwt(token: string, secret: string): Promise<any> {
   return payload;
 }
 
+// ─── Passwords: PBKDF2-SHA256 via WebCrypto (substitui o bcrypt/pgcrypto do Neon) ───
+// Formato do hash: pbkdf2$<iteracoes>$<saltB64url>$<hashB64url>
+const PBKDF2_ITER = 100000;
+async function pbkdf2Bits(pw: string, salt: Uint8Array, iter: number): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, key, 256);
+  return new Uint8Array(bits);
+}
+async function hashPassword(pw: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const bits = await pbkdf2Bits(pw, salt, PBKDF2_ITER);
+  return `pbkdf2$${PBKDF2_ITER}$${b64url(salt)}$${b64url(bits)}`;
+}
+async function verifyPassword(pw: string, stored: any): Promise<boolean> {
+  const parts = String(stored || '').split('$');
+  if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
+  const iter = parseInt(parts[1], 10);
+  if (!Number.isFinite(iter) || iter < 1000) return false;
+  const want = unb64url(parts[3]);
+  const got = await pbkdf2Bits(pw, unb64url(parts[2]), iter);
+  if (got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= got[i] ^ want[i];
+  return diff === 0;
+}
+
 function withoutHash(u: any) {
   if (!u) return u;
   const { passwordHash, passwordhash, ...safe } = u;
@@ -71,8 +97,6 @@ const BASE_FARE = 5, PER_KM = 2.5;
 const RIDE_MULT: Record<string, number> = { ECONOMY: 1.0, COMFORT: 1.35, PREMIUM: 1.7 };
 // Categorias geridas no painel admin (nome/cor/mult editáveis; code estável).
 async function getCategories(sql: any) {
-  await sql`CREATE TABLE IF NOT EXISTS ride_categories (code TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#61188E', mult NUMERIC NOT NULL DEFAULT 1, sort INT NOT NULL DEFAULT 0)`;
-  await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES ('ECONOMY','Económico','#61188E',1.0,1),('COMFORT','Conforto','#ff5fc8',1.4,2),('PREMIUM','Família','#5b21c9',1.65,3) ON CONFLICT (code) DO NOTHING`;
   const rows = await sql`SELECT code, name, color, mult FROM ride_categories ORDER BY sort, code`;
   return rows.map((r: any) => ({ code: r.code, name: r.name, color: r.color, mult: Number(r.mult) }));
 }
@@ -113,9 +137,30 @@ app.get('/ping', (c) => c.json({ ok: true, ts: Date.now(), worker: true }));
 app.get('/api/v1/health', (c) => c.json({ ok: true, ts: Date.now() }));
 app.get('/api', (c) => c.json({ name: 'LadiesGo! API', status: 'online', runtime: 'cloudflare-workers' }));
 
+// ─── debug: métricas D1 (só ativo se DEBUG_KEY estiver definido) ───
+const geoMetrics: any = { calls: 0, sets: 0, gets: 0, alls: 0, dels: 0 };
+function resetGeoMetrics(): void { geoMetrics.calls = 0; geoMetrics.sets = 0; geoMetrics.gets = 0; geoMetrics.alls = 0; geoMetrics.dels = 0; }
+app.get('/debug/d1', (c) => {
+  const key = c.env.DEBUG_KEY as string | undefined;
+  if (!key || c.req.query('key') !== key) return c.json({ message: 'Not found.' }, 404);
+  return c.json({ ...d1metrics, rowsPerQuery: d1metrics.queries ? +(d1metrics.rowsRead / d1metrics.queries).toFixed(2) : 0, geo: { ...geoMetrics } });
+});
+app.post('/debug/d1/reset', (c) => {
+  const key = c.env.DEBUG_KEY as string | undefined;
+  if (!key || c.req.query('key') !== key) return c.json({ message: 'Not found.' }, 404);
+  resetD1Metrics();
+  resetGeoMetrics();
+  return c.json({ ok: true });
+});
+app.get('/debug/geo', (c) => {
+  const key = c.env.DEBUG_KEY as string | undefined;
+  if (!key || c.req.query('key') !== key) return c.json({ message: 'Not found.' }, 404);
+  return c.json({ ...geoMetrics });
+});
+
 // ─── AUTH ───
 app.post('/api/v1/auth/guest', async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const body = await c.req.json().catch(() => ({}));
   const phone = `+guest${[...crypto.getRandomValues(new Uint8Array(6))].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
   const rows = await sql`INSERT INTO users (id, phone, role, "isVerified", name, "createdAt", "updatedAt") VALUES (gen_random_uuid()::text, ${phone}, 'PASSENGER', true, ${String(body?.name || 'Guest').slice(0, 60)}, NOW(), NOW()) RETURNING id, phone, name, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
@@ -124,7 +169,7 @@ app.post('/api/v1/auth/guest', async (c) => {
   return c.json({ user: withoutHash(user), accessToken });
 });
 
-// LOGIN: verificação bcrypt feita no Neon (pgcrypto) — Workers não tem CPU para bcrypt.
+// LOGIN: verificação PBKDF2 (WebCrypto) no worker — mesmo modelo do Neon (hash na BD).
 // Acesso mestre de demonstração: 999999999 / 1234567890 entra como ADMIN sem tocar na BD.
 app.post('/api/v1/auth/login', async (c) => {
   const { phone, password } = await c.req.json().catch(() => ({}));
@@ -137,17 +182,17 @@ app.post('/api/v1/auth/login', async (c) => {
     const accessToken = await signJwt({ sub: admin.id, phone: admin.phone, role: admin.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
     return c.json({ user: admin, accessToken, isNew: false });
   }
-  const sql = neon(c.env.DATABASE_URL);
-  const rows = await sql`SELECT id, phone, "passwordHash", name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = ${cleanPhone} AND "passwordHash" = crypt(${String(password)}, "passwordHash") AND "isActive" = true LIMIT 1`;
-  if (!rows.length) return c.json({ message: 'Número ou senha incorretos' }, 401);
+  const sql = neon(c.env.DB);
+  const rows = await sql`SELECT id, phone, "passwordHash", name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = ${cleanPhone} AND "isActive" = true LIMIT 1`;
+  if (!rows.length || !(await verifyPassword(String(password), rows[0].passwordHash))) return c.json({ message: 'Número ou senha incorretos' }, 401);
   const user = rows[0];
   const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: user.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
   return c.json({ user: withoutHash(user), accessToken, isNew: false });
 });
 
-// REGISTER: cria conta com número + senha (bcrypt via pgcrypto no Neon).
+// REGISTER: cria conta com número + senha (PBKDF2 via WebCrypto no worker).
 app.post('/api/v1/auth/register', async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { phone, password, name, role } = await c.req.json().catch(() => ({}));
   const cleanPhone = String(phone || '').trim();
   if (!cleanPhone || !password || String(password).length < 4)
@@ -155,7 +200,7 @@ app.post('/api/v1/auth/register', async (c) => {
   const finalRole = String(role || 'PASSENGER').toUpperCase() === 'DRIVER' ? 'DRIVER' : 'PASSENGER';
   const exists = await sql`SELECT id FROM users WHERE phone = ${cleanPhone} LIMIT 1`;
   if (exists.length) return c.json({ message: 'Número já registado. Entra com a tua senha.' }, 409);
-  const rows = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, crypt(${String(password)}, gen_salt('bf', 10)), ${String(name || '').slice(0, 60) || null}, ${finalRole}, true, NOW()) RETURNING id, phone, name, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
+  const rows = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, ${await hashPassword(String(password))}, ${String(name || '').slice(0, 60) || null}, ${finalRole}, true, NOW()) RETURNING id, phone, name, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
   const user = rows[0];
   const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: user.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
   return c.json({ user: withoutHash(user), accessToken, isNew: true });
@@ -167,7 +212,7 @@ app.post('/api/v1/auth/refresh-token', async (c) => {
   if (!token) return c.json({ message: 'Não autenticado.' }, 401);
   try {
     const p = await verifyJwt(token, c.env.JWT_SECRET);
-    const sql = neon(c.env.DATABASE_URL);
+    const sql = neon(c.env.DB);
     const rows = await sql`SELECT id, phone, role FROM users WHERE id = ${p.sub} LIMIT 1`;
     if (!rows.length) return c.json({ message: 'Não autenticado.' }, 401);
     const accessToken = await signJwt({ sub: rows[0].id, phone: rows[0].phone, role: rows[0].role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
@@ -178,24 +223,24 @@ app.post('/api/v1/auth/refresh-token', async (c) => {
 });
 
 app.post('/api/v1/auth/change-password', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { newPassword } = await c.req.json().catch(() => ({}));
   if (!newPassword || String(newPassword).length < 4) return c.json({ message: 'A senha deve ter pelo menos 4 caracteres' }, 400);
-  await sql`UPDATE users SET "passwordHash" = crypt(${String(newPassword)}, gen_salt('bf', 10)), "mustChangePassword" = false, "updatedAt" = NOW() WHERE id = ${user.sub}`;
+  await sql`UPDATE users SET "passwordHash" = ${await hashPassword(String(newPassword))}, "mustChangePassword" = false, "updatedAt" = NOW() WHERE id = ${user.sub}`;
   return c.json({ success: true });
 });
 
 // ─── USERS ───
 app.get('/api/v1/users/profile', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance" FROM users WHERE id = ${user.sub} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Não encontrado.' }, 404);
   return c.json(rows[0]);
 });
 app.put('/api/v1/users/profile', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));
   // Token único por aparelho: limpa-o das outras contas (senão o próprio recebe os pushes).
@@ -207,21 +252,21 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
 });
 // DELETE /api/v1/users/push-token — Logout: este aparelho deixa de receber pushes + motorista fica offline
 app.delete('/api/v1/users/push-token', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   await sql`UPDATE users SET "fcmToken" = NULL, "updatedAt" = NOW() WHERE id = ${user.sub}`;
   await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${user.sub}`;
   return c.json({ ok: true });
 });
 app.get('/api/v1/users/trips/history', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const page = Math.max(1, Number(c.req.query('page') || 1));
   const rows = await sql`SELECT id, "dropoffAddress", "fareEstimate", status, "createdAt" FROM trips WHERE "passengerId" = ${user.sub} ORDER BY "createdAt" DESC LIMIT 20 OFFSET ${(page - 1) * 20}`;
   return c.json({ trips: rows });
 });
 app.delete('/api/v1/users/me', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   await sql`UPDATE users SET "isActive" = false, "updatedAt" = NOW() WHERE id = ${user.sub}`;
   return c.json({ success: true });
@@ -230,14 +275,14 @@ app.post('/api/v1/users/report', requireAuth, async (c) => c.json({ success: tru
 
 // ─── DRIVERS ───
 app.get('/api/v1/drivers/status', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const rows = await sql`SELECT d.*, u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."userId" = ${user.sub} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
   return c.json({ ...rows[0], isOnline: !!rows[0].isOnline, totalEarnings: Number(rows[0].totalEarnings || 0) });
 });
 app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { isOnline } = await c.req.json().catch(() => ({}));
   const rows = await sql`UPDATE drivers SET "isOnline" = ${!!isOnline}, "updatedAt" = NOW() WHERE "userId" = ${user.sub} RETURNING "isOnline"`;
@@ -245,33 +290,41 @@ app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
   return c.json({ isOnline: !!rows[0].isOnline });
 });
 // GPS adaptativo do mobile (5s viagem / 10s idle) escreve aqui. Sem socket.
+// A posição vai para o DO DriverGeo (memória) — 0 escritas D1 por ping.
 app.put('/api/v1/drivers/location', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
   const user = c.get('user');
   const { lat, lng } = await c.req.json().catch(() => ({}));
-  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return c.json({ message: 'Posição inválida.' }, 400);
-  await sql`UPDATE drivers SET "currentLat" = ${Number(lat)}, "currentLng" = ${Number(lng)}, "updatedAt" = NOW() WHERE "userId" = ${user.sub}`;
+  const la = Number(lat), lo = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
+  await geoSet(c.env, { userId: user.sub, lat: la, lng: lo });
   return c.json({ ok: true });
 });
 app.get('/api/v1/drivers/nearby', async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const lat = Number(c.req.query('lat')), lng = Number(c.req.query('lng'));
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ message: 'Pedido inválido.' }, 400);
-    try { await sql`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cats JSONB`; } catch {}
+  const pos = await geoAll(c.env);
+  const byUser = new Map<string, any>();
+  for (const p of pos) if (p && p.userId) byUser.set(String(p.userId), p);
   let rows: any[];
   try {
-    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL AND d.cats IS NOT NULL AND d.cats::text NOT IN ('null', '[]') LIMIT 100`;
+    rows = await sql`SELECT d.id, d."userId", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' LIMIT 100`;
   } catch {
-    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL LIMIT 100`;
+    rows = await sql`SELECT d.id, d."userId", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' LIMIT 100`;
   }
   const out = rows
-    .map((d: any) => ({ id: d.id, currentLat: Number(d.currentLat), currentLng: Number(d.currentLng), lat: Number(d.currentLat), lng: Number(d.currentLng), name: d.name, cats: Array.isArray(d.cats) ? d.cats.map((x: any) => String(x)) : undefined, distanceKm: Math.round(havKm(lat, lng, Number(d.currentLat), Number(d.currentLng)) * 10) / 10 }))
+    .map((d: any) => {
+      const p = byUser.get(String(d.userId));
+      if (!p || !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng))) return null;
+      return { id: d.id, currentLat: Number(p.lat), currentLng: Number(p.lng), lat: Number(p.lat), lng: Number(p.lng), name: d.name, cats: Array.isArray(d.cats) ? d.cats.map((x: any) => String(x)) : undefined, distanceKm: Math.round(havKm(lat, lng, Number(p.lat), Number(p.lng)) * 10) / 10 };
+    })
+    .filter(Boolean)
     .sort((a: any, b: any) => a.distanceKm - b.distanceKm)
     .slice(0, 20);
   return c.json({ drivers: out });
 });
 app.get('/api/v1/drivers/earnings', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const d = await sql`SELECT id, "totalEarnings", "totalTrips" FROM drivers WHERE "userId" = ${user.sub} LIMIT 1`;
   return c.json({ totalEarnings: Number(d[0]?.totalEarnings || 0), totalTrips: Number(d[0]?.totalTrips || 0), trips: [] });
@@ -279,7 +332,7 @@ app.get('/api/v1/drivers/earnings', requireAuth, async (c) => {
 app.post('/api/v1/drivers/register', requireAuth, async (c) => c.json({ message: 'Registo via painel admin.' }, 400));
 // PUT /api/v1/drivers/vehicle — Guardar/atualizar viatura da motorista
 app.put('/api/v1/drivers/vehicle', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   if (user.role !== 'ADMIN') return c.json({ message: 'Só o admin edita viaturas.' }, 403);
   const b = await c.req.json().catch(() => ({}));
@@ -308,7 +361,7 @@ app.put('/api/v1/drivers/vehicle', requireAuth, async (c) => {
 });
 // PUT /api/v1/admin/drivers/:id — Admin edita nome + viatura + documentos
 app.put('/api/v1/admin/drivers/:id', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const id = c.req.param('id');
   const b = await c.req.json().catch(() => ({}));
   const cur = await sql`SELECT d.*, u.name AS uname FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${id} LIMIT 1`;
@@ -340,13 +393,13 @@ app.put('/api/v1/admin/drivers/:id', adminMiddleware, async (c) => {
 });
 // GET /api/v1/ratings/pending — Viagens concluídas por avaliar (minhas)
 app.get('/api/v1/ratings/pending', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   try {
     const did = await driverIdFor(sql, user.sub);
     const rows = did
-      ? await sql`SELECT t.id AS "tripId" FROM trips t LEFT JOIN ratings r ON r."tripId" = t.id AND r."raterId" = ${user.sub} WHERE t.status = 'COMPLETED' AND (t."passengerId" = ${user.sub} OR t."driverId" = ${did}) AND r.id IS NULL ORDER BY t."completedAt" DESC NULLS LAST, t."createdAt" DESC LIMIT 5`
-      : await sql`SELECT t.id AS "tripId" FROM trips t LEFT JOIN ratings r ON r."tripId" = t.id AND r."raterId" = ${user.sub} WHERE t.status = 'COMPLETED' AND t."passengerId" = ${user.sub} AND r.id IS NULL ORDER BY t."completedAt" DESC NULLS LAST, t."createdAt" DESC LIMIT 5`;
+      ? await sql`SELECT t.id AS "tripId" FROM trips t LEFT JOIN ratings r ON r.id = t.id || ':' || ${user.sub} WHERE t.status = 'COMPLETED' AND (t."passengerId" = ${user.sub} OR t."driverId" = ${did}) AND r.id IS NULL ORDER BY t."completedAt" DESC NULLS LAST, t."createdAt" DESC LIMIT 5`
+      : await sql`SELECT t.id AS "tripId" FROM trips t LEFT JOIN ratings r ON r.id = t.id || ':' || ${user.sub} WHERE t.status = 'COMPLETED' AND t."passengerId" = ${user.sub} AND r.id IS NULL ORDER BY t."completedAt" DESC NULLS LAST, t."createdAt" DESC LIMIT 5`;
     return c.json({ pendings: rows.map((x: any) => ({ tripId: x.tripId })) });
   } catch (e) {
     return c.json({ pendings: [] });
@@ -355,7 +408,7 @@ app.get('/api/v1/ratings/pending', requireAuth, async (c) => {
 
 // GET /api/v1/ratings/mine — avaliações recebidas (a motorista vê as suas no perfil)
 app.get('/api/v1/ratings/mine', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   try {
     const did = await driverIdFor(sql, user.sub);
@@ -371,22 +424,27 @@ app.get('/api/v1/ratings/mine', requireAuth, async (c) => {
 });
 // Presença da motorista (a home chama sem token: identifica pelo id do user).
 app.post('/api/v1/drivers/position', async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const b = await c.req.json().catch(() => ({}));
   const userId = String(b.id || '');
   if (!userId) return c.json({ message: 'Motorista inválida.' }, 400);
   if (b.offline) {
+    await geoDel(c.env, userId);
     await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
     return c.json({ ok: true });
   }
   const la = Number(b.lat), lo = Number(b.lng);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
-  try { await sql`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cats JSONB`; } catch {}
   const cats = Array.isArray(b.cats) ? b.cats.map((x: any) => String(x).slice(0, 30)).slice(0, 6) : null;
-  const rows = await sql`
-    UPDATE drivers SET "isOnline" = true, "currentLat" = ${la}, "currentLng" = ${lo}, "updatedAt" = NOW(), cats = COALESCE(${cats ? JSON.stringify(cats) : null}::jsonb, cats)
-    WHERE "userId" = ${userId} RETURNING id`;
-  if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
+  // Posição em memória no DO (0 escritas D1/ping). Só toca na D1 na transição
+  // offline→online (1 escrita por sessão, não por ping).
+  const wasOnline = await geoSet(c.env, { userId, lat: la, lng: lo, cats, online: true });
+  if (!wasOnline) {
+    const rows = await sql`
+      UPDATE drivers SET "isOnline" = true, cats = COALESCE(${cats ? JSON.stringify(cats) : null}::jsonb, cats), "updatedAt" = NOW()
+      WHERE "userId" = ${userId} RETURNING id`;
+    if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
+  }
   return c.json({ ok: true });
 });
 
@@ -396,44 +454,39 @@ app.post('/api/v1/trips/estimate', requireAuth, async (c) => {
   const dist = havKm(Number(body.pickupLat), Number(body.pickupLng), Number(body.dropoffLat), Number(body.dropoffLng));
   const base = BASE_FARE + dist * PER_KM;
   const surge = surgeNow();
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { mults } = await catMaps(sql);
   const mult = mults[String(body.rideType || 'ECONOMY')] ?? 1.0;
   const options = Object.keys(mults).map((type) => ({ type, fare: Math.round(base * surge * mults[type] * 100) / 100 }));
   return c.json({ distanceKm: Math.round(dist * 10) / 10, estimatedFare: Math.round(base * surge * mult * 100) / 100, currency: 'Kz', surgeMultiplier: surge, surgeActive: surge > 1, options });
 });
 app.post('/api/v1/trips/request', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
   const active = await sql`SELECT id, status FROM trips WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') ORDER BY "createdAt" DESC LIMIT 1`;
   if (active.length && active[0].status !== 'REQUESTED') return c.json({ message: 'You already have an active trip. Complete or cancel it first.' }, 400);
   if (active.length) await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = 'Replaced by new booking' WHERE id = ${active[0].id}`;
   const dist = havKm(Number(b.pickupLat), Number(b.pickupLng), Number(b.dropoffLat), Number(b.dropoffLng));
-  const { mults } = await catMaps(sql);
+  const { mults, byCode } = await catMaps(sql);
   const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (mults[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
-  const rows = await sql`INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt") VALUES (gen_random_uuid()::text, ${user.sub}, ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)}, ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)}, 'REQUESTED', ${String(b.rideType || 'ECONOMY')}, ${fare}, ${Math.round(dist * 10) / 10}, ${String(b.paymentMethod || 'CASH')}, NOW(), NOW()) RETURNING *`;
   // Oferta sequencial por proximidade (15s cada); sem candidatas abre a todas.
-  try {
-    await ensureOfferColumns(sql);
-    const q = await buildOfferQueue(sql, Number(b.pickupLat), Number(b.pickupLng), String(b.rideType || 'ECONOMY'));
-    if (q.length) {
-      const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
-      await sql`UPDATE trips SET "offerQueue" = ${JSON.stringify(q)}::jsonb, "offerIdx" = 0, "offeredDriverId" = ${q[0]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerBroadcast" = FALSE, "offerSkipped" = '[]'::jsonb WHERE id = ${rows[0].id}`;
-    } else {
-      await sql`UPDATE trips SET "offerBroadcast" = TRUE WHERE id = ${rows[0].id}`;
-    }
-  } catch {}
+  // Calculada ANTES do INSERT para não haver um UPDATE a mais por viagem.
+  let q: string[] = [];
+  try { q = await buildOfferQueue(c.env, sql, Number(b.pickupLat), Number(b.pickupLng), String(b.rideType || 'ECONOMY')); } catch {}
+  const hasQ = q.length > 0;
+  const expAt = hasQ ? new Date(Date.now() + OFFER_TTL_SEC * 1000) : null;
+  const rows = await sql`INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt", "offerQueue", "offerIdx", "offeredDriverId", "offeredAt", "offerExpiresAt", "offerBroadcast", "offerSkipped") VALUES (gen_random_uuid()::text, ${user.sub}, ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)}, ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)}, 'REQUESTED', ${String(b.rideType || 'ECONOMY')}, ${fare}, ${Math.round(dist * 10) / 10}, ${String(b.paymentMethod || 'CASH')}, NOW(), NOW(), ${hasQ ? JSON.stringify(q) : null}, 0, ${hasQ ? q[0] : null}, ${hasQ ? new Date().toISOString() : null}, ${expAt ? expAt.toISOString() : null}, ${hasQ ? 0 : 1}, ${hasQ ? '[]' : null}) RETURNING *`;
+  hubPoke(c, [byCode[String(b.rideType || 'ECONOMY')] || '']);
   return c.json(rows[0]);
 });
 // GET /api/v1/trips/incoming — Pedidos pendentes para a motorista (web)
 // (Registado antes de /:id: o Hono serve o primeiro registo em caso de colisão.)
 app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const qDriver = String(c.req.query('driverId') || '');
   try {
-    await ensureOfferColumns(sql);
     const did = await driverIdFor(sql, qDriver || user.sub);
     if (!did) return c.json({ trips: [] });
     const { byCode } = await catMaps(sql);
@@ -482,9 +535,68 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
   }
 });
 
+// GET /api/v1/trips/requests-live → upgrade WS para o RequestsHub (motorista).
+// (Registado antes de /:id.) O hub só faz "poke"; o cliente busca /trips/incoming.
+app.get('/api/v1/trips/requests-live', async (c) => {
+  let user: any = null;
+  try {
+    const ah = c.req.header('Authorization') || '';
+    let tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+    if (!tok) tok = String(c.req.query('token') || '');
+    if (tok) user = await verifyJwt(tok, (c.env as any).JWT_SECRET);
+  } catch {}
+  if (!user?.sub) return c.json({ message: 'Não autenticado.' }, 401);
+  if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
+    return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.', usage: '/api/v1/trips/requests-live' }, 426);
+  const sql = neon(c.env.DB);
+  const did = await driverIdFor(sql, user.sub);
+  if (!did) return c.json({ message: 'Só motoristas.' }, 403);
+  let cats: string[] = [];
+  try { const dr = await sql`SELECT cats FROM drivers WHERE id = ${did} LIMIT 1`; if (dr.length && Array.isArray(dr[0].cats)) cats = dr[0].cats.map((x: any) => String(x)); } catch {}
+  const ns: any = (c.env as any).REQUESTSHUB;
+  if (!ns || !ns.get) return c.json({ message: 'Feed em tempo real indisponível.' }, 503);
+  const stub = ns.get(ns.idFromName('requests:global'));
+  const fwd = new Headers();
+  for (const h of ['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']) {
+    const v = c.req.header(h);
+    if (v) fwd.set(h, v);
+  }
+  fwd.set('X-User-Id', String(user.sub || ''));
+  fwd.set('X-Driver-Id', did);
+  fwd.set('X-Cats', JSON.stringify(cats));
+  return stub.fetch(new Request('https://requests-hub/live', { method: 'GET', headers: fwd }));
+});
+
+// GET /api/v1/drivers/live-geo → upgrade WS para o DO DriverGeo (GPS por
+// mensagem, sem pedido HTTP por ping). A motorista envia {lat,lng,cats} ou
+// {offline:true}; o DO atualiza o mapa em memória. Mensagens WS não contam
+// como pedidos → elimina o limite de pedidos por ping.
+app.get('/api/v1/drivers/live-geo', async (c) => {
+  let user: any = null;
+  try {
+    const ah = c.req.header('Authorization') || '';
+    let tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+    if (!tok) tok = String(c.req.query('token') || '');
+    if (tok) user = await verifyJwt(tok, (c.env as any).JWT_SECRET);
+  } catch {}
+  if (!user?.sub) return c.json({ message: 'Não autenticado.' }, 401);
+  if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
+    return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.' }, 426);
+  const ns: any = (c.env as any).DRIVERGEO;
+  if (!ns || !ns.get) return c.json({ message: 'GPS ao vivo indisponível.' }, 503);
+  const stub = ns.get(ns.idFromName('geo:global'));
+  const fwd = new Headers();
+  for (const h of ['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']) {
+    const v = c.req.header(h);
+    if (v) fwd.set(h, v);
+  }
+  fwd.set('X-User-Id', String(user.sub || ''));
+  return stub.fetch(new Request('https://geo/live', { method: 'GET', headers: fwd }));
+});
+
 // GET /api/v1/trips/history — Histórico (web)
 app.get('/api/v1/trips/history', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const p = String(c.req.query('passengerId') || '').slice(0, 64);
   const d = String(c.req.query('driverId') || '').slice(0, 64);
   try {
@@ -515,7 +627,7 @@ app.get('/api/v1/trips/history', requireAuth, async (c) => {
   }
 });
 app.get('/api/v1/trips/active', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const rows = await sql`SELECT t.* FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND (t."passengerId" = ${user.sub} OR d."userId" = ${user.sub}) ORDER BY t."createdAt" DESC LIMIT 1`;
   return c.json(rows[0] || null);
@@ -525,10 +637,10 @@ app.get('/api/v1/trips/active', requireAuth, async (c) => {
 // Auth + verificação de participante como nas rotas /call e /chat.
 // (Registado antes de /:id: o Hono serve o primeiro registo em caso de colisão.)
 // Hook best-effort REST → DO para as transições chamarem sem bloquear a
-// resposta. BASE: ainda NÃO ligado nas transições para não mexer no REST —
-// o DO aprende o status por leitura Neon esporádica (≤1/15s por viagem ativa)
-// e em {"t":"state"}. Quando ligares, chama notifyTripPush(env, id, status)
-// após cada UPDATE de accept/arrived/start/complete/cancel.
+// resposta. LIGADO: pushStatus() é chamado após cada UPDATE de
+// accept/arrived/start/complete/cancel e na rota web /status. O DO também
+// aprende o status por leitura Neon esporádica (≤1/15s por viagem ativa)
+// e em {"t":"state"}, como rede de segurança.
 async function notifyTripPush(env: any, tripId: string, status: string) {
   try {
     const ns: any = (env as any).TRIPPUSH;
@@ -536,6 +648,66 @@ async function notifyTripPush(env: any, tripId: string, status: string) {
     const stub = ns.get(ns.idFromName(`trip:${tripId}`));
     await stub.fetch(new Request('https://trip-push/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }));
   } catch {}
+}
+// Dispara o aviso ao DO sem bloquear a resposta (best-effort).
+function pushStatus(c: any, tripId: string, status: string) {
+  try { c.executionCtx.waitUntil(notifyTripPush(c.env, tripId, status)); }
+  catch { notifyTripPush(c.env, tripId, status); }
+}
+// ─── RequestsHub: feed de pedidos por WebSocket-hibernação (server push) ───
+// Substitui o polling REST /trips/incoming da motorista online: 1 ligação WS
+// por motorista (hibernável = sem custo de duração) e o servidor faz "poke"
+// quando há novidade; a motorista faz 1 fetch pontual em vez de poll contínuo.
+async function hubBroadcast(env: any, cats?: string[]) {
+  try {
+    const ns: any = (env as any).REQUESTSHUB;
+    if (!ns || !ns.get) return;
+    const stub = ns.get(ns.idFromName('requests:global'));
+    await stub.fetch(new Request('https://requests-hub/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cats: cats && cats.length ? cats : null }) }));
+  } catch {}
+}
+function hubPoke(c: any, cats?: string[]) {
+  try { c.executionCtx.waitUntil(hubBroadcast(c.env, cats)); }
+  catch { hubBroadcast(c.env, cats); }
+}
+// ─── DriverGeo: posições GPS vivas em memória (substitui Redis GEO) ───
+// 1 DO global guarda { userId → { driverId, lat, lng, cats, ts, online } }.
+// As escritas de GPS deixam de tocar na D1 (0 escritas/ping); a D1 fica só
+// com o registo autoritativo da viagem. Frescura lógica de 5min na leitura.
+const GEO_TTL_MS = 5 * 60 * 1000;
+function geoStub(env: any): any {
+  try { const ns: any = (env as any).DRIVERGEO; return ns && ns.get ? ns.get(ns.idFromName('geo:global')) : null; } catch { return null; }
+}
+function geoFetch(env: any, path: string, init?: any): Promise<any> {
+  const s = geoStub(env);
+  if (!s) return Promise.resolve(null);
+  geoMetrics.calls++;
+  return s.fetch(new Request('https://geo' + path, init)).catch(() => null);
+}
+// Guarda posição; devolve se a motorista já estava online no DO (para só
+// escrever isOnline na D1 na transição offline→online).
+async function geoSet(env: any, data: { userId: string; driverId?: string; lat: number; lng: number; cats?: string[] | null; online?: boolean }): Promise<boolean> {
+  geoMetrics.sets++;
+  const r = await geoFetch(env, '/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  if (!r) return false;
+  try { return !!(await r.json()).wasOnline; } catch { return false; }
+}
+async function geoDel(env: any, userId: string) {
+  geoMetrics.dels++;
+  await geoFetch(env, '/del', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) });
+}
+async function geoGet(env: any, userId: string): Promise<any | null> {
+  if (!userId) return null;
+  geoMetrics.gets++;
+  const r = await geoFetch(env, '/get?userId=' + encodeURIComponent(userId));
+  if (!r) return null;
+  try { const d = (await r.json()).driver; return d && Date.now() - Number(d.ts || 0) <= GEO_TTL_MS ? d : null; } catch { return null; }
+}
+async function geoAll(env: any): Promise<any[]> {
+  geoMetrics.alls++;
+  const r = await geoFetch(env, '/all');
+  if (!r) return [];
+  try { const arr = (await r.json()).drivers; const now = Date.now(); return Array.isArray(arr) ? arr.filter((d: any) => now - Number(d.ts || 0) <= GEO_TTL_MS) : []; } catch { return []; }
 }
 app.get('/api/v1/trips/:id/live', async (c) => {
   const id = c.req.param('id');
@@ -549,7 +721,7 @@ app.get('/api/v1/trips/:id/live', async (c) => {
   if (!user?.sub) return c.json({ message: 'Não autenticado.' }, 401);
   if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
     return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.', usage: `/api/v1/trips/${id}/live` }, 426);
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const t = await sql`SELECT t."passengerId", d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${id} LIMIT 1`;
   if (!t.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   const isDriver = !!t[0].driverUserId && t[0].driverUserId === user.sub;
@@ -569,26 +741,29 @@ app.get('/api/v1/trips/:id/live', async (c) => {
   return stub.fetch(new Request(`https://trip-push/${id}`, { method: 'GET', headers: fwd }));
 });
 app.get('/api/v1/trips/:id', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   const rows = await sql`SELECT t.*, d."currentLat" AS "driverLat", d."currentLng" AS "driverLng", d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${id} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   const t = rows[0];
   if (c.req.query('view') === 'web') {
-    const drv = await webDriverInfo(sql, t.driverId);
+    const drv = await webDriverInfo(c.env, sql, t.driverId);
     const pu = await sql`SELECT name, phone FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
     return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
   }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
+  const liveD = t.driverUserId ? await geoGet(c.env, String(t.driverUserId)) : null;
+  const dLat = liveD && Number.isFinite(Number(liveD.lat)) ? Number(liveD.lat) : (t.driverLat != null ? Number(t.driverLat) : null);
+  const dLng = liveD && Number.isFinite(Number(liveD.lng)) ? Number(liveD.lng) : (t.driverLng != null ? Number(t.driverLng) : null);
   let driver = null;
-  if (t.driverLat != null && t.driverLng != null) {
+  if (dLat != null && dLng != null) {
     const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
     const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
-    const dk = havKm(Number(t.driverLat), Number(t.driverLng), targetLa, targetLo);
-    driver = { lat: Number(t.driverLat), lng: Number(t.driverLng), distanceKm: Math.round(dk * 10) / 10, etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)) };
+    const dk = havKm(dLat, dLng, targetLa, targetLo);
+    driver = { lat: dLat, lng: dLng, distanceKm: Math.round(dk * 10) / 10, etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)) };
   }
   const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
   return c.json({ ...t, driver, ...(pin ? { pin } : {}) });
@@ -598,7 +773,7 @@ async function driverIdFor(sql: any, userId: string) {
   return r[0]?.id as string | undefined;
 }
 app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   const did = await driverIdFor(sql, user.sub);
@@ -607,7 +782,6 @@ app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
   if (!cur.length || cur[0].status !== 'REQUESTED') return c.json({ message: 'Viagem indisponível.' }, 400);
   // Oferta sequencial: só a motorista ofertada (ou qualquer uma em broadcast).
   try {
-    await ensureOfferColumns(sql);
     let t: any = cur[0];
     if (!t.offerBroadcast && (offerQueueOf(t).length || t.offeredDriverId)) {
       t = await advanceOfferIfNeeded(sql, t);
@@ -618,17 +792,18 @@ app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
   } catch {}
   const rows = await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'REQUESTED' RETURNING *`;
   if (!rows.length) return c.json({ message: 'Viagem indisponível.' }, 400);
+  pushStatus(c, id, 'ACCEPTED');
+  hubPoke(c);
   return c.json(rows[0]);
 });
 // POST /api/v1/trips/:id/skip — Motorista rejeita/passa a oferta à seguinte
 app.post('/api/v1/trips/:id/skip', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   const did = await driverIdFor(sql, user.sub);
   if (!did) return c.json({ message: 'Só motoristas.' }, 403);
   try {
-    await ensureOfferColumns(sql);
     const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
     if (!cur.length || cur[0].status !== 'REQUESTED') return c.json({ ok: true });
     const t: any = cur[0];
@@ -660,6 +835,7 @@ app.post('/api/v1/trips/:id/skip', requireAuth, async (c) => {
     } else {
       await sql`UPDATE trips SET "offerSkipped" = ${JSON.stringify(skipped)}::jsonb, "updatedAt" = NOW() WHERE id = ${id}`;
     }
+    hubPoke(c);
     return c.json({ ok: true });
   } catch (e) {
     console.error('skip error:', e);
@@ -667,48 +843,51 @@ app.post('/api/v1/trips/:id/skip', requireAuth, async (c) => {
   }
 });
 app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const rows = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status = 'ACCEPTED' RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
+  pushStatus(c, c.req.param('id'), 'DRIVER_ARRIVED');
   return c.json(rows[0]);
 });
 app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { pin } = await c.req.json().catch(() => ({}));
   const id = c.req.param('id');
   const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
   if (!cur.length || cur[0].status !== 'DRIVER_ARRIVED') return c.json({ message: 'Transição inválida.' }, 400);
   if (String(pin || '') !== pinForTrip(id)) return c.json({ message: 'Código incorreto.' }, 400);
   const rows = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
+  pushStatus(c, id, 'IN_PROGRESS');
   return c.json(rows[0]);
 });
 app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const id = c.req.param('id');
   const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
   if (!cur.length || cur[0].status !== 'IN_PROGRESS') return c.json({ message: 'Transição inválida.' }, 400);
   const t = cur[0];
   const rows = await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
   if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
+  pushStatus(c, id, 'COMPLETED');
   return c.json(rows[0]);
 });
 app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { reason } = await c.req.json().catch(() => ({}));
   const rows = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = ${String(reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
+  pushStatus(c, c.req.param('id'), 'CANCELLED');
+  hubPoke(c);
   return c.json(rows[0]);
 });
 
 // ─── RATINGS / NOTIFS / PAYMENTS (stubs compatíveis) ───
 app.post('/api/v1/ratings', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
   try {
-    await sql`CREATE TABLE IF NOT EXISTS ratings (id TEXT PRIMARY KEY, "tripId" TEXT NOT NULL, "raterId" TEXT NOT NULL, "ratedId" TEXT NOT NULL DEFAULT '', score INT NOT NULL DEFAULT 5, comment TEXT NOT NULL DEFAULT '', "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
-    await sql`CREATE UNIQUE INDEX IF NOT EXISTS ratings_trip_rater ON ratings("tripId", "raterId")`;
     let rated = String((b as any).ratedId || (b as any).driverId || '');
     try {
       const tr = await sql`SELECT "passengerId", "driverId" FROM trips WHERE id = ${String((b as any).tripId)} LIMIT 1`;
@@ -719,7 +898,7 @@ app.post('/api/v1/ratings', requireAuth, async (c) => {
         } else if (tr[0].passengerId) rated = tr[0].passengerId;
       }
     } catch {}
-    await sql`INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt") VALUES (${crypto.randomUUID()}, ${String((b as any).tripId)}, ${user.sub}, ${rated}, ${Number((b as any).score || 5)}, ${String((b as any).comment || '').slice(0, 500)}, NOW()) ON CONFLICT ("tripId", "raterId") DO NOTHING`;
+    await sql`INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt") VALUES (${String((b as any).tripId) + ':' + user.sub}, ${String((b as any).tripId)}, ${user.sub}, ${rated}, ${Number((b as any).score || 5)}, ${String((b as any).comment || '').slice(0, 500)}, NOW()) ON CONFLICT (id) DO NOTHING`;
   } catch (e) { console.error('ratings insert error:', e); }
   return c.json({ success: true });
 });
@@ -771,11 +950,11 @@ app.get('/api/v1/turn/ice', requireAuth, async (c) => {
   }
 });
 app.get('/api/v1/turn/quota', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   return c.json(await turnQuota(sql, c.env.METERED_FREE_MB));
 });
 app.post('/api/v1/turn/log', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { tripId, durationSec } = await c.req.json().catch(() => ({}));
   if (!tripId) return c.json({ message: 'Viagem inválida.' }, 400);
@@ -786,7 +965,7 @@ app.post('/api/v1/turn/log', requireAuth, async (c) => {
   return c.json(await turnQuota(sql, c.env.METERED_FREE_MB));
 });
 app.post('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   const { type, payload } = await c.req.json().catch(() => ({}));
@@ -799,7 +978,7 @@ app.post('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
   return c.json({ ok: true, ts: new Date(rows[0].createdAt).getTime() });
 });
 app.get('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   if (!(await assertParticipant(sql, id, user.sub)))
@@ -820,7 +999,7 @@ app.get('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
 
 // ─── CHAT DA VIAGEM (só intervenientes) ───
 app.get('/api/v1/trips/:id/chat', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   if (!(await assertParticipant(sql, id, user.sub)))
@@ -832,7 +1011,7 @@ app.get('/api/v1/trips/:id/chat', requireAuth, async (c) => {
   });
 });
 app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   if (!(await assertParticipant(sql, id, user.sub)))
@@ -1021,7 +1200,7 @@ function adminMiddleware(c: any, next: any) {
 
 // GET /api/v1/admin/stats — Dashboard stats
 app.get('/api/v1/admin/stats', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const [driversRes, tripsRes, usersRes, revenueRes] = await Promise.all([
     sql`SELECT COUNT(*)::int AS total FROM drivers WHERE status = 'APPROVED' AND "isOnline" = true`,
     sql`SELECT status, COUNT(*)::int AS count FROM trips GROUP BY status`,
@@ -1042,7 +1221,7 @@ app.get('/api/v1/admin/stats', adminMiddleware, async (c) => {
 
 // GET /api/v1/admin/trips — List trips with filters
 app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
   const status = c.req.query('status');
@@ -1150,7 +1329,7 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
 
 // GET /api/v1/admin/driver-stats — Totais globais por motorista (o histórico da página é limitado)
 app.get('/api/v1/admin/driver-stats', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   try {
     const rows = await sql`
       SELECT t."driverId", COUNT(*)::int AS total,
@@ -1169,7 +1348,7 @@ app.get('/api/v1/admin/driver-stats', adminMiddleware, async (c) => {
 });
 // GET /api/v1/admin/drivers — List drivers
 app.get('/api/v1/admin/drivers', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const driversRes = await sql`
     SELECT d.*, u.name, u.phone
     FROM drivers d
@@ -1182,7 +1361,7 @@ app.get('/api/v1/admin/drivers', adminMiddleware, async (c) => {
 
 // GET /api/v1/admin/users — List users
 app.get('/api/v1/admin/users', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
   const role = c.req.query('role');
@@ -1245,10 +1424,11 @@ try {
 
 // POST /api/v1/admin/users/:id/reset-password — Repor senha padrão (admin)
 app.post('/api/v1/admin/users/:id/reset-password', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { id } = c.req.param();
+  const resetHash = await hashPassword('0987654321');
   const rows = await sql`
-    UPDATE users SET "passwordHash" = crypt('0987654321', gen_salt('bf', 10)),
+    UPDATE users SET "passwordHash" = ${resetHash},
       "mustChangePassword" = true, "updatedAt" = NOW()
     WHERE id = ${id} RETURNING id`;
   if (!rows.length) return c.json({ message: 'Utilizador não encontrado.' }, 404);
@@ -1257,7 +1437,7 @@ app.post('/api/v1/admin/users/:id/reset-password', adminMiddleware, async (c) =>
 
 // GET /api/v1/admin/drivers/pending — Pending driver registrations
 app.get('/api/v1/admin/drivers/pending', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const pendingRes = await sql`
     SELECT d.*, u.name, u.phone
     FROM drivers d
@@ -1270,7 +1450,7 @@ app.get('/api/v1/admin/drivers/pending', adminMiddleware, async (c) => {
 
 // PUT /api/v1/admin/drivers/:id/approve — Approve driver
 app.put('/api/v1/admin/drivers/:id/approve', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { id } = c.req.param();
   await sql`UPDATE drivers SET status = 'APPROVED', "updatedAt" = NOW() WHERE id = ${id}`;
   return c.json({ success: true });
@@ -1278,7 +1458,7 @@ app.put('/api/v1/admin/drivers/:id/approve', adminMiddleware, async (c) => {
 
 // PUT /api/v1/admin/drivers/:id/reject — Reject driver
 app.put('/api/v1/admin/drivers/:id/reject', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { id } = c.req.param();
   await sql`UPDATE drivers SET status = 'REJECTED', "isOnline" = false, "updatedAt" = NOW() WHERE id = ${id}`;
   return c.json({ success: true });
@@ -1286,14 +1466,14 @@ app.put('/api/v1/admin/drivers/:id/reject', adminMiddleware, async (c) => {
 
 // POST /api/v1/admin/drivers/create — Create driver with vehicle (auto-approve if has license+plate)
 app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { phone, name, licenseNumber, carPlate, carMake, carModel, carYear, carColor } = await c.req.json().catch(() => ({}));
   if (!phone || !name) return c.json({ message: 'Nome e número obrigatórios.' }, 400);
   const cleanPhone = phone.startsWith('+244') ? phone : `+244${phone.replace(/\D/g, '')}`;
   const exists = await sql`SELECT id FROM users WHERE phone = ${cleanPhone} LIMIT 1`;
   if (exists.length) return c.json({ message: 'Número já registado.' }, 409);
   // Create user
-  const userRes = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, crypt('0987654321', gen_salt('bf', 10)), ${name}, 'DRIVER', true, NOW()) RETURNING id`;
+  const userRes = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, ${await hashPassword('0987654321')}, ${name}, 'DRIVER', true, NOW()) RETURNING id`;
   const userId = userRes[0].id;
   // Create driver
   const driverStatus = 'APPROVED'; // criada pelo admin entra logo aprovada
@@ -1308,7 +1488,7 @@ app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
 
 // DELETE /api/v1/users/me — Delete account
 app.delete('/api/v1/users/me', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   await sql`UPDATE users SET "isActive" = false, "updatedAt" = NOW() WHERE id = ${user.sub}`;
   return c.json({ success: true });
@@ -1316,7 +1496,7 @@ app.delete('/api/v1/users/me', requireAuth, async (c) => {
 
 // POST /api/v1/users/report — Report a user
 app.post('/api/v1/users/report', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { reportedUserId, reason, tripId } = await c.req.json().catch(() => ({}));
   if (!reportedUserId || !reason) return c.json({ message: 'Dados inválidos.' }, 400);
@@ -1329,7 +1509,7 @@ app.post('/api/v1/users/report', requireAuth, async (c) => {
 
 // GET /api/v1/drivers/status — Get driver status
 app.get('/api/v1/drivers/status', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const rows = await sql`
     SELECT d.*, u.name, u.phone
@@ -1348,7 +1528,7 @@ app.get('/api/v1/drivers/status', requireAuth, async (c) => {
 
 // PUT /api/v1/drivers/toggle-online — Toggle online status
 app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { isOnline } = await c.req.json().catch(() => ({}));
   const rows = await sql`
@@ -1362,7 +1542,7 @@ app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
 
 // PUT /api/v1/drivers/location — Update driver location
 app.put('/api/v1/drivers/location', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { lat, lng } = await c.req.json().catch(() => ({}));
   if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
@@ -1377,7 +1557,7 @@ app.put('/api/v1/drivers/location', requireAuth, async (c) => {
 
 // GET /api/v1/drivers/earnings — Get driver earnings
 app.get('/api/v1/drivers/earnings', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
@@ -1428,7 +1608,7 @@ app.post('/api/v1/trips/estimate', requireAuth, async (c) => {
 
 // POST /api/v1/trips/request — Request a trip
 app.post('/api/v1/trips/request', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
   const active = await sql`
@@ -1463,7 +1643,7 @@ app.post('/api/v1/trips/request', requireAuth, async (c) => {
 
 // GET /api/v1/trips/active — Get active trip
 app.get('/api/v1/trips/active', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const rows = await sql`
     SELECT t.*, du.name AS driver_name
@@ -1515,7 +1695,7 @@ app.get('/api/v1/trips/active', requireAuth, async (c) => {
 
 // GET /api/v1/trips/:id — Get trip details
 app.get('/api/v1/trips/:id', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   const rows = await sql`
@@ -1528,7 +1708,7 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   const t = rows[0];
   if (c.req.query('view') === 'web') {
-    const drv = await webDriverInfo(sql, t.driverId);
+    const drv = await webDriverInfo(c.env, sql, t.driverId);
     const pu = await sql`SELECT name, phone FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
@@ -1573,7 +1753,7 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
 
 // PUT /api/v1/trips/:id/accept — Accept trip
 app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
   const didRes = await sql`SELECT id FROM drivers WHERE "userId" = ${user.sub} LIMIT 1`;
@@ -1590,7 +1770,7 @@ app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
 
 // PUT /api/v1/trips/:id/arrived — Mark arrived
 app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const id = c.req.param('id');
   const rows = await sql`
     UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW()
@@ -1602,7 +1782,7 @@ app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
 
 // PUT /api/v1/trips/:id/start — Start trip
 app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const { pin } = await c.req.json().catch(() => ({}));
   const id = c.req.param('id');
   const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
@@ -1617,7 +1797,7 @@ app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
 
 // PUT /api/v1/trips/:id/complete — Complete trip
 app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const id = c.req.param('id');
   const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
   if (!cur.length || cur[0].status !== 'IN_PROGRESS') return c.json({ message: 'Transição inválida.' }, 400);
@@ -1637,7 +1817,7 @@ app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
 
 // PUT /api/v1/trips/:id/cancel — Cancel trip
 app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { reason } = await c.req.json().catch(() => ({}));
   const rows = await sql`
@@ -1650,22 +1830,22 @@ app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
 
 // POST /api/v1/ratings — Create rating
 app.post('/api/v1/ratings', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
   const { tripId, ratedId, score, comment } = b;
   if (!tripId || !ratedId || !score) return c.json({ message: 'Dados inválidos.' }, 400);
   await sql`
     INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt")
-    VALUES (gen_random_uuid()::text, ${tripId}, ${user.sub}, ${ratedId}, ${score}, ${comment || ''}, NOW())
-    ON CONFLICT ("tripId", "raterId") DO NOTHING
+    VALUES (${String(tripId) + ':' + user.sub}, ${tripId}, ${user.sub}, ${ratedId}, ${score}, ${comment || ''}, NOW())
+    ON CONFLICT (id) DO NOTHING
   `;
   return c.json({ success: true });
 });
 
 // GET /api/v1/notifications — Get notifications
 app.get('/api/v1/notifications', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
@@ -1682,7 +1862,7 @@ app.get('/api/v1/notifications', requireAuth, async (c) => {
 
 // GET /api/v1/notifications/unread-count — Get unread count
 app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const rows = await sql`
     SELECT COUNT(*)::int AS count FROM notifications WHERE "userId" = ${user.sub} AND "isRead" = false
@@ -1692,7 +1872,7 @@ app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => {
 
 // PUT /api/v1/notifications/read-all — Mark all as read
 app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   await sql`UPDATE notifications SET "isRead" = true WHERE "userId" = ${user.sub}`;
   return c.json({ success: true });
@@ -1702,7 +1882,7 @@ app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
 // GET /api/v1/categories — Lista pública (a home usa para nomes/cores/preços)
 app.get('/api/v1/categories', async (c) => {
   try {
-    const sql = neon(c.env.DATABASE_URL);
+    const sql = neon(c.env.DB);
     return c.json({ categories: await getCategories(sql) });
   } catch {
     return c.json({ categories: [
@@ -1715,7 +1895,7 @@ app.get('/api/v1/categories', async (c) => {
 
 // POST /api/v1/admin/categories — Adicionar categoria (solta o enum rideType para TEXT uma vez)
 app.post('/api/v1/admin/categories', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const b = await c.req.json().catch(() => ({}));
   const name = String(b.name || '').trim().slice(0, 30);
   const color = String(b.color || '').trim();
@@ -1726,7 +1906,6 @@ app.post('/api/v1/admin/categories', adminMiddleware, async (c) => {
   const code = name.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 16) || 'CAT';
   try {
     await getCategories(sql);
-    try { await sql`ALTER TABLE trips ALTER COLUMN "rideType" TYPE TEXT USING "rideType"::text`; } catch {}
     const rows = await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES (${code}, ${name}, ${color}, ${mult}, 99) RETURNING code, name, color, mult`;
     const r = rows[0];
     return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult) } });
@@ -1739,7 +1918,7 @@ app.post('/api/v1/admin/categories', adminMiddleware, async (c) => {
 
 // PUT /api/v1/admin/categories/:code — Editar nome/cor/mult
 app.put('/api/v1/admin/categories/:code', adminMiddleware, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const code = String(c.req.param('code') || '').toUpperCase().slice(0, 16);
   const b = await c.req.json().catch(() => ({}));
   const name = String(b.name || '').trim().slice(0, 30);
@@ -1801,21 +1980,24 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
   };
 }
 
-async function webDriverInfo(sql: any, driverId: string | null) {
+async function webDriverInfo(env: any, sql: any, driverId: string | null) {
   if (!driverId) return null;
   const d = await sql`
-    SELECT d."currentLat", d."currentLng", d.rating, d."totalTrips", d."carMake", d."carModel", d."carColor", d."carPlate", u.name, u.phone
+    SELECT d."userId", d."currentLat", d."currentLng", d.rating, d."totalTrips", d."carMake", d."carModel", d."carColor", d."carPlate", u.name, u.phone
     FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} LIMIT 1`;
   if (!d.length) return null;
   const r = d[0];
+  const live = await geoGet(env, String(r.userId || ''));
+  const lat = live && Number.isFinite(Number(live.lat)) ? Number(live.lat) : (r.currentLat != null ? Number(r.currentLat) : null);
+  const lng = live && Number.isFinite(Number(live.lng)) ? Number(live.lng) : (r.currentLng != null ? Number(r.currentLng) : null);
   let avg = r.rating != null ? Number(r.rating) : 5;
   try {
     const ar = await sql`SELECT COALESCE(AVG(rt.score), 0)::float AS a, COUNT(*)::int AS n FROM ratings rt JOIN trips t ON t.id = rt."tripId" WHERE t."driverId" = ${driverId}`;
     if (ar[0] && Number(ar[0].n) > 0) avg = Math.round(Number(ar[0].a) * 10) / 10;
   } catch {}
   return {
-    lat: r.currentLat != null ? Number(r.currentLat) : null,
-    lng: r.currentLng != null ? Number(r.currentLng) : null,
+    lat,
+    lng,
     name: r.name || 'Motorista',
     phone: r.phone || '',
     rating: avg,
@@ -1831,16 +2013,6 @@ async function webDriverInfo(sql: any, driverId: string | null) {
 // fora) até alguém aceitar ou a viagem expirar (10min).
 const OFFER_TTL_SEC = 15;
 const OFFER_MAX = 15;
-async function ensureOfferColumns(sql: any) {
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerQueue" JSONB`; } catch {}
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerIdx" INTEGER NOT NULL DEFAULT 0`; } catch {}
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offeredDriverId" TEXT`; } catch {}
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offeredAt" TIMESTAMPTZ`; } catch {}
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerExpiresAt" TIMESTAMPTZ`; } catch {}
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerBroadcast" BOOLEAN NOT NULL DEFAULT FALSE`; } catch {}
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerSkipped" JSONB`; } catch {}
-  try { await sql`ALTER TABLE trips ADD COLUMN IF NOT EXISTS "offerMissed" JSONB`; } catch {}
-}
 function offerQueueOf(t: any): string[] {
   const q = (t as any).offerQueue;
   return Array.isArray(q) ? q.map((x: any) => String(x)).filter(Boolean) : [];
@@ -1855,30 +2027,26 @@ function offerMissedOf(t: any): string[] {
 }
 // Candidatas online+aprovadas com GPS e sem viagem ativa, da categoria
 // pedida, ordenadas por distância ao pickup (GPS fresco desempata).
-async function buildOfferQueue(sql: any, pLa: number, pLo: number, rideCode: string): Promise<string[]> {
-  try { await sql`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cats JSONB`; } catch {}
+async function buildOfferQueue(env: any, sql: any, pLa: number, pLo: number, rideCode: string): Promise<string[]> {
   let byCode: Record<string, string> = {};
   try { byCode = (await catMaps(sql)).byCode; } catch {}
+  const pos = await geoAll(env);
+  const byUser = new Map<string, any>();
+  for (const p of pos) if (p && p.userId) byUser.set(String(p.userId), p);
   let rows: any[] = [];
   try {
-    rows = await sql`SELECT d.id, d."currentLat", d."currentLng", d.cats, d."updatedAt" FROM drivers d WHERE d."isOnline" = true AND d.status = 'APPROVED' AND d."currentLat" IS NOT NULL AND d."currentLng" IS NOT NULL AND d."updatedAt" > NOW() - INTERVAL '5 minutes' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS'))`;
+    rows = await sql`SELECT d.id, d."userId", d.cats FROM drivers d WHERE d."isOnline" = true AND d.status = 'APPROVED' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS'))`;
   } catch { return []; }
   const wantCat = byCode[rideCode] || '';
-  const now = Date.now();
   return rows
-    .filter((d: any) => {
-      if (Array.isArray(d.cats) && d.cats.length && wantCat) {
-        return d.cats.map((x: any) => String(x)).indexOf(wantCat) >= 0;
-      }
-      return true;
-    })
     .map((d: any) => {
-      const km = Number.isFinite(pLa) && Number.isFinite(pLo) ? havKm(pLa, pLo, Number(d.currentLat), Number(d.currentLng)) : 0;
-      let stale = 0;
-      try { stale = now - new Date(d.updatedAt).getTime(); } catch {}
-      return { id: String(d.id), km, stale };
+      const p = byUser.get(String(d.userId));
+      if (!p || !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng))) return null;
+      if (Array.isArray(d.cats) && d.cats.length && wantCat && d.cats.map((x: any) => String(x)).indexOf(wantCat) < 0) return null;
+      const km = Number.isFinite(pLa) && Number.isFinite(pLo) ? havKm(pLa, pLo, Number(p.lat), Number(p.lng)) : 0;
+      return { id: String(d.id), km, stale: Date.now() - Number(p.ts || 0) };
     })
-    .filter((d: any) => Number.isFinite(d.km) && d.km * 2 <= 10) // raio de 10min a 30km/h
+    .filter((d: any) => d && Number.isFinite(d.km) && d.km * 2 <= 10) // raio de 10min a 30km/h
     .sort((a: any, b: any) => (a.km - b.km) || (a.stale - b.stale))
     .slice(0, OFFER_MAX)
     .map((d: any) => d.id);
@@ -1934,7 +2102,7 @@ async function advanceOfferIfNeeded(sql: any, t: any, pushBody?: { title: string
 
 // POST /api/v1/trips/request-web — Pedido da home (web)
 app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
   const pLa = Number(b.pickupLat), pLo = Number(b.pickupLng);
@@ -1970,29 +2138,25 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
     const stops = Array.isArray(b.stops) ? b.stops.slice(0, 3).map((x: any) => ({ n: String(x.n || '').slice(0, 60), a: String(x.a || '').slice(0, 80), lat: Number(x.lat), lng: Number(x.lng) })).filter((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lng)) : [];
     const sched = Number(b.scheduledAt) > Date.now() ? new Date(Number(b.scheduledAt)) : null;
     const { byName } = await catMaps(sql);
+    // Oferta sequencial por proximidade (15s cada); sem candidatas abre a todas.
+    // Calculada ANTES do INSERT para não haver um UPDATE a mais por viagem.
+    const rideCode = byName[String(b.cat)] || 'ECONOMY';
+    let q: string[] = [];
+    try { q = await buildOfferQueue(c.env, sql, pLa, pLo, rideCode); } catch {}
+    const hasQ = q.length > 0;
+    const offerFirst: string | null = hasQ ? q[0] : null;
+    const expAt = hasQ ? new Date(Date.now() + OFFER_TTL_SEC * 1000) : null;
     const rows = await sql`
       INSERT INTO trips (id, "passengerId", "pickupAddress", "pickupLat", "pickupLng", "dropoffAddress", "dropoffLat", "dropoffLng",
-        status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", stops, "scheduledAt", "createdAt", "updatedAt")
+        status, "rideType", "fareEstimate", "distanceKm", "paymentMethod", stops, "scheduledAt", "createdAt", "updatedAt",
+        "offerQueue", "offerIdx", "offeredDriverId", "offeredAt", "offerExpiresAt", "offerBroadcast", "offerSkipped")
       VALUES (gen_random_uuid()::text, ${user.sub}, ${pickupName}, ${pLa}, ${pLo},
         ${String(b.destN || '').slice(0, 60) + ' · ' + String(b.destA || '').slice(0, 80)}, ${dLa}, ${dLo},
-        'REQUESTED', ${byName[String(b.cat)] || 'ECONOMY'}, ${fare}, ${Math.round(dist * 10) / 10},
-        ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW())
+        'REQUESTED', ${rideCode}, ${fare}, ${Math.round(dist * 10) / 10},
+        ${pay2method(b.pay)}, ${JSON.stringify(stops)}::jsonb, ${sched as any}, NOW(), NOW(),
+        ${hasQ ? JSON.stringify(q) : null}, 0, ${hasQ ? q[0] : null}, ${hasQ ? new Date().toISOString() : null}, ${expAt ? expAt.toISOString() : null}, ${hasQ ? 0 : 1}, ${hasQ ? '[]' : null})
       RETURNING id`;
     const tripId = rows[0].id;
-    // Oferta sequencial por proximidade (15s cada); sem candidatas abre a todas.
-    let offerFirst: string | null = null;
-    try {
-      await ensureOfferColumns(sql);
-      const rideCode = byName[String(b.cat)] || 'ECONOMY';
-      const q = await buildOfferQueue(sql, pLa, pLo, rideCode);
-      if (q.length) {
-        offerFirst = q[0];
-        const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
-        await sql`UPDATE trips SET "offerQueue" = ${JSON.stringify(q)}::jsonb, "offerIdx" = 0, "offeredDriverId" = ${q[0]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerBroadcast" = FALSE, "offerSkipped" = '[]'::jsonb WHERE id = ${tripId}`;
-      } else {
-        await sql`UPDATE trips SET "offerBroadcast" = TRUE WHERE id = ${tripId}`;
-      }
-    } catch {}
     // Push imediato + arranque do toca-toca de 3s (não bloqueia a resposta).
     try {
       const destN = String(b.destN || '').slice(0, 60);
@@ -2007,6 +2171,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         } catch {}
       })());
     } catch {}
+    hubPoke(c, [String(b.cat || '')]);
     return c.json({ id: tripId });
   } catch (e) {
     console.error('request-web error:', e);
@@ -2016,7 +2181,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
 
 // POST /api/v1/trips/:id/status — Transições da home (web)
 app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const id = c.req.param('id');
   const b = await c.req.json().catch(() => ({}));
   const st = String(b.status || '');
@@ -2035,7 +2200,6 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       if (busy.length) return c.json({ message: 'Já tens uma viagem ativa.' }, 400);
       // Oferta sequencial: só a motorista ofertada (ou qualquer uma em broadcast).
       try {
-        await ensureOfferColumns(sql);
         const oc = await sql`SELECT "offerQueue", "offerIdx", "offeredDriverId", "offerBroadcast", "offerExpiresAt", status FROM trips WHERE id = ${id} LIMIT 1`;
         if (oc.length && oc[0].status === 'REQUESTED' && !oc[0].offerBroadcast && (offerQueueOf(oc[0]).length || oc[0].offeredDriverId)) {
           const fresh: any = await advanceOfferIfNeeded(sql, oc[0]);
@@ -2058,6 +2222,8 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
     } else if (neonSt === 'CANCELLED') {
       await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
     }
+    pushStatus(c, id, neonSt);
+    if (neonSt === 'ACCEPTED' || neonSt === 'CANCELLED') hubPoke(c);
     return c.json({ ok: true, status: st });
   } catch (e) {
     console.error('trip status error:', e);
@@ -2067,7 +2233,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
 
 // GET /api/v1/trips/public/:id — Partilha com contactos (sem login: quem tem o link vê)
 app.get('/api/v1/trips/public/:id', async (c) => {
-  const sql = neon(c.env.DATABASE_URL);
+  const sql = neon(c.env.DB);
   const id = c.req.param('id');
   try {
     const rows = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
@@ -2077,12 +2243,15 @@ app.get('/api/v1/trips/public/:id', async (c) => {
     let driver = null;
     if (t.driverId) {
       const d = await sql`
-        SELECT d."currentLat", d."currentLng", d.rating, d."carMake", d."carModel", d."carColor", d."carPlate", d."carPhoto", u.name, u.phone, u."profilePhoto"
+        SELECT d."userId", d."currentLat", d."currentLng", d.rating, d."carMake", d."carModel", d."carColor", d."carPlate", d."carPhoto", u.name, u.phone, u."profilePhoto"
         FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${t.driverId} LIMIT 1`;
       if (d.length) {
         const r = d[0];
+        const live = r.userId ? await geoGet(c.env, String(r.userId)) : null;
+        const lat = live && Number.isFinite(Number(live.lat)) ? Number(live.lat) : (r.currentLat != null ? Number(r.currentLat) : null);
+        const lng = live && Number.isFinite(Number(live.lng)) ? Number(live.lng) : (r.currentLng != null ? Number(r.currentLng) : null);
         const carFull = [r.carMake, r.carModel].filter(Boolean).join(' ') + (r.carColor ? ' · ' + r.carColor : '');
-        driver = { name: r.name || 'Motorista', phone: r.phone || '', carFull, plate: r.carPlate || '', rating: r.rating != null ? Number(r.rating) : null, photo: r.carPhoto || r.profilePhoto || '', lat: r.currentLat != null ? Number(r.currentLat) : null, lng: r.currentLng != null ? Number(r.currentLng) : null };
+        driver = { name: r.name || 'Motorista', phone: r.phone || '', carFull, plate: r.carPlate || '', rating: r.rating != null ? Number(r.rating) : null, photo: r.carPhoto || r.profilePhoto || '', lat, lng };
       }
     }
     const stops = Array.isArray(t.stops) ? t.stops : [];
@@ -2147,7 +2316,7 @@ export class TripRinger {
     try {
       const sent: number = (await this.state.storage.get('sent')) || 0;
       if (sent >= 4) return;
-      const sql = neon(this.env.DATABASE_URL);
+      const sql = neon(this.env.DB);
       const rows = await sql`
         SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "rideType" FROM trips
         WHERE status = 'REQUESTED' AND "createdAt" > NOW() - INTERVAL '6 minutes'
@@ -2166,7 +2335,6 @@ export class TripRinger {
         // Oferta sequencial: roda a fila e avisa só a ofertada (sem
         // broadcast). Reagenda para a hora em que a oferta expira.
         try {
-          await ensureOfferColumns(sql);
           const full = await sql`SELECT * FROM trips WHERE id = ${t.id} LIMIT 1`;
           if (full.length && !full[0].offerBroadcast && (offerQueueOf(full[0]).length || full[0].offeredDriverId)) {
             const fresh: any = await advanceOfferIfNeeded(sql, full[0], {
@@ -2176,18 +2344,19 @@ export class TripRinger {
             if (!fresh.offerBroadcast) {
               const exp = fresh.offerExpiresAt ? new Date(fresh.offerExpiresAt).getTime() : 0;
               const delay = exp && exp > Date.now() ? Math.min(Math.max(exp - Date.now(), 3000), 65000) : 10000;
+              try { await hubBroadcast(this.env); } catch {}
               await this.state.storage.setAlarm(Date.now() + delay);
               return;
             }
           }
         } catch {}
+        try { await hubBroadcast(this.env); } catch {}
         await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!', byCode[t.rideType] || '');
       } else {
         // Resumo só das viagens em broadcast (as exclusivas já avisam a
         // ofertada). Sem nenhuma aberta, reagenda em silêncio.
         let openN = rows.length;
         try {
-          await ensureOfferColumns(sql);
           const oc = await sql`SELECT COUNT(*)::int AS n FROM trips WHERE status = 'REQUESTED' AND "createdAt" > NOW() - INTERVAL '6 minutes' AND ("offerBroadcast" = TRUE OR "offerQueue" IS NULL)`;
           openN = Number(oc[0]?.n || 0);
         } catch {}
@@ -2195,6 +2364,7 @@ export class TripRinger {
           try { await this.state.storage.setAlarm(Date.now() + 10000); } catch {}
           return;
         }
+        try { await hubBroadcast(this.env); } catch {}
         try {
           const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
           const msgs = toks.map((r: any) => ({
@@ -2227,11 +2397,13 @@ export class TripPush {
   state: any;
   env: any;
   driver: { lat: number; lng: number; ts: number } | null = null;
-  lastFixAt = 0;
+  passenger: { lat: number; lng: number; ts: number } | null = null;
   status: string | null = null;
   statusAt = 0;
   tripCache: any = null;
   tripId: string | null = null;
+  statusLoaded = false;
+  lastEta: number | null = null;
   constructor(state: any, env: any) {
     this.state = state;
     this.env = env;
@@ -2248,10 +2420,15 @@ export class TripPush {
         const b: any = await req.json().catch(() => ({}));
         const st = String(b?.status || '').toUpperCase().slice(0, 20);
         if (st) {
+          await this.hydrate();
           const changed = this.status !== st;
           this.status = st;
           this.statusAt = Date.now();
-          if (changed) this.broadcast({ t: 'status', status: st });
+          if (changed) {
+            await this.persistStatus();
+            this.broadcast({ t: 'status', status: st });
+            this.pushEta();
+          }
         }
       } catch {}
       return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
@@ -2262,6 +2439,11 @@ export class TripPush {
     if (!tripId) return new Response('Missing trip', { status: 400 });
     this.tripId = tripId;
     try { await this.state.storage.put('tripId', tripId); } catch {}
+    // Lê o estado persistido e atualiza do Neon ANTES de aceitar o socket: assim o
+    // hello já traz o status e o novo cliente não recebe um frame "status" duplicado
+    // (só os sockets já ligados são avisados).
+    try { await this.hydrate(); } catch {}
+    try { await this.refreshStatus(false); } catch {}
     const uid = String(req.headers.get('X-User-Id') || '');
     const tag = req.headers.get('X-Is-Driver') === '1' ? 'driver' : 'pax';
     const pair: any = new WebSocketPair();
@@ -2271,19 +2453,41 @@ export class TripPush {
     } catch {
       return new Response('WS failed', { status: 500 });
     }
+    // Estado de throttle guardado no anexo do socket: sobrevive à hibernação
+    // (ao contrário de campos em memória) e não grava em storage.
+    try { server.serializeAttachment({ lastFixAt: 0, pushLat: 0, pushLng: 0, pushAt: 0, lastPaxAt: 0 }); } catch {}
+    // A API de hibernação não tem callback webSocketOpen(): o hello é enviado aqui,
+    // logo após o accept, antes de devolver o 101.
+    try { server.send(JSON.stringify(this.helloFrame())); } catch {}
     return new Response(null, { status: 101, webSocket: client });
   }
-  async webSocketOpen(ws: any) {
-    if (!this.tripId) {
-      try { this.tripId = await this.state.storage.get('tripId'); } catch {}
-    }
+  helloFrame(): any {
+    const hello: any = { t: 'hello', tripId: this.tripId };
+    if (this.status) hello.status = this.status;
+    if (this.driver && Date.now() - this.driver.ts < 120000) hello.driver = { lat: this.driver.lat, lng: this.driver.lng };
+    if (this.passenger && String(this.status || '') !== 'IN_PROGRESS' && Date.now() - this.passenger.ts < 120000) hello.pax = { lat: this.passenger.lat, lng: this.passenger.lng };
+    return hello;
+  }
+  // Estado persistido: sobrevive à hibernação (sem isto um DO acordado reenviava
+  // "status" ao julgar que mudou de null -> valor).
+  async hydrate() {
+    if (this.statusLoaded) return;
+    this.statusLoaded = true;
     try {
-      const hello: any = { t: 'hello', tripId: this.tripId };
-      if (this.status) hello.status = this.status;
-      if (this.driver && Date.now() - this.driver.ts < 120000) hello.driver = { lat: this.driver.lat, lng: this.driver.lng };
-      ws.send(JSON.stringify(hello));
+      const s = await this.state.storage.get('status');
+      if (!this.status && s) this.status = String(s);
     } catch {}
-    try { await this.refreshStatus(false); } catch {}
+  }
+  async persistStatus() {
+    this.statusLoaded = true;
+    try { await this.state.storage.put('status', this.status); } catch {}
+  }
+  // Só emite ETA quando o valor muda (evita frames repetidos).
+  pushEta() {
+    const eta = this.etaMin();
+    if (eta == null || this.lastEta === eta) return;
+    this.lastEta = eta;
+    this.broadcast({ t: 'eta', min: eta });
   }
   async webSocketMessage(ws: any, raw: any) {
     let m: any;
@@ -2293,13 +2497,13 @@ export class TripPush {
     if (m.t === 'chat') {
       const text = String((m as any).text || '').trim().slice(0, 300);
       if (!text) return;
-      // Efémero: difunde já; persistência continua no REST POST /:id/chat (fonte de verdade).
-      this.broadcast({ t: 'chat', text, ts: Date.now() });
+      // Efémero: difunde já (exceto a quem enviou); persistência continua no REST POST /:id/chat (fonte de verdade).
+      this.broadcastExcept(ws, { t: 'chat', text, from: String((m as any).from || '').slice(0, 40), ts: Date.now() });
       return;
     }
     if (m.t === 'state') {
       await this.refreshStatus(true).catch(() => null);
-      try { ws.send(JSON.stringify({ t: 'state', status: this.status, driver: this.driver ? { lat: this.driver.lat, lng: this.driver.lng } : null, etaMin: this.etaMin(), ts: Date.now() })); } catch {}
+      try { ws.send(JSON.stringify({ t: 'state', status: this.status, driver: this.driver ? { lat: this.driver.lat, lng: this.driver.lng } : null, pax: this.passenger ? { lat: this.passenger.lat, lng: this.passenger.lng } : null, etaMin: this.etaMin(), ts: Date.now() })); } catch {}
       return;
     }
     // Resto ignora.
@@ -2307,23 +2511,44 @@ export class TripPush {
   async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {}
   async webSocketError(ws: any, _err: any) { try { ws.close(1011, 'err'); } catch {} }
   async onGps(ws: any, m: any) {
-    // Só motorista envia: tag atribuída no upgrade (X-Is-Driver) + claim role. Resto ignora.
+    // Motorista e passageira enviam GPS. A tag vem do upgrade (X-Is-Driver) e é reforçada pelo claim role.
     let tags: string[] = [];
     try { tags = this.state.getTags(ws) || []; } catch {}
     const claimed = String(m?.role || '').toLowerCase();
-    if (tags.indexOf('driver') < 0 || claimed !== 'driver') return;
     const la = Number(m?.lat), lo = Number(m?.lng);
     if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return;
     const now = Date.now();
-    if (now - this.lastFixAt < PUSH_GPS_MIN_MS) return; // máx 1 fix/10s
-    this.lastFixAt = now;
-    this.driver = { lat: la, lng: lo, ts: now };
-    // SÓ memória do DO — nada no Neon por fix.
-    this.broadcast({ t: 'driver', lat: la, lng: lo, ts: now });
-    const eta = this.etaMin();
-    if (eta != null) this.broadcast({ t: 'eta', min: eta });
-    // Aprende o status sem tocar no REST (leitura esporádica dentro do TTL).
-    await this.refreshStatus(false);
+    const att: any = (() => { try { return ws.deserializeAttachment() || {}; } catch { return {}; } })();
+    // Motorista: máx 1 fix/10s. SÓ memória do DO — nada no Neon por fix.
+    if (tags.indexOf('driver') >= 0 && claimed === 'driver') {
+      if (now - Number(att.lastFixAt || 0) < PUSH_GPS_MIN_MS) return;
+      att.lastFixAt = now;
+      this.driver = { lat: la, lng: lo, ts: now };
+      await this.refreshStatus(false);
+      // A motorista é monitorizada do início ao fim da viagem, por isso a sua
+      // posição é sempre transmitida à passageira. Para não spammar, só se
+      // redesenha quando o carro anda (>=150m) ou a cada 30s.
+      const movedKm = att.pushAt ? havKm(Number(att.pushLat), Number(att.pushLng), la, lo) : 1;
+      if (movedKm >= 0.15 || now - Number(att.pushAt || 0) >= 30000) {
+        att.pushLat = la; att.pushLng = lo; att.pushAt = now;
+        this.broadcastExcept(ws, { t: 'driver', lat: la, lng: lo, ts: now });
+        this.pushEta();
+      }
+      try { ws.serializeAttachment(att); } catch {}
+      return;
+    }
+    // Passageira: máx 1 fix/10s; a motorista vê o marcador. Após o arranque
+    // (IN_PROGRESS) a motorista já está com a passageira: não propaga o pax.
+    if (tags.indexOf('pax') >= 0 && claimed === 'pax') {
+      if (now - Number(att.lastPaxAt || 0) < PUSH_GPS_MIN_MS) return;
+      att.lastPaxAt = now;
+      this.passenger = { lat: la, lng: lo, ts: now };
+      if (String(this.status || '') !== 'IN_PROGRESS') {
+        this.broadcastExcept(ws, { t: 'pax', lat: la, lng: lo, ts: now });
+      }
+      try { ws.serializeAttachment(att); } catch {}
+      return;
+    }
   }
   async refreshStatus(force: boolean) {
     const now = Date.now();
@@ -2332,7 +2557,8 @@ export class TripPush {
       try { this.tripId = await this.state.storage.get('tripId'); } catch {}
     }
     if (!this.tripId) return this.status;
-    const sql = neon(this.env.DATABASE_URL);
+    try { await this.hydrate(); } catch {}
+    const sql = neon(this.env.DB);
     const rows = await sql`SELECT status, "pickupLat", "pickupLng", "dropoffLat", "dropoffLng" FROM trips WHERE id = ${this.tripId} LIMIT 1`;
     this.statusAt = now;
     if (!rows.length) return this.status;
@@ -2340,9 +2566,9 @@ export class TripPush {
     this.tripCache = r;
     if (r.status && r.status !== this.status) {
       this.status = r.status;
+      await this.persistStatus();
       this.broadcast({ t: 'status', status: r.status });
-      const eta = this.etaMin();
-      if (eta != null) this.broadcast({ t: 'eta', min: eta });
+      this.pushEta();
     }
     return this.status;
   }
@@ -2364,6 +2590,162 @@ export class TripPush {
     try { socks = this.state.getWebSockets(); } catch { return; }
     for (const s of socks) { try { s.send(msg); } catch {} }
   }
+  broadcastExcept(ws: any, obj: any) {
+    let msg = '';
+    try { msg = JSON.stringify(obj); } catch { return; }
+    let socks: any[] = [];
+    try { socks = this.state.getWebSockets(); } catch { return; }
+    for (const s of socks) { if (s === ws) continue; try { s.send(msg); } catch {} }
+  }
+}
+
+// ─── RequestsHub: feed de pedidos em tempo real (1 DO global, WS hibernável) ───
+// Motoristas online ligam-se aqui; quando entra/altera/aceita um pedido o Worker
+// chama POST /broadcast e o hub faz "poke" (mensagem de saída = grátis). A
+// motorista responde com 1 fetch a /trips/incoming. Sem polling contínuo e sem
+// custo de duração (hiberna ocioso). Futuro: shard por cidade no nome do DO.
+export class RequestsHub {
+  state: any;
+  env: any;
+  constructor(state: any, env: any) {
+    this.state = state;
+    this.env = env;
+    try { this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong')); } catch {}
+  }
+  async fetch(req: any) {
+    const u = new URL(req.url);
+    if (req.method === 'POST' && u.pathname.endsWith('/broadcast')) {
+      try {
+        const b: any = await req.json().catch(() => ({}));
+        const cats: string[] | null = Array.isArray(b?.cats) && b.cats.length ? b.cats.map((x: any) => String(x)) : null;
+        const driverId = String(b?.driverId || '');
+        const msg = JSON.stringify({ t: 'refresh', ts: Date.now() });
+        for (const s of this.socks()) {
+          try {
+            const a: any = (s.deserializeAttachment && s.deserializeAttachment()) || {};
+            if (driverId && String(a.driverId || '') !== driverId) continue;
+            const sc: string[] = Array.isArray(a.cats) ? a.cats : [];
+            if (cats && sc.length && !sc.some((c: string) => cats.indexOf(c) >= 0)) continue;
+            s.send(msg);
+          } catch {}
+        }
+      } catch {}
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
+      return new Response('Expected websocket', { status: 426 });
+    const driverId = String(req.headers.get('X-Driver-Id') || '');
+    let cats: string[] = [];
+    try { cats = JSON.parse(req.headers.get('X-Cats') || '[]'); } catch {}
+    const pair: any = new WebSocketPair();
+    const client = pair[0], server = pair[1];
+    try {
+      this.state.acceptWebSocket(server);
+      server.serializeAttachment({ driverId, cats });
+    } catch {
+      return new Response('WS failed', { status: 500 });
+    }
+    return new Response(null, { status: 101, webSocket: client });
+  }
+  async webSocketMessage(_ws: any, _raw: any) {}
+  async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {}
+  async webSocketError(ws: any, _err: any) { try { ws.close(1011, 'err'); } catch {} }
+  socks(): any[] { try { return this.state.getWebSockets(); } catch { return []; } }
+}
+
+// ─── DriverGeo: 1 DO global, mapa em memória das posições vivas ───
+// Serve /drivers/nearby, buildOfferQueue, webDriverInfo e o polling da viagem.
+// Só vive em memória (rede de segurança = próximo ping repõe); TTL 5min na
+// leitura. Sem custo de armazenamento e sem escritas D1 por ping.
+export class DriverGeo {
+  state: any;
+  env: any;
+  pos: Map<string, any>;
+  constructor(state: any, env: any) {
+    this.state = state;
+    this.env = env;
+    this.pos = new Map();
+    try { this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong')); } catch {}
+  }
+  json(o: any): Response {
+    return new Response(JSON.stringify(o), { headers: { 'Content-Type': 'application/json' } });
+  }
+  // Aplica uma atualização de posição vinda de HTTP (/set) ou de mensagem WS.
+  setPos(userId: string, lat: number, lng: number, cats: any, online: boolean | null): boolean {
+    const prev = this.pos.get(userId) || null;
+    const wasOnline = !!prev?.online;
+    this.pos.set(userId, {
+      userId,
+      driverId: prev?.driverId || '',
+      lat,
+      lng,
+      cats: cats != null ? cats : (prev?.cats || null),
+      online: online != null ? !!online : !!(prev?.online),
+      ts: Date.now(),
+    });
+    return wasOnline;
+  }
+  async fetch(req: any): Promise<Response> {
+    const u = new URL(req.url);
+    const path = u.pathname;
+    // GPS ao vivo por WebSocket (0 pedidos HTTP por ping). Hiberna quando ocioso.
+    if (path.endsWith('/live')) {
+      if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
+        return new Response('Expected websocket', { status: 426 });
+      const userId = String(req.headers.get('X-User-Id') || '');
+      const pair: any = new WebSocketPair();
+      const client = pair[0], server = pair[1];
+      try {
+        this.state.acceptWebSocket(server);
+        server.serializeAttachment({ userId });
+      } catch {
+        return new Response('WS failed', { status: 500 });
+      }
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    if (req.method === 'POST' && path.endsWith('/set')) {
+      const b: any = await req.json().catch(() => ({}));
+      const userId = String(b.userId || '');
+      if (!userId) return this.json({ wasOnline: false });
+      const wasOnline = this.setPos(userId, Number(b.lat), Number(b.lng), b.cats, b.online != null ? !!b.online : null);
+      return this.json({ wasOnline });
+    }
+    if (req.method === 'POST' && path.endsWith('/del')) {
+      const b: any = await req.json().catch(() => ({}));
+      this.pos.delete(String(b.userId || ''));
+      return this.json({ ok: true });
+    }
+    if (path.endsWith('/get')) {
+      const uid = String(u.searchParams.get('userId') || '');
+      return this.json({ driver: this.pos.get(uid) || null });
+    }
+    if (path.endsWith('/all')) {
+      const now = Date.now();
+      const drivers: any[] = [];
+      for (const v of this.pos.values()) {
+        if (now - Number(v.ts || 0) <= 10 * 60 * 1000) drivers.push(v);
+      }
+      return this.json({ drivers });
+    }
+    return new Response('not found', { status: 404 });
+  }
+  async webSocketMessage(ws: any, raw: any) {
+    const a = (ws.deserializeAttachment && ws.deserializeAttachment()) || {};
+    const userId = String(a.userId || '');
+    if (!userId) return;
+    let m: any = null;
+    try { m = JSON.parse(typeof raw === 'string' ? raw : ''); } catch { return; }
+    if (!m || typeof m !== 'object') return;
+    if (m.offline) { this.pos.delete(userId); return; }
+    const lat = Number(m.lat), lng = Number(m.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const cats = Array.isArray(m.cats) ? m.cats.map((x: any) => String(x).slice(0, 30)).slice(0, 6) : null;
+    this.setPos(userId, lat, lng, cats, true);
+  }
+  async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {
+    // Mantém a posição até expirar (TTL na leitura); nova ligação repõe.
+  }
+  async webSocketError(ws: any, _err: any) { try { ws.close(1011, 'err'); } catch {} }
 }
 
 async function ringStart(env: any) {

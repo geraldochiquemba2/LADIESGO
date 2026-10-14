@@ -24,6 +24,7 @@ import { driversApi, tripsApi } from '../../services/api';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { socketService } from '../../services/socket';
+import { driverGeoSocket } from '../../services/driverGeoSocket';
 
 const { height } = Dimensions.get('window');
 
@@ -117,8 +118,12 @@ export default function DriverHomeScreen({ navigation }: any) {
   useEffect(() => {
     if (!isOnline) {
       socketService.off('server:new-trip-request');
+      driverGeoSocket.stop();
       return;
     }
+
+    // GPS por WebSocket (0 pedidos/ping); repõe o canal após reinício da app.
+    driverGeoSocket.start().catch(() => {});
 
     socketService.connect().then(() => {
       socketService.on('server:new-trip-request', (data) => {

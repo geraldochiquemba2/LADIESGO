@@ -48,6 +48,7 @@ export default function TrackDriverScreen({ navigation }: any) {
 
   const latestMyLoc = useRef<{ lat: number; lng: number } | null>(null);
   const driverLocRef = useRef<{ lat: number; lng: number } | null>(null);
+  const tripStatusRef = useRef<string>(currentTrip?.status || 'ACCEPTED');
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
@@ -104,6 +105,7 @@ export default function TrackDriverScreen({ navigation }: any) {
       if (status !== 'granted') return;
 
       await socketService.connect();
+      if (currentTrip?.id) socketService.openTrip(currentTrip.id, 'passenger');
 
       // Stream passenger location in real time
       sub = await Location.watchPositionAsync(
@@ -116,7 +118,8 @@ export default function TrackDriverScreen({ navigation }: any) {
           const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
           latestMyLoc.current = pos;
           setMyLocation(pos);
-          socketService.emit('passenger:location-update', pos);
+          // Após o arranque já não é preciso partilhar a posição (vão juntas).
+          if (tripStatusRef.current !== 'IN_PROGRESS') socketService.emit('passenger:location-update', pos);
           if (driverLocRef.current) loadRoute(pos, driverLocRef.current);
         },
       );
@@ -130,7 +133,7 @@ export default function TrackDriverScreen({ navigation }: any) {
         setEta({ minutes: data.etaMinutes, distanceKm: data.distanceKm });
         setEtaSeconds(data.etaMinutes * 60);
         dispatch(updateDriverLocation({ lat: data.lat, lng: data.lng }));
-        if (data.status) setTripStatus(data.status);
+        if (data.status) { setTripStatus(data.status); tripStatusRef.current = data.status; }
         if (latestMyLoc.current) {
           fitMap(latestMyLoc.current, dLoc);
           loadRoute(latestMyLoc.current, dLoc);
@@ -144,6 +147,7 @@ export default function TrackDriverScreen({ navigation }: any) {
 
       socketService.on('server:trip-update', (data) => {
         setTripStatus(data.status);
+        tripStatusRef.current = data.status;
         dispatch(updateTripStatus({ status: data.status, finalFare: data.finalFare }));
 
         if (data.status === 'COMPLETED') {

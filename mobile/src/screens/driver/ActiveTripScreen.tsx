@@ -116,6 +116,10 @@ export default function ActiveTripScreen({ navigation, route }: any) {
       const { status: perm } = await Location.requestForegroundPermissionsAsync();
       if (perm !== 'granted') return;
       setDriverActiveTrip(true).catch(() => {});
+      if (trip?.id) {
+        await socketService.connect();
+        socketService.openTrip(trip.id, 'driver');
+      }
 
       // Lê paragens guardadas na viagem (se existirem).
       try {
@@ -333,8 +337,8 @@ export default function ActiveTripScreen({ navigation, route }: any) {
           </View>
         </Marker>
 
-        {/* Live passenger location */}
-        {passengerLocation && (
+        {/* Live passenger location — escondida após o arranque (já vão juntas) */}
+        {passengerLocation && status !== 'IN_PROGRESS' && (
           <Marker
             lngLat={[passengerLocation.lng, passengerLocation.lat]}
             anchor="center"

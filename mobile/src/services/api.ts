@@ -1,5 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { driverGeoSocket } from './driverGeoSocket';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
 
@@ -63,8 +64,20 @@ export const usersApi = {
 export const driversApi = {
   register: (data: any) => api.post('/drivers/register', data),
   getStatus: () => api.get('/drivers/status'),
-  toggleOnline: (isOnline: boolean) => api.put('/drivers/toggle-online', { isOnline }),
-  updateLocation: (lat: number, lng: number) => api.put('/drivers/location', { lat, lng }),
+  // Liga/desliga o canal de GPS por WebSocket (0 pedidos/ping). O HTTP
+  // /drivers/location fica como fallback se o WS não estiver ligado.
+  toggleOnline: async (isOnline: boolean) => {
+    const res = await api.put('/drivers/toggle-online', { isOnline });
+    try {
+      if (isOnline) await driverGeoSocket.start();
+      else driverGeoSocket.stop();
+    } catch {}
+    return res;
+  },
+  updateLocation: (lat: number, lng: number) => {
+    if (driverGeoSocket.send(lat, lng)) return Promise.resolve({ data: { ok: true } } as any);
+    return api.put('/drivers/location', { lat, lng });
+  },
   // Aceita os dois formatos: {drivers:[...]} (web/LadiesGo) ou [...] (legado).
   // Normaliza sempre para array com currentLat/currentLng.
   getNearby: async (lat: number, lng: number) => {

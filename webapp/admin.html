@@ -72,7 +72,7 @@
   <button id="admGo">Entrar</button>
 </div>
 <div id="panel" style="display:none">
-<header><b>🦋 LadiesGo! Admin</b><span id="clock"></span><button id="admOut">Sair</button></header>
+<header><b>🦋 LadiesGo! Admin</b><span id="clock"></span><button id="admRefresh" style="margin-left:auto" title="Atualizar agora">⟳ Atualizar</button><button id="admOut" style="margin-left:8px">Sair</button></header>
 <div class="wrap">
   <div class="cards" id="cards"></div>
   <div class="tabs" id="tabs">
@@ -181,7 +181,7 @@ function boot(){
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
   map.attributionControl.setPrefix('© OpenStreetMap');
   layerG=L.layerGroup().addTo(map);map.on('popupopen',e=>{try{openDrv=e.popup&&e.popup._drvId||null}catch(_){}try{openTrip=(e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId)||null}catch(_){}});map.on('popupclose',e=>{try{if(openDrv&&e.popup&&e.popup._drvId===openDrv)openDrv=null}catch(_){}try{if(openTrip&&e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId===openTrip)openTrip=null}catch(_){}});
-  load();setInterval(load,3000);
+  load();
 }
 function tStatusReal(){try{const v=($('fStatus')||{}).value||'';return STM_R[v]||''}catch(e){return''}}
 function paintCards(){
@@ -465,6 +465,9 @@ document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus')){t
 $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('admOut').addEventListener('click',logout);
+$('admRefresh').addEventListener('click',function(){var b=this;b.disabled=true;Promise.resolve(load()).finally(function(){setTimeout(function(){b.disabled=false;},400);});});
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')try{load();}catch(e){}});
+window.addEventListener('focus',function(){try{load();}catch(e){}});
 try{
   const hasTok=(()=>{try{return !!localStorage.getItem('taxi_token');}catch(e){return false;}})();
   if(!hasTok){try{sessionStorage.removeItem('lg_admin');}catch(e){}}

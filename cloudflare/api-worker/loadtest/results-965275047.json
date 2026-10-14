@@ -1,0 +1,299 @@
+{
+  "target": "https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1",
+  "startedAt": "2026-10-14T08:07:55.048Z",
+  "run": "965275047",
+  "config": {
+    "max": 100,
+    "levels": [
+      5,
+      20,
+      50,
+      100
+    ],
+    "out": ""
+  },
+  "levels": [
+    {
+      "n": 5,
+      "total": 5,
+      "succeeded": 5,
+      "failed": 0,
+      "successRate": 100,
+      "wallMs": 4963,
+      "throughputPerMin": 60.5,
+      "lifecycle": {
+        "p50": 4949,
+        "p95": 4964,
+        "max": 4964,
+        "min": 4931.2,
+        "avg": 4947.3
+      },
+      "steps": {
+        "request": {
+          "p50": 2227.6,
+          "p95": 2231.8,
+          "max": 2231.8,
+          "min": 2130.1,
+          "avg": 2205.8
+        },
+        "accept": {
+          "p50": 1313.3,
+          "p95": 1364.1,
+          "max": 1364.1,
+          "min": 1263.8,
+          "avg": 1315.3
+        },
+        "arrived": {
+          "p50": 279.7,
+          "p95": 290.8,
+          "max": 290.8,
+          "min": 264.5,
+          "avg": 277.9
+        },
+        "getPin": {
+          "p50": 271.7,
+          "p95": 275,
+          "max": 275,
+          "min": 260.1,
+          "avg": 268.3
+        },
+        "start": {
+          "p50": 404.9,
+          "p95": 414.6,
+          "max": 414.6,
+          "min": 368,
+          "avg": 393.4
+        },
+        "complete": {
+          "p50": 479.8,
+          "p95": 506.6,
+          "max": 506.6,
+          "min": 477.6,
+          "avg": 486.6
+        }
+      },
+      "errorsByType": {},
+      "failures": []
+    },
+    {
+      "n": 20,
+      "total": 20,
+      "succeeded": 20,
+      "failed": 0,
+      "successRate": 100,
+      "wallMs": 5613,
+      "throughputPerMin": 213.8,
+      "lifecycle": {
+        "p50": 5237.3,
+        "p95": 5506.8,
+        "max": 5614.4,
+        "min": 4864.3,
+        "avg": 5217.4
+      },
+      "steps": {
+        "request": {
+          "p50": 2328.4,
+          "p95": 2684,
+          "max": 2685.4,
+          "min": 2153.4,
+          "avg": 2410.1
+        },
+        "accept": {
+          "p50": 1343,
+          "p95": 1444.9,
+          "max": 1451.2,
+          "min": 1292.4,
+          "avg": 1352.8
+        },
+        "arrived": {
+          "p50": 279.4,
+          "p95": 340.9,
+          "max": 393.7,
+          "min": 257.4,
+          "avg": 289.6
+        },
+        "getPin": {
+          "p50": 277.7,
+          "p95": 342.4,
+          "max": 422.7,
+          "min": 253.9,
+          "avg": 290.3
+        },
+        "start": {
+          "p50": 381.8,
+          "p95": 411.9,
+          "max": 430,
+          "min": 353.3,
+          "avg": 385.2
+        },
+        "complete": {
+          "p50": 485,
+          "p95": 526.5,
+          "max": 539.6,
+          "min": 453.6,
+          "avg": 489.4
+        }
+      },
+      "errorsByType": {},
+      "failures": []
+    },
+    {
+      "n": 50,
+      "total": 50,
+      "succeeded": 50,
+      "failed": 0,
+      "successRate": 100,
+      "wallMs": 6153,
+      "throughputPerMin": 487.6,
+      "lifecycle": {
+        "p50": 5540,
+        "p95": 5840.3,
+        "max": 6153.4,
+        "min": 4915.5,
+        "avg": 5472.4
+      },
+      "steps": {
+        "request": {
+          "p50": 2670.5,
+          "p95": 3070.6,
+          "max": 3221.9,
+          "min": 2256.2,
+          "avg": 2653.3
+        },
+        "accept": {
+          "p50": 1342.3,
+          "p95": 1445.7,
+          "max": 1461,
+          "min": 1292.7,
+          "avg": 1353.8
+        },
+        "arrived": {
+          "p50": 280.7,
+          "p95": 307.3,
+          "max": 388.1,
+          "min": 253.5,
+          "avg": 285.2
+        },
+        "getPin": {
+          "p50": 279.8,
+          "p95": 321,
+          "max": 361.6,
+          "min": 252.6,
+          "avg": 284.8
+        },
+        "start": {
+          "p50": 389.9,
+          "p95": 453.7,
+          "max": 508.5,
+          "min": 353.1,
+          "avg": 397.2
+        },
+        "complete": {
+          "p50": 493.4,
+          "p95": 562.4,
+          "max": 584.1,
+          "min": 460.3,
+          "avg": 498.1
+        }
+      },
+      "errorsByType": {},
+      "failures": []
+    },
+    {
+      "n": 100,
+      "total": 100,
+      "succeeded": 100,
+      "failed": 0,
+      "successRate": 100,
+      "wallMs": 6527,
+      "throughputPerMin": 919.2,
+      "lifecycle": {
+        "p50": 5647.8,
+        "p95": 6410,
+        "max": 6546.3,
+        "min": 4961.2,
+        "avg": 5673.7
+      },
+      "steps": {
+        "request": {
+          "p50": 2822.6,
+          "p95": 3517.3,
+          "max": 3747.9,
+          "min": 2267,
+          "avg": 2827.7
+        },
+        "accept": {
+          "p50": 1342.8,
+          "p95": 1433.4,
+          "max": 1566,
+          "min": 1282.8,
+          "avg": 1352.4
+        },
+        "arrived": {
+          "p50": 277.5,
+          "p95": 350.6,
+          "max": 409.6,
+          "min": 247.7,
+          "avg": 287.9
+        },
+        "getPin": {
+          "p50": 286.3,
+          "p95": 366.2,
+          "max": 427.9,
+          "min": 253.6,
+          "avg": 297.3
+        },
+        "start": {
+          "p50": 391.3,
+          "p95": 457.7,
+          "max": 477.2,
+          "min": 350.2,
+          "avg": 400.9
+        },
+        "complete": {
+          "p50": 496.3,
+          "p95": 580.3,
+          "max": 615.2,
+          "min": 454.3,
+          "avg": 507.6
+        }
+      },
+      "errorsByType": {},
+      "failures": []
+    }
+  ],
+  "ws": {
+    "ok": true,
+    "checks": {
+      "hello": {
+        "received": false,
+        "note": "server did not send hello (DO webSocketOpen not a hibernation handler)"
+      },
+      "pingPong": true,
+      "driverGps": {
+        "got": true,
+        "lat": -8.9,
+        "lng": 13.2
+      },
+      "paxGps": {
+        "got": true
+      },
+      "chat": {
+        "got": true,
+        "text": "LT-ws-hello",
+        "from": "LT-Pax"
+      }
+    }
+  },
+  "cleanup": {
+    "driversOffline": 100
+  },
+  "notes": [],
+  "finishedAt": "2026-10-14T08:09:09.996Z",
+  "durationSec": 74.9,
+  "totalHttpRequests": 1829,
+  "statusCounts": {
+    "200": 1829
+  },
+  "headline": 100
+}
