@@ -1,11 +1,30 @@
 // Estratégia de localizações trazida da web (ladiesgo-home.html):
 // - Luanda como origem padrão, GPS só aceite perto de Luanda (<150 km)
-// - Nome do ponto via /api/zone (backend) com fallback Nominatim
-// - Rota real via /api/route (proxy OSRM) com fallback OSRM direto e
+// - Nome do ponto via /api/zone (backend); Nominatim direto só em último recurso
+// - Rota real via /api/route (proxy OSRM); OSRM direto só 1x em último recurso e
 //   fallback imediato em curva (curvePath) enquanto a rota carrega.
+// - Throttle de rota: máx 1/30s ou 100m de deslocamento.
+// - Tiles CARTO style.json com chave opcional CARTO_KEY (?key= quando preenchida).
 
 export const LUANDA_FIXA: [number, number] = [-8.839, 13.2894]; // [lat, lng]
 export const LUANDA = { latitude: -8.839, longitude: 13.2894 };
+
+// Chave CARTO opcional (criar grátis em carto.com). Quando preenchida,
+// é anexada como ?key= aos URLs de tiles/style.json; vazia = sem chave.
+export const CARTO_KEY = '';
+export function withCartoKey(url: string): string {
+  return CARTO_KEY ? url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(CARTO_KEY) : url;
+}
+// style.json CARTO (Positron) com chave quando existir; usar no MapLibre.
+export function cartoStyleUrl(base = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'): string {
+  return withCartoKey(base);
+}
+
+// Throttle de rota (30s / 100m): evita bloqueios por excesso de chamadas.
+let lastRouteAt = 0;
+let lastRouteFrom: [number, number] | null = null;
+let lastRouteTo: [number, number] | null = null;
+let lastRouteRes: RouteInfo | null = null;
 
 // Compat: alguns ecrãs ainda usam as coordenadas antigas (Riade). Se a
 // posição estiver longe de Luanda, assume-se Luanda.
@@ -72,38 +91,53 @@ export interface RouteInfo {
 }
 
 // Rota real pelas ruas. Devolve a curva imediata se a rede falhar.
+// Throttle: máx 1 chamada/30s salvo deslocamento >=100m; resto reutiliza cache.
 export async function fetchRoute(
   from: [number, number],
   to: [number, number],
 ): Promise<RouteInfo> {
   const fallback = curvePath(from, to);
   try {
+    if (
+      lastRouteRes && lastRouteFrom && lastRouteTo &&
+      Date.now() - lastRouteAt < 30000 &&
+      havKm(lastRouteFrom, from) * 1000 < 100 &&
+      havKm(lastRouteTo, to) * 1000 < 100
+    ) {
+      return lastRouteRes;
+    }
+  } catch {}
+  try {
     const r = await fetch(
       `${apiRoot()}/api/route?from=${from[0]},${from[1]}&to=${to[0]},${to[1]}`,
     );
     const j = await r.json();
     if (j?.points?.length) {
-      return {
+      const hit: RouteInfo = {
         points: j.points,
         distanceKm: typeof j.distance_m === 'number' ? j.distance_m / 1000 : null,
         durationMin: typeof j.duration_s === 'number' ? j.duration_s / 60 : null,
         real: true,
       };
+      try { lastRouteAt = Date.now(); lastRouteFrom = from; lastRouteTo = to; lastRouteRes = hit; } catch {}
+      return hit;
     }
   } catch {}
-  // Fallback: OSRM público direto (como na web)
+  // Último recurso: 1 tentativa OSRM direta só após falha do proxy (evita bloqueios)
   try {
     const q = `${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`;
     const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${q}`);
     const j = await r.json();
     const g = j?.routes?.[0]?.geometry?.coordinates;
     if (g?.length) {
-      return {
+      const hit: RouteInfo = {
         points: g.map((p: number[]) => [p[1], p[0]] as [number, number]),
         distanceKm: typeof j.routes[0]?.distance === 'number' ? j.routes[0].distance / 1000 : null,
         durationMin: typeof j.routes[0]?.duration === 'number' ? j.routes[0].duration / 60 : null,
         real: true,
       };
+      try { lastRouteAt = Date.now(); lastRouteFrom = from; lastRouteTo = to; lastRouteRes = hit; } catch {}
+      return hit;
     }
   } catch {}
   return { points: fallback, distanceKm: null, durationMin: null, real: false };
@@ -131,6 +165,7 @@ export async function fetchRouteLegs(waypoints: [number, number][]): Promise<Rou
 }
 
 // Nome da zona (bairro/município) para mostrar na UI.
+// Proxy primeiro; Nominatim direto só em último recurso (1 tentativa).
 export async function fetchZone(lat: number, lng: number): Promise<string> {
   try {
     const r = await fetch(`${apiRoot()}/api/zone?lat=${lat}&lng=${lng}`);
@@ -158,7 +193,7 @@ export interface PlaceHit {
 }
 
 // Pesquisa de moradas: primeiro o índice LadiesGo no backend (23k+ locais,
-// instantâneo e com os nossos nomes), Nominatim só como fallback.
+// instantâneo e com os nossos nomes); Nominatim direto só em último recurso.
 export async function searchPlaces(
   q: string,
   near?: { latitude: number; longitude: number },

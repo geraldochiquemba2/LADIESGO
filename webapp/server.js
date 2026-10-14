@@ -372,6 +372,35 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Pesquisa de locais (proxy server-side para o browser nunca falar direto ao Nominatim)
+  if (req.url.startsWith('/api/places/search') && req.method === 'GET') {
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      const q = String(u.searchParams.get('q') || '').trim();
+      const la = Number(u.searchParams.get('lat')), lo = Number(u.searchParams.get('lng'));
+      if (q.length < 3 || !Number.isFinite(la) || !Number.isFinite(lo)) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' });
+        res.end(JSON.stringify({ places: [] }));
+        return;
+      }
+      try {
+        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=20&countrycodes=ao&viewbox=13.05,-8.70,13.55,-9.05&bounded=1&accept-language=pt&q=' + encodeURIComponent(q);
+        const r = await fetch(url, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
+        const j = await r.json();
+        const places = (Array.isArray(j) ? j : []).map((p) => ({ name: String((p.display_name || '').split(',').slice(0, 3).join(',') || q), lat: Number(p.lat), lng: Number(p.lon), municipality: '', province: 'Luanda' })).filter((p) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' });
+        res.end(JSON.stringify({ places }));
+      } catch (e) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' });
+        res.end(JSON.stringify({ places: [] }));
+      }
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ message: 'Pedido inválido.' }));
+    }
+    return;
+  }
+
     // Painel admin (demo em memória)
   if (req.url.startsWith('/api/v1/admin/') && req.method === 'GET') {
     const apath = req.url.split('?')[0];
