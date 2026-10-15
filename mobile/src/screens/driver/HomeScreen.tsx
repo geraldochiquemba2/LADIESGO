@@ -72,7 +72,26 @@ export default function DriverHomeScreen({ navigation }: any) {
       return;
     }
 
-    let lastRestTs = 0;
+    // Envio por distância + heartbeat: parada -> 1 envio + 60 s; moveu >=20 m -> envia.
+    // updateLocation usa o WebSocket (0 pedidos/ping); REST só como fallback do socket.
+    let lastPos: { lat: number; lng: number } | null = null;
+    let lastSentAt = 0;
+    let lastSentPos: { lat: number; lng: number } | null = null;
+    const distM = (aLat: number, aLng: number, bLat: number, bLng: number) => {
+      const R = 6371000;
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const dLat = toRad(bLat - aLat);
+      const dLng = toRad(bLng - aLng);
+      const s =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(s));
+    };
+    const push = (lat: number, lng: number) => {
+      driversApi.updateLocation(lat, lng).catch(() => {});
+      lastSentAt = Date.now();
+      lastSentPos = { lat, lng };
+    };
     const startWatching = async () => {
       locationSubRef.current = await Location.watchPositionAsync(
         {
@@ -83,6 +102,7 @@ export default function DriverHomeScreen({ navigation }: any) {
         (loc) => {
           const pos = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
           const h = loc.coords.heading ?? -1;
+          lastPos = { lat: pos.latitude, lng: pos.longitude };
           setLocation(pos);
           setHeading(h);
           socketService.emit('driver:location-update', {
@@ -90,11 +110,12 @@ export default function DriverHomeScreen({ navigation }: any) {
             lng: pos.longitude,
             heading: h,
           });
-          // REST throttled 10s (Cloudflare Workers: sem socket, o polling usa isto).
           const now = Date.now();
-          if (now - lastRestTs >= 10000) {
-            lastRestTs = now;
-            driversApi.updateLocation(pos.latitude, pos.longitude).catch(() => {});
+          const moved = lastSentPos
+            ? distM(lastSentPos.lat, lastSentPos.lng, pos.latitude, pos.longitude)
+            : Infinity;
+          if (moved >= 20 || now - lastSentAt >= 60000) {
+            push(pos.latitude, pos.longitude);
           }
           // Smoothly follow driver on map
           cameraRef.current?.easeTo({
@@ -108,7 +129,13 @@ export default function DriverHomeScreen({ navigation }: any) {
 
     startWatching();
 
+    // Heartbeat: mantém a carro visível mesmo parada (a cada 60 s).
+    const hb = setInterval(() => {
+      if (lastPos && Date.now() - lastSentAt >= 60000) push(lastPos.lat, lastPos.lng);
+    }, 20000);
+
     return () => {
+      clearInterval(hb);
       locationSubRef.current?.remove();
       locationSubRef.current = null;
     };

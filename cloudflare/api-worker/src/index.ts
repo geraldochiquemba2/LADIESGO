@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { makeSql as neon, d1metrics, resetD1Metrics } from './db';
 
-type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; DEBUG_KEY?: string };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -243,11 +243,18 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));
+  // Foto de perfil (data URL) enviada pela própria utilizadora.
+  let photo: string | null = null;
+  if (body?.profilePhoto != null) {
+    photo = String(body.profilePhoto);
+    if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(photo)) return c.json({ message: 'Foto invalida.' }, 400);
+    if (photo.length > 2 * 1024 * 1024) return c.json({ message: 'Foto demasiado grande.' }, 413);
+  }
   // Token único por aparelho: limpa-o das outras contas (senão o próprio recebe os pushes).
   if (body?.fcmToken) {
     try { await sql`UPDATE users SET "fcmToken" = NULL, "updatedAt" = NOW() WHERE "fcmToken" = ${body.fcmToken} AND id != ${user.sub}`; } catch {}
   }
-  const rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "updatedAt" = NOW() WHERE id = ${user.sub} RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
+  const rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "profilePhoto" = COALESCE(${photo}, "profilePhoto"), "updatedAt" = NOW() WHERE id = ${user.sub} RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
   return c.json(rows[0] || {});
 });
 // DELETE /api/v1/users/push-token — Logout: este aparelho deixa de receber pushes + motorista fica offline
@@ -285,9 +292,30 @@ app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const { isOnline } = await c.req.json().catch(() => ({}));
+  if (isOnline) {
+    const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${user.sub} LIMIT 1`;
+    if (w.length && Number(w[0].walletBlocked || 0)) return c.json({ message: 'Saldo negativo. Carrega a tua conta para voltares a ficar online.' }, 403);
+  }
   const rows = await sql`UPDATE drivers SET "isOnline" = ${!!isOnline}, "updatedAt" = NOW() WHERE "userId" = ${user.sub} RETURNING "isOnline"`;
   if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
   return c.json({ isOnline: !!rows[0].isOnline });
+});
+// GET /api/v1/drivers/wallet — saldo/pontos, viagens negativas e extrato do motorista
+app.get('/api/v1/drivers/wallet', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const u = await sql`SELECT "walletBalance", "negTrips", "walletBlocked", phone FROM users WHERE id = ${user.sub} LIMIT 1`;
+  if (!u.length) return c.json({ message: 'Conta não encontrada.' }, 404);
+  const tx = await sql`SELECT type, amount, "balanceAfter", "tripId", "createdAt" FROM wallet_tx WHERE "userId" = ${user.sub} ORDER BY "createdAt" DESC LIMIT 30`;
+  return c.json({
+    balance: money(u[0].walletBalance),
+    negTrips: Number(u[0].negTrips || 0),
+    limit: NEG_TRIP_LIMIT,
+    blocked: !!Number(u[0].walletBlocked || 0),
+    phone: u[0].phone,
+    commissionRate: COMMISSION_RATE,
+    transactions: tx.map((t: any) => ({ ...t, amount: money(t.amount), balanceAfter: money(t.balanceAfter) })),
+  });
 });
 // GPS adaptativo do mobile (5s viagem / 10s idle) escreve aqui. Sem socket.
 // A posição vai para o DO DriverGeo (memória) — 0 escritas D1 por ping.
@@ -470,7 +498,7 @@ app.post('/api/v1/trips/request', requireAuth, async (c) => {
   const dist = havKm(Number(b.pickupLat), Number(b.pickupLng), Number(b.dropoffLat), Number(b.dropoffLng));
   const { mults, byCode } = await catMaps(sql);
   const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (mults[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
-  // Oferta sequencial por proximidade (15s cada); sem candidatas abre a todas.
+  // Oferta sequencial por proximidade (30s cada); sem candidatas abre a todas.
   // Calculada ANTES do INSERT para não haver um UPDATE a mais por viagem.
   let q: string[] = [];
   try { q = await buildOfferQueue(c.env, sql, Number(b.pickupLat), Number(b.pickupLng), String(b.rideType || 'ECONOMY')); } catch {}
@@ -492,8 +520,9 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
     const { byCode } = await catMaps(sql);
     let myCats: string[] | null = null;
     try {
-      const dr = await sql`SELECT cats FROM drivers WHERE id = ${did} LIMIT 1`;
-      if (dr.length && Array.isArray(dr[0].cats) && dr[0].cats.length) myCats = dr[0].cats.map((x: any) => String(x));
+      const dr = await sql`SELECT cats, "isOnline" FROM drivers WHERE id = ${did} LIMIT 1`;
+      if (!dr.length || !dr[0].isOnline) return c.json({ trips: [] });
+      if (Array.isArray(dr[0].cats) && dr[0].cats.length) myCats = dr[0].cats.map((x: any) => String(x));
     } catch {}
     const rows = await sql`
       SELECT t.*, u.name AS passenger_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
@@ -507,7 +536,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
       seen.add(r.passengerId);
       if (myCats && myCats.indexOf(byCode[r.rideType] || '') < 0) continue;
       if (offerSkippedOf(r).indexOf(did) >= 0) continue;
-      // Oferta sequencial: só a motorista ofertada vê (15s cada, mais
+      // Oferta sequencial: só a motorista ofertada vê (30s cada, mais
       // próxima primeiro). Viagens antigas sem fila contam como broadcast.
       const q = offerQueueOf(r);
       if (!q.length && !r.offeredDriverId) {
@@ -515,10 +544,8 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
         continue;
       }
       if (!r.offerBroadcast) {
-        r = await advanceOfferIfNeeded(sql, r, {
-          title: '🔔 Novo pedido LadiesGo!',
-          body: `${String(r.pickupAddress || 'Ponto no mapa')} → ${String(r.dropoffAddress || '').split(' · ')[0]} · ${Number(r.fareEstimate || 0)} Kz`,
-        });
+        // Rotação silenciosa: o push é dado pelo toca-toca (4s), não a cada rotação.
+        r = await advanceOfferIfNeeded(c.env, sql, r);
         if (offerSkippedOf(r).indexOf(did) >= 0) continue;
         if (r.offerBroadcast) {
           out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
@@ -674,7 +701,7 @@ function hubPoke(c: any, cats?: string[]) {
 // 1 DO global guarda { userId → { driverId, lat, lng, cats, ts, online } }.
 // As escritas de GPS deixam de tocar na D1 (0 escritas/ping); a D1 fica só
 // com o registo autoritativo da viagem. Frescura lógica de 5min na leitura.
-const GEO_TTL_MS = 5 * 60 * 1000;
+const GEO_TTL_MS = 18 * 60 * 1000;
 function geoStub(env: any): any {
   try { const ns: any = (env as any).DRIVERGEO; return ns && ns.get ? ns.get(ns.idFromName('geo:global')) : null; } catch { return null; }
 }
@@ -749,10 +776,10 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const t = rows[0];
   if (c.req.query('view') === 'web') {
     const drv = await webDriverInfo(c.env, sql, t.driverId);
-    const pu = await sql`SELECT name, phone FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    const pu = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
   }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
   const liveD = t.driverUserId ? await geoGet(c.env, String(t.driverUserId)) : null;
@@ -772,6 +799,39 @@ async function driverIdFor(sql: any, userId: string) {
   const r = await sql`SELECT id FROM drivers WHERE "userId" = ${userId} LIMIT 1`;
   return r[0]?.id as string | undefined;
 }
+// ─── Carteira / pontos do motorista ───────────────────────────────────────
+// Cada viagem concluida debita 14% do valor final (finalFare) da carteira.
+// Saldo negativo permitido; ao atingir NEG_TRIP_LIMIT viagens negativas a conta
+// fica bloqueada (walletBlocked=1) e a motorista e posta offline ate carregar.
+const COMMISSION_RATE = 0.14;
+const NEG_TRIP_LIMIT = 3;
+function money(n: any): number { return Math.round(Number(n || 0) * 100) / 100; }
+async function applyCommission(sql: any, driverRowId: string, fare: any, tripId: string) {
+  try {
+    if (!driverRowId) return;
+    const f = Number(fare || 0);
+    if (!(f > 0)) return;
+    const du = await sql`SELECT "userId" FROM drivers WHERE id = ${driverRowId} LIMIT 1`;
+    const userId = du[0]?.userId;
+    if (!userId) return;
+    const u = await sql`SELECT "walletBalance", "negTrips" FROM users WHERE id = ${userId} LIMIT 1`;
+    if (!u.length) return;
+    const before = Number(u[0].walletBalance || 0);
+    const commission = money(f * COMMISSION_RATE);
+    const after = money(before - commission);
+    let negTrips = Number(u[0].negTrips || 0);
+    let blocked = 0;
+    if (after < 0) {
+      negTrips = negTrips + 1;
+      if (negTrips >= NEG_TRIP_LIMIT) blocked = 1;
+    } else {
+      negTrips = 0;
+    }
+    await sql`UPDATE users SET "walletBalance" = ${after}, "negTrips" = ${negTrips}, "walletBlocked" = ${blocked}, "updatedAt" = NOW() WHERE id = ${userId}`;
+    await sql`INSERT INTO wallet_tx (id, "userId", type, amount, "balanceAfter", "tripId", note, "createdAt") VALUES (gen_random_uuid()::text, ${userId}, 'COMMISSION', ${-commission}, ${after}, ${tripId}, ${'Comissao 14% da viagem'}, NOW())`;
+    if (blocked) await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
+  } catch (e) { console.error('commission error:', e); }
+}
 app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
@@ -784,7 +844,7 @@ app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
   try {
     let t: any = cur[0];
     if (!t.offerBroadcast && (offerQueueOf(t).length || t.offeredDriverId)) {
-      t = await advanceOfferIfNeeded(sql, t);
+      t = await advanceOfferIfNeeded(c.env, sql, t);
       if (!t.offerBroadcast && String(t.offeredDriverId || '') !== did) {
         return c.json({ message: 'Esta oferta já passou para outra motorista.' }, 409);
       }
@@ -868,6 +928,7 @@ app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
   const t = cur[0];
   const rows = await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
   if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
+  await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id);
   pushStatus(c, id, 'COMPLETED');
   return c.json(rows[0]);
 });
@@ -1043,24 +1104,107 @@ app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
 });
 
 // ─── PLACES / ZONE / ROUTE (sem BD, com cache edge) ───
+// Normaliza texto para pesquisa (minúsculas, sem acentos).
+function fold(s: string): string {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+// Categoria legível a partir do tipo (códigos internos do dataset Yango).
+function placeCat(t: string): string {
+  const b = String(t || '').split('[')[0].trim().toLowerCase();
+  if (!b) return 'Local';
+  if (/^(12 portas|13 addr|kb-porta)/.test(b)) return 'Morada';
+  if (/^14 entradas/.test(b)) return 'Edifício';
+  if (/^15 nos-nomeados/.test(b)) return 'Local';
+  if (/^10 condominios/.test(b)) return 'Condomínio';
+  if (/municipio/.test(b)) return 'Município';
+  if (b === 'yes') return 'Local';
+  if (/(neighbourhood|suburb|quarter)/.test(b)) return 'Bairro';
+  if (b === 'square') return 'Praça';
+  if (/bureau_de_change/.test(b)) return 'Câmbio';
+  if (/(restaurant|fast_food|bakery|food|cafe)/.test(b) || b === 'bar') return 'Restaurante';
+  if (/(bank|atm)/.test(b)) return 'Banco';
+  if (/(car_parts|car_repair|tyres|fuel|motorcycle)/.test(b) || b === 'car') return 'Automóvel';
+  if (/parking/.test(b)) return 'Estacionamento';
+  if (/(hairdresser|beauty|cosmetic)/.test(b)) return 'Beleza';
+  if (/(convenience|supermarket|kiosk|butcher|greengrocer|marketplace)/.test(b)) return 'Mercado';
+  if (/(clinic|pharmacy|hospital|dentist|doctor|health)/.test(b)) return 'Saúde';
+  if (/(clothes|shoes|furniture|electronics|mobile_phone|doityourself|jewel|hardware|florist|gift|optician)/.test(b)) return 'Loja';
+  if (/(school|college|university|educational|kindergarten|library)/.test(b)) return 'Escola';
+  if (/(place_of_worship|church|mosque)/.test(b)) return 'Igreja';
+  if (/(government|diplomatic|police|townhall|embassy|administrative)/.test(b)) return 'Serviço público';
+  if (/(hotel|hostel|guest|motel)/.test(b)) return 'Hotel';
+  if (/(taxi|bus_stop|bus_station|transport|aeroway|aerodrome)/.test(b)) return 'Transporte';
+  if (/(company|office|insurance|lawyer|consulting|logistics)/.test(b)) return 'Empresa';
+  if (/(residential|tertiary|secondary|trunk|primary|unclassified|service|motorway|living_street|pedestrian|road)/.test(b)) return 'Rua';
+  return b.charAt(0).toUpperCase() + b.slice(1);
+}
+// Pesquisa na base local de places (índice Yango GOD, 23k+ locais de Luanda):
+// relevância por prefixo do nome + proximidade à localização do utilizador.
+async function localPlaces(c: any, q: string, lat: number, lng: number): Promise<any[]> {
+  try {
+    const sql = neon(c.env.DB);
+    const tf = fold(q);
+    const rows: any[] = await sql`
+      SELECT name, lat, lng, type, municipality, province, street, "number",
+        CASE WHEN nname LIKE ${tf + '%'} THEN 1 ELSE 0 END AS pfx
+      FROM places
+      WHERE norm LIKE ${'%' + tf + '%'}
+      LIMIT 400
+    `;
+    const out = rows.map((r: any) => {
+      const type = String(r.type || '');
+      const base = type.split('[')[0].trim();
+      let name = String(r.name || '').trim();
+      if (!name || name === base || name.startsWith(base) || /^\d+\s+(portas|addr)/i.test(name) || /^kb-porta/i.test(name)) {
+        const st = String(r.street || '').trim(), num = String(r.number || '').trim();
+        name = st && num ? `${st}, nº ${num}` : (st || (num ? `Nº ${num}` : 'Morada'));
+      }
+      return {
+        name,
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        cat: placeCat(type),
+        municipality: String(r.municipality || ''),
+        province: String(r.province || 'Luanda'),
+        street: String(r.street || ''),
+        distanceKm: Math.round(havKm(lat, lng, Number(r.lat), Number(r.lng)) * 10) / 10,
+        _p: Number(r.pfx) || 0,
+      };
+    }).filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+    out.sort((a: any, b: any) => (b._p - a._p) || (a.distanceKm - b.distanceKm));
+    const seen = new Set<string>();
+    const dedup = out.filter((p: any) => {
+      const k = p.name.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    return dedup.slice(0, 15).map((p: any) => { delete p._p; return p; });
+  } catch { return []; }
+}
 app.get('/api/places/search', async (c) => {
   const q = String(c.req.query('q') || '').trim();
   const lat = Number(c.req.query('lat'));
   const lng = Number(c.req.query('lng'));
-  const v = Number(c.req.query('v') || '0');
   if (q.length < 3 || !Number.isFinite(lat) || !Number.isFinite(lng)) {
     return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
   }
-  const pkey = 'places:' + q.toLowerCase() + ':' + Math.round(lat * 1000) / 1000 + ',' + Math.round(lng * 1000) / 1000;
+  const pkey = 'places:v8:' + q.toLowerCase() + ':' + Math.round(lat * 1000) / 1000 + ',' + Math.round(lng * 1000) / 1000;
   const phit = await cacheGet(c, pkey);
   if (phit) return phit;
+  // Base local primeiro: instantâneo, offline e com distância à localização.
+  const local: any[] = await localPlaces(c, q, lat, lng);
+  if (local.length >= 1) return cachePut(c, pkey, 604800, { places: local });
   try {
-    // Photon primeiro (livre, sem chave); Nominatim a seguir.
-    try {
-      const pr = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lat=${lat}&lon=${lng}&limit=20&lang=pt`, { signal: AbortSignal.timeout(8000) });
-      const pj: any = await pr.json();
-      const feats = Array.isArray(pj?.features) ? pj.features : [];
-      if (feats.length) {
+    // Photon e Nominatim em paralelo: devolve o primeiro com resultados.
+    // (Antes eram em série — esperava até 8s pelo Photon antes de cair no
+    // Nominatim, o que atrasava a pesquisa.)
+    const photon = (async () => {
+      try {
+        const pr = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lat=${lat}&lon=${lng}&limit=20&lang=pt`, { signal: AbortSignal.timeout(8000) });
+        const pj: any = await pr.json();
+        const feats = Array.isArray(pj?.features) ? pj.features : [];
+        if (!feats.length) return null;
         const R = 6371, t = Math.PI / 180;
         const pplaces = feats.map((f: any) => {
           const co = f?.geometry?.coordinates || [];
@@ -1068,41 +1212,50 @@ app.get('/api/places/search', async (c) => {
           const pp = f?.properties || {};
           const dLa = (plat - lat) * t, dLo = (plng - lng) * t;
           const s = Math.sin(dLa / 2) ** 2 + Math.cos(lat * t) * Math.cos(plat * t) * Math.sin(dLo / 2) ** 2;
-          return { name: String(pp.name || q), lat: plat, lng: plng, municipality: String(pp.city || pp.county || ''), province: String(pp.state || 'Luanda'), distanceKm: Math.round(2 * R * Math.asin(Math.sqrt(s)) * 10) / 10 };
+          return { name: String(pp.name || q), lat: plat, lng: plng, cat: placeCat(String([pp.osm_key, pp.osm_value, pp.type].filter(Boolean).join('/'))), municipality: String(pp.city || pp.county || ''), province: String(pp.state || 'Luanda'), distanceKm: Math.round(2 * R * Math.asin(Math.sqrt(s)) * 10) / 10 };
         }).filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
-        if (pplaces.length) return cachePut(c, pkey, 604800, { places: pplaces });
-      }
-    } catch {}
-    // Nominatim search limitado a Luanda (viewbox + bounded), igual ao fallback do mobile
-    const url =
-      `https://nominatim.openstreetmap.org/search?format=json&limit=30&countrycodes=ao` +
-      `&viewbox=13.05,-8.70,13.55,-9.05&bounded=1` +
-      `&accept-language=pt&q=${encodeURIComponent(q)}`;
-    const r = await fetch(url, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
-    const j: any = await r.json();
-    if (!Array.isArray(j)) throw new Error('nominatim');
-    const places = j
-      .map((p: any) => {
-        const plat = Number(p.lat);
-        const plng = Number(p.lon);
-        // Distância em km (haversine)
-        const R = 6371, t = Math.PI / 180;
-        const dLa = (plat - lat) * t, dLo = (plng - lng) * t;
-        const s = Math.sin(dLa / 2) ** 2 + Math.cos(lat * t) * Math.cos(plat * t) * Math.sin(dLo / 2) ** 2;
-        const distKm = 2 * R * Math.asin(Math.sqrt(s));
-        return {
-          name: String(p.display_name?.split(',').slice(0, 3).join(',') || p.display_name || q),
-          lat: plat,
-          lng: plng,
-          municipality: '',
-          province: 'Luanda',
-          distanceKm: Math.round(distKm * 10) / 10,
-        };
-      })
-      .filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
-    return cachePut(c, pkey, 604800, { places });
+        return pplaces.length ? pplaces : null;
+      } catch { return null; }
+    })();
+    const nominatim = (async () => {
+      try {
+        const url =
+          `https://nominatim.openstreetmap.org/search?format=json&limit=30&countrycodes=ao` +
+          `&viewbox=13.05,-8.70,13.55,-9.05&bounded=1` +
+          `&accept-language=pt&q=${encodeURIComponent(q)}`;
+        const r = await fetch(url, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(8000) });
+        const j: any = await r.json();
+        if (!Array.isArray(j)) return null;
+        const places = j.map((p: any) => {
+          const plat = Number(p.lat);
+          const plng = Number(p.lon);
+          const R = 6371, t = Math.PI / 180;
+          const dLa = (plat - lat) * t, dLo = (plng - lng) * t;
+          const s = Math.sin(dLa / 2) ** 2 + Math.cos(lat * t) * Math.cos(plat * t) * Math.sin(dLo / 2) ** 2;
+          const distKm = 2 * R * Math.asin(Math.sqrt(s));
+          return {
+            name: String(p.display_name?.split(',').slice(0, 2).join(',') || p.display_name || q),
+            lat: plat, lng: plng, cat: placeCat(String([p.class, p.type].filter(Boolean).join('/'))), municipality: '', province: 'Luanda',
+            distanceKm: Math.round(distKm * 10) / 10,
+          };
+        }).filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        return places.length ? places : null;
+      } catch { return null; }
+    })();
+    const places = await new Promise<any[] | null>((resolve) => {
+      let done = false, pend = 2;
+      const take = (r: any[] | null) => {
+        if (done) return;
+        if (r && r.length) { done = true; resolve(r); }
+        else if (--pend === 0) { done = true; resolve(null); }
+      };
+      photon.then(take, () => take(null));
+      nominatim.then(take, () => take(null));
+    });
+    const ext = (places || []).filter((p: any) => !local.some((l: any) => l.name === p.name));
+    return cachePut(c, pkey, 604800, { places: local.concat(ext).slice(0, 20) });
   } catch {
-    return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
+    return cachePut(c, pkey, 604800, { places: local });
   }
 });
 // Fallback offline: Nominatim e bigdatacloud limitam IPs de datacenter
@@ -1350,7 +1503,7 @@ app.get('/api/v1/admin/driver-stats', adminMiddleware, async (c) => {
 app.get('/api/v1/admin/drivers', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
   const driversRes = await sql`
-    SELECT d.*, u.name, u.phone
+    SELECT d.*, u.name, u.phone, u."profilePhoto"
     FROM drivers d
     JOIN users u ON u.id = d."userId"
     WHERE d.status = 'APPROVED'
@@ -1435,6 +1588,87 @@ app.post('/api/v1/admin/users/:id/reset-password', adminMiddleware, async (c) =>
   return c.json({ success: true });
 });
 
+// POST /api/v1/admin/wallet/credit — Carregar a conta de um motorista (numero + valor pago)
+// O valor soma-se à carteira; se havia saldo negativo o carregamento desconta-o.
+// Carregar com saldo >= 0 desbloqueia a conta (walletBlocked=0, negTrips=0).
+app.post('/api/v1/admin/wallet/credit', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const b = await c.req.json().catch(() => ({}));
+  const dg = String(b?.phone || '').replace(/\D/g, '');
+  const local = dg.indexOf('244') === 0 ? dg.slice(3) : dg;
+  const amount = Number(b?.amount);
+  if (!/^9[123459]\d{7}$/.test(local)) return c.json({ message: 'Número angolano inválido: 9XX XXX XXX.' }, 400);
+  if (!(amount > 0)) return c.json({ message: 'Valor inválido.' }, 400);
+  const rows = await sql`SELECT id, name, phone, role, "walletBalance", "negTrips", "walletBlocked" FROM users WHERE phone = ${'+244' + local} AND "isActive" = true LIMIT 1`;
+  if (!rows.length) return c.json({ message: 'Conta não encontrada.' }, 404);
+  const u = rows[0];
+  if (String(u.role) !== 'DRIVER') return c.json({ message: 'Esta conta não é de motorista.' }, 400);
+  const before = money(u.walletBalance);
+  const after = money(before + amount);
+  const blocked = after < 0 ? 1 : 0;
+  const negTrips = after < 0 ? Number(u.negTrips || 0) : 0;
+  const admin = c.get('user');
+  await sql`UPDATE users SET "walletBalance" = ${after}, "negTrips" = ${negTrips}, "walletBlocked" = ${blocked}, "updatedAt" = NOW() WHERE id = ${u.id}`;
+  await sql`INSERT INTO wallet_tx (id, "userId", type, amount, "balanceAfter", note, "createdAt") VALUES (gen_random_uuid()::text, ${u.id}, 'TOPUP', ${money(amount)}, ${after}, ${'Carregamento admin ' + String(admin?.sub || '')}, NOW())`;
+  return c.json({ ok: true, user: { id: u.id, name: u.name, phone: u.phone }, before, after, blocked: !!blocked, negTrips });
+});
+
+// GET /api/v1/admin/wallet — Lista carteiras de motoristas (saldo/negativas/bloqueio)
+app.get('/api/v1/admin/wallet', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const q = String(c.req.query('q') || '').replace(/\D/g, '');
+  const rows = q
+    ? await sql`SELECT id, name, phone, "walletBalance", "negTrips", "walletBlocked" FROM users WHERE role = 'DRIVER' AND phone LIKE ${'%' + q} ORDER BY "walletBalance" ASC LIMIT 100`
+    : await sql`SELECT id, name, phone, "walletBalance", "negTrips", "walletBlocked" FROM users WHERE role = 'DRIVER' ORDER BY "walletBalance" ASC LIMIT 100`;
+  return c.json({ wallets: rows.map((r: any) => ({ id: r.id, name: r.name, phone: r.phone, balance: money(r.walletBalance), negTrips: Number(r.negTrips || 0), blocked: !!Number(r.walletBlocked || 0) })) });
+});
+
+// ─── Foto de perfil via admin (+ registo no canal Telegram) ───────────────
+// O admin carrega a foto (motorista ou passageira) no painel; guarda-se em
+// users."profilePhoto" e, se TG_BOT_TOKEN + TG_CHAT_ID estiverem definidos
+// (wrangler secret put), a mesma foto vai para o canal Telegram como registo.
+// Os segredos nunca ficam no repo: só o Worker os lê.
+async function tgSendPhoto(env: any, dataUrl: string, caption: string): Promise<boolean> {
+  try {
+    const tok = String(env?.TG_BOT_TOKEN || env?.TELEGRAM_BOT_TOKEN || '');
+    const chat = String(env?.TG_CHAT_ID || env?.TELEGRAM_CHAT_ID || '');
+    if (!tok || !chat) return false;
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i.exec(String(dataUrl || ''));
+    if (!m) return false;
+    const bin = Uint8Array.from(atob(m[2]), (ch: any) => ch.charCodeAt(0));
+    const fd = new FormData();
+    fd.append('chat_id', chat);
+    if (caption) fd.append('caption', caption.slice(0, 1000));
+    fd.append('photo', new Blob([bin as any], { type: m[1] }), 'foto.jpg');
+    const r = await fetch(`https://api.telegram.org/bot${tok}/sendPhoto`, { method: 'POST', body: fd, signal: AbortSignal.timeout(15000) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+// PUT /api/v1/admin/users/:id/photo — Admin define a foto de perfil (qualquer conta)
+app.put('/api/v1/admin/users/:id/photo', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  const b = await c.req.json().catch(() => ({}));
+  const photo = String(b.photo || '');
+  if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(photo)) return c.json({ message: 'Foto invalida.' }, 400);
+  if (photo.length > 2 * 1024 * 1024) return c.json({ message: 'Foto demasiado grande.' }, 413);
+  const rows = await sql`UPDATE users SET "profilePhoto" = ${photo}, "updatedAt" = NOW() WHERE id = ${id} RETURNING id, name, phone, role`;
+  if (!rows.length) return c.json({ message: 'Utilizador nao encontrado.' }, 404);
+  const u = rows[0];
+  const tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
+  if (tgOn) {
+    const caption = `LadiesGo · foto de ${u.name || u.phone || ''} (${u.role || ''})`;
+    try {
+      c.executionCtx.waitUntil(tgSendPhoto(c.env, photo, caption).catch(() => false));
+    } catch {
+      tgSendPhoto(c.env, photo, caption).catch(() => false);
+    }
+  }
+  return c.json({ success: true, telegram: tgOn });
+});
+
 // GET /api/v1/admin/drivers/pending — Pending driver registrations
 app.get('/api/v1/admin/drivers/pending', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
@@ -1481,7 +1715,7 @@ app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
     INSERT INTO drivers (id, "userId", "licenseNumber", "carPlate", "carMake", "carModel", "carYear", "carColor", status, "updatedAt")
     VALUES (gen_random_uuid()::text, ${userId}, ${licenseNumber || null}, ${carPlate || null}, ${carMake || null}, ${carModel || null}, ${carYear || null}, ${carColor || null}, ${driverStatus}, NOW())
   `;
-  return c.json({ success: true, driverStatus, password: '0987654321' });
+  return c.json({ success: true, userId, driverStatus, password: '0987654321' });
 });
 
 // ─── MISSING MOBILE APP ENDPOINTS ───
@@ -1531,6 +1765,10 @@ app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const { isOnline } = await c.req.json().catch(() => ({}));
+  if (isOnline) {
+    const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${user.sub} LIMIT 1`;
+    if (w.length && Number(w[0].walletBlocked || 0)) return c.json({ message: 'Saldo negativo. Carrega a tua conta para voltares a ficar online.' }, 403);
+  }
   const rows = await sql`
     UPDATE drivers SET "isOnline" = ${!!isOnline}, "updatedAt" = NOW()
     WHERE "userId" = ${user.sub}
@@ -1709,10 +1947,10 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const t = rows[0];
   if (c.req.query('view') === 'web') {
     const drv = await webDriverInfo(c.env, sql, t.driverId);
-    const pu = await sql`SELECT name, phone FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    const pu = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
   }
   let driver = null;
   if (t.driverId) {
@@ -1812,6 +2050,7 @@ app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
       WHERE id = ${t.driverId}
     `;
   }
+  await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id);
   return c.json(rows[0]);
 });
 
@@ -1946,7 +2185,7 @@ function pay2method(p: any): string {
 // Posição viva da passageira (efémera; como no server.js local).
 const paxLive = new Map<string, { lat: number; lng: number; ts: number }>();
 
-function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) => string, paxPhone?: string) {
+function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) => string, paxPhone?: string, paxPhoto?: string) {
   const addr = String(r.dropoffAddress || 'Luanda');
   const cut = addr.indexOf(' · ');
   const destN = cut >= 0 ? addr.slice(0, cut) : addr;
@@ -1959,6 +2198,7 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
     passengerId: r.passengerId,
     passengerName: paxName || r.passengerName || 'Passageira',
     passengerPhone: paxPhone || r.passengerPhone || '',
+    passengerPhoto: paxPhoto || r.passengerPhoto || '',
     pickup: { lat: Number(r.pickupLat), lng: Number(r.pickupLng), name: String(r.pickupAddress || 'Ponto no mapa') },
     dest: { n: destN, a: destA, lat: Number(r.dropoffLat), lng: Number(r.dropoffLng) },
     stops: stops.map((s: any) => ({ n: String(s.n || ''), a: String(s.a || ''), lat: Number(s.lat), lng: Number(s.lng) })),
@@ -1969,6 +2209,7 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
     pin: pinForTrip(r.id),
     views: 0,
     offerExpiresAt: (r as any).offerExpiresAt ? new Date((r as any).offerExpiresAt).getTime() : 0,
+    serverNow: Date.now(),
     offerIndex: offerQueueOf(r).length ? Number((r as any).offerIdx || 0) + 1 : 0,
     offerTotal: offerQueueOf(r).length,
     isBroadcast: !(r as any).offeredDriverId && !offerQueueOf(r).length ? true : !!(r as any).offerBroadcast,
@@ -1983,7 +2224,7 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
 async function webDriverInfo(env: any, sql: any, driverId: string | null) {
   if (!driverId) return null;
   const d = await sql`
-    SELECT d."userId", d."currentLat", d."currentLng", d.rating, d."totalTrips", d."carMake", d."carModel", d."carColor", d."carPlate", u.name, u.phone
+    SELECT d."userId", d."currentLat", d."currentLng", d.rating, d."totalTrips", d."carMake", d."carModel", d."carColor", d."carPlate", u.name, u.phone, u."profilePhoto"
     FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} LIMIT 1`;
   if (!d.length) return null;
   const r = d[0];
@@ -2000,19 +2241,35 @@ async function webDriverInfo(env: any, sql: any, driverId: string | null) {
     lng,
     name: r.name || 'Motorista',
     phone: r.phone || '',
+    photo: r.profilePhoto || '',
     rating: avg,
     totalTrips: Number(r.totalTrips || 0),
     carMake: r.carMake || '', carModel: r.carModel || '', carColor: r.carColor || '', carPlate: r.carPlate || '',
   };
 }
 
-// ─── OFERTA SEQUENCIAL EM CICLO (15s por motorista, mais próxima primeiro, raio 20min) ───
+// ─── OFERTA SEQUENCIAL EM CICLO (30s por motorista, mais próxima primeiro, raio 20min) ───
 // A passageira pede → a oferta vai só para a motorista online mais próxima
 // (até 20min do pickup). Sem resposta/rejeição, passa à seguinte. No fim da
 // fila volta à primeira (quem calou tem nova chance; quem rejeitou fica de
 // fora) até alguém aceitar ou a viagem expirar (10min).
-const OFFER_TTL_SEC = 15;
+const OFFER_TTL_SEC = 30;
 const OFFER_MAX = 15;
+// Raio de oferta por degraus de tempo (segundos desde o pedido). No centro 5 km
+// chega; na periferia (Camama/Talatona) expande até 12 km se ninguém aceitar.
+const OFFER_RADIUS_STEPS: { after: number; km: number }[] = [
+  { after: 0, km: 5 },
+  { after: 28, km: 8 },
+  { after: 58, km: 12 },
+];
+function offerRadiusKm(createdAt: any): number {
+  const t0 = createdAt ? new Date(createdAt).getTime() : 0;
+  const el = t0 ? (Date.now() - t0) / 1000 : 0;
+  let km = OFFER_RADIUS_STEPS[0].km;
+  for (const s of OFFER_RADIUS_STEPS) if (el >= s.after) km = s.km;
+  return km;
+}
+
 function offerQueueOf(t: any): string[] {
   const q = (t as any).offerQueue;
   return Array.isArray(q) ? q.map((x: any) => String(x)).filter(Boolean) : [];
@@ -2027,7 +2284,7 @@ function offerMissedOf(t: any): string[] {
 }
 // Candidatas online+aprovadas com GPS e sem viagem ativa, da categoria
 // pedida, ordenadas por distância ao pickup (GPS fresco desempata).
-async function buildOfferQueue(env: any, sql: any, pLa: number, pLo: number, rideCode: string): Promise<string[]> {
+async function buildOfferQueue(env: any, sql: any, pLa: number, pLo: number, rideCode: string, radiusKm = 5, limit = OFFER_MAX): Promise<string[]> {
   let byCode: Record<string, string> = {};
   try { byCode = (await catMaps(sql)).byCode; } catch {}
   const pos = await geoAll(env);
@@ -2046,9 +2303,9 @@ async function buildOfferQueue(env: any, sql: any, pLa: number, pLo: number, rid
       const km = Number.isFinite(pLa) && Number.isFinite(pLo) ? havKm(pLa, pLo, Number(p.lat), Number(p.lng)) : 0;
       return { id: String(d.id), km, stale: Date.now() - Number(p.ts || 0) };
     })
-    .filter((d: any) => d && Number.isFinite(d.km) && d.km * 2 <= 10) // raio de 10min a 30km/h
+    .filter((d: any) => d && Number.isFinite(d.km) && d.km <= radiusKm)
     .sort((a: any, b: any) => (a.km - b.km) || (a.stale - b.stale))
-    .slice(0, OFFER_MAX)
+    .slice(0, limit)
     .map((d: any) => d.id);
 }
 // Push dirigido a UMA motorista (oferta exclusiva).
@@ -2061,7 +2318,7 @@ async function pushTripToDriver(sql: any, driverId: string, tripId: string, titl
   } catch {}
 }
 // Avança a oferta se expirou (lazy, em cada sondagem). Devolve a linha fresca.
-async function advanceOfferIfNeeded(sql: any, t: any, pushBody?: { title: string; body: string }): Promise<any> {
+async function advanceOfferIfNeeded(env: any, sql: any, t: any, pushBody?: { title: string; body: string }): Promise<any> {
   try {
     if (!t || t.status !== 'REQUESTED' || (t as any).offerBroadcast) return t;
     const exp = (t as any).offerExpiresAt ? new Date((t as any).offerExpiresAt).getTime() : 0;
@@ -2070,6 +2327,17 @@ async function advanceOfferIfNeeded(sql: any, t: any, pushBody?: { title: string
     const skipped = offerSkippedOf(t);
     const missed = offerMissedOf(t);
     const cur = (t as any).offeredDriverId ? String((t as any).offeredDriverId) : '';
+    // Raio expansivo por tempo: ao expirar, junta as motoristas que agora
+    // entram no raio maior (sem repetir quem já recusou). Não mexe na ordem —
+    // os novos estão mais longe, logo vão para o fim da fila.
+    const wantKm = offerRadiusKm((t as any).createdAt);
+    if (wantKm > 5) {
+      try {
+        const known = new Set<string>([...q, ...skipped, ...missed]);
+        const cand = await buildOfferQueue(env, sql, Number((t as any).pickupLat), Number((t as any).pickupLng), String((t as any).rideType || 'ECONOMY'), wantKm, OFFER_MAX);
+        for (const id of cand) if (!known.has(id)) { q.push(id); known.add(id); }
+      } catch {}
+    }
     // Timeout (sem resposta) != rejeicao: quem calou entra de novo na
     // volta seguinte; quem rejeitou (skipped) fica de fora de vez.
     if (cur && missed.indexOf(cur) < 0) missed.push(cur);
@@ -2082,7 +2350,7 @@ async function advanceOfferIfNeeded(sql: any, t: any, pushBody?: { title: string
       // Volta ao início (ciclo até aceitar): quem calou tem nova chance.
       const again = q.filter((x: string) => skipped.indexOf(x) < 0);
       if (!again.length) {
-        const r = await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' RETURNING *`;
+        const r = await sql`UPDATE trips SET "offerBroadcast" = TRUE, "offerQueue" = ${JSON.stringify(q)}::jsonb, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' RETURNING *`;
         return r[0] || t;
       }
       missed.length = 0;
@@ -2090,7 +2358,7 @@ async function advanceOfferIfNeeded(sql: any, t: any, pushBody?: { title: string
       idx = q.indexOf(again[0]);
     }
     const expAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
-    const r = await sql`UPDATE trips SET "offerIdx" = ${idx}, "offeredDriverId" = ${q[idx]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' AND COALESCE("offerIdx", 0) = ${oldIdx} RETURNING *`;
+    const r = await sql`UPDATE trips SET "offerIdx" = ${idx}, "offeredDriverId" = ${q[idx]}, "offeredAt" = NOW(), "offerExpiresAt" = ${expAt as any}, "offerQueue" = ${JSON.stringify(q)}::jsonb, "offerMissed" = ${missedJson}::jsonb, "updatedAt" = NOW() WHERE id = ${t.id} AND status = 'REQUESTED' AND COALESCE("offerIdx", 0) = ${oldIdx} RETURNING *`;
     if (!r[0]) {
       const rr = await sql`SELECT * FROM trips WHERE id = ${t.id} LIMIT 1`;
       return rr[0] || t;
@@ -2138,7 +2406,7 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
     const stops = Array.isArray(b.stops) ? b.stops.slice(0, 3).map((x: any) => ({ n: String(x.n || '').slice(0, 60), a: String(x.a || '').slice(0, 80), lat: Number(x.lat), lng: Number(x.lng) })).filter((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lng)) : [];
     const sched = Number(b.scheduledAt) > Date.now() ? new Date(Number(b.scheduledAt)) : null;
     const { byName } = await catMaps(sql);
-    // Oferta sequencial por proximidade (15s cada); sem candidatas abre a todas.
+    // Oferta sequencial por proximidade (30s cada, até passar ao próximo condutor); sem candidatas abre a todas.
     // Calculada ANTES do INSERT para não haver um UPDATE a mais por viagem.
     const rideCode = byName[String(b.cat)] || 'ECONOMY';
     let q: string[] = [];
@@ -2157,13 +2425,13 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
         ${hasQ ? JSON.stringify(q) : null}, 0, ${hasQ ? q[0] : null}, ${hasQ ? new Date().toISOString() : null}, ${expAt ? expAt.toISOString() : null}, ${hasQ ? 0 : 1}, ${hasQ ? '[]' : null})
       RETURNING id`;
     const tripId = rows[0].id;
-    // Push imediato + arranque do toca-toca de 3s (não bloqueia a resposta).
+    // Toca-toca (arranque do ringer, não bloqueia a resposta).
     try {
       const destN = String(b.destN || '').slice(0, 60);
-      const body = `${pickupName} → ${destN}${stops.length ? ` · +${stops.length} paragem${stops.length > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`;
       c.executionCtx.waitUntil((async () => {
-        if (offerFirst) await pushTripToDriver(sql, offerFirst, tripId, '🔔 Novo pedido LadiesGo!', body);
-        else await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!', String(b.cat || ''));
+        // Oferta exclusiva: o aviso é dado pelo toca-toca (4s, 4x por motorista).
+        // Sem fila (broadcast): abre a todas.
+        if (!offerFirst) await pushTripToDrivers(sql, tripId, pickupName, destN, stops.length, fare, '🔔 Novo pedido LadiesGo!', String(b.cat || ''));
         await ringStart(c.env);
         try {
           const fbTok = String((c.env as any).FB_SCRAPE_TOKEN || '');
@@ -2202,7 +2470,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       try {
         const oc = await sql`SELECT "offerQueue", "offerIdx", "offeredDriverId", "offerBroadcast", "offerExpiresAt", status FROM trips WHERE id = ${id} LIMIT 1`;
         if (oc.length && oc[0].status === 'REQUESTED' && !oc[0].offerBroadcast && (offerQueueOf(oc[0]).length || oc[0].offeredDriverId)) {
-          const fresh: any = await advanceOfferIfNeeded(sql, oc[0]);
+          const fresh: any = await advanceOfferIfNeeded(c.env, sql, oc[0]);
           if (!fresh.offerBroadcast && String(fresh.offeredDriverId || '') !== did) {
             return c.json({ message: 'Esta oferta já passou para outra motorista.' }, 409);
           }
@@ -2219,6 +2487,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       const doneAt = Number.isFinite(devTs) && Math.abs(devTs - Date.now()) <= 15 * 60 * 1000 ? new Date(devTs) : new Date();
       await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = ${doneAt as any}, "updatedAt" = NOW() WHERE id = ${id}`;
       if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
+      await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id);
     } else if (neonSt === 'CANCELLED') {
       await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
     }
@@ -2309,13 +2578,12 @@ export class TripRinger {
     const lastKick: number = (await this.state.storage.get('lastKick')) || 0;
     if (now - lastKick > 60000) await this.state.storage.put('sent', 0);
     await this.state.storage.put('lastKick', now);
-    await this.state.storage.setAlarm(now + 3000);
+    await this.state.storage.setAlarm(now + 4000);
     return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
   }
   async alarm() {
     try {
       const sent: number = (await this.state.storage.get('sent')) || 0;
-      if (sent >= 4) return;
       const sql = neon(this.env.DB);
       const rows = await sql`
         SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "rideType" FROM trips
@@ -2327,34 +2595,41 @@ export class TripRinger {
         // Já há conversa: só o recetor é avisado por mensagem; não insistir aqui.
         try {
           const ch = await sql`SELECT id FROM chat_messages WHERE "tripId" = ${t.id} AND "createdAt" > NOW() - INTERVAL '3 minutes' LIMIT 1`;
-          if (ch.length) { await this.state.storage.setAlarm(Date.now() + 3000); return; }
+          if (ch.length) { await this.state.storage.setAlarm(Date.now() + 4000); return; }
         } catch {}
         const addr = String(t.dropoffAddress || 'Luanda');
         const cut = addr.indexOf(' · ');
         const { byCode } = await catMaps(sql);
-        // Oferta sequencial: roda a fila e avisa só a ofertada (sem
-        // broadcast). Reagenda para a hora em que a oferta expira.
+        // Oferta sequencial: roda a fila em silêncio (sem push). O toca-toca
+        // avisa a motorista ofertada a cada 4s, até 4 vezes por motorista
+        // (reinicia quando a oferta passa a outro condutor próximo, aos 30s).
         try {
           const full = await sql`SELECT * FROM trips WHERE id = ${t.id} LIMIT 1`;
           if (full.length && !full[0].offerBroadcast && (offerQueueOf(full[0]).length || full[0].offeredDriverId)) {
-            const fresh: any = await advanceOfferIfNeeded(sql, full[0], {
-              title: '🔔 Novo pedido LadiesGo!',
-              body: `${String(full[0].pickupAddress || 'Ponto no mapa')} → ${String(full[0].dropoffAddress || '').split(' · ')[0]} · ${Number(full[0].fareEstimate || 0)} Kz`,
-            });
+            const fresh: any = await advanceOfferIfNeeded(this.env, sql, full[0]);
             if (!fresh.offerBroadcast) {
-              const exp = fresh.offerExpiresAt ? new Date(fresh.offerExpiresAt).getTime() : 0;
-              const delay = exp && exp > Date.now() ? Math.min(Math.max(exp - Date.now(), 3000), 65000) : 10000;
+              const offId = String(fresh.offeredDriverId || '');
+              const ringKey = t.id + ':' + offId;
+              const ringKeyStored = String((await this.state.storage.get('ringKey')) || '');
+              let ringN = Number((await this.state.storage.get('ringN')) || 0);
+              if (ringKey !== ringKeyStored) { ringN = 0; await this.state.storage.put('ringKey', ringKey); }
+              if (offId && ringN < 4) {
+                await pushTripToDriver(sql, offId, t.id, '🔔 Novo pedido LadiesGo!', `${String(fresh.pickupAddress || 'Ponto no mapa')} → ${String(fresh.dropoffAddress || '').split(' · ')[0]} · ${Number(fresh.fareEstimate || 0)} Kz`);
+                ringN += 1;
+                await this.state.storage.put('ringN', ringN);
+              }
               try { await hubBroadcast(this.env); } catch {}
-              await this.state.storage.setAlarm(Date.now() + delay);
+              await this.state.storage.setAlarm(Date.now() + 4000);
               return;
             }
           }
         } catch {}
         try { await hubBroadcast(this.env); } catch {}
-        await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!', byCode[t.rideType] || '');
+        if (sent < 3) { await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!', byCode[t.rideType] || ''); await this.state.storage.put('sent', sent + 1); }
       } else {
         // Resumo só das viagens em broadcast (as exclusivas já avisam a
         // ofertada). Sem nenhuma aberta, reagenda em silêncio.
+        if (sent >= 3) { try { await this.state.storage.setAlarm(Date.now() + 4000); } catch {} return; }
         let openN = rows.length;
         try {
           const oc = await sql`SELECT COUNT(*)::int AS n FROM trips WHERE status = 'REQUESTED' AND "createdAt" > NOW() - INTERVAL '6 minutes' AND ("offerBroadcast" = TRUE OR "offerQueue" IS NULL)`;
@@ -2375,9 +2650,9 @@ export class TripRinger {
           })).filter((m: any) => m.to);
           if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
         } catch {}
+        await this.state.storage.put('sent', sent + 1);
       }
-      await this.state.storage.put('sent', sent + 1);
-      await this.state.storage.setAlarm(Date.now() + 3000);
+      await this.state.storage.setAlarm(Date.now() + 4000);
     } catch {
       try { await this.state.storage.setAlarm(Date.now() + 10000); } catch {}
     }
@@ -2670,6 +2945,22 @@ export class DriverGeo {
   json(o: any): Response {
     return new Response(JSON.stringify(o), { headers: { 'Content-Type': 'application/json' } });
   }
+  // A hibernação do DO limpa a memória. Sem isto, as posições desapareciam
+  // quando o objeto ficava ocioso e a passagreira deixava de ver carros.
+  loaded = false;
+  lastPut: Map<string, number> = new Map();
+  async load() {
+    if (this.loaded) return;
+    this.loaded = true;
+    try {
+      const all: any = await this.state.storage.list({ prefix: 'p:' });
+      const now = Date.now();
+      for (const [k, v] of all) {
+        const uid = String(k).slice(2);
+        if (!this.pos.has(uid) && v && now - Number(v.ts || 0) <= 18 * 60 * 1000) this.pos.set(uid, v);
+      }
+    } catch {}
+  }
   // Aplica uma atualização de posição vinda de HTTP (/set) ou de mensagem WS.
   setPos(userId: string, lat: number, lng: number, cats: any, online: boolean | null): boolean {
     const prev = this.pos.get(userId) || null;
@@ -2679,11 +2970,30 @@ export class DriverGeo {
       driverId: prev?.driverId || '',
       lat,
       lng,
-      cats: cats != null ? cats : (prev?.cats || null),
+      // Categorias só podem mudar com a motorista offline (regra de negócio):
+      // com a sessão online, mantém as categorias já em vigor.
+      cats: prev && prev.online ? (prev.cats || null) : (cats != null ? cats : (prev?.cats || null)),
       online: online != null ? !!online : !!(prev?.online),
       ts: Date.now(),
     });
+    // Persiste no storage (sobrevive à hibernação). Debounce por motorista.
+    try {
+      const now = Date.now();
+      if (now - (this.lastPut.get(userId) || 0) >= 15000) {
+        this.lastPut.set(userId, now);
+        this.state.storage.put('p:' + userId, this.pos.get(userId)).catch(() => {});
+      }
+    } catch {}
     return wasOnline;
+  }
+  // Espelha a transição online/offline da ligação WS na D1, para o filtro
+  // "isOnline" do buildOfferQueue e do /trips/incoming ficar correto (a
+  // presença por WS não passava pelo /drivers/position).
+  async d1Online(userId: string, online: boolean) {
+    try {
+      const sql = neon(this.env.DB);
+      await sql`UPDATE drivers SET "isOnline" = ${online}, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
+    } catch {}
   }
   async fetch(req: any): Promise<Response> {
     const u = new URL(req.url);
@@ -2707,23 +3017,28 @@ export class DriverGeo {
       const b: any = await req.json().catch(() => ({}));
       const userId = String(b.userId || '');
       if (!userId) return this.json({ wasOnline: false });
+      await this.load();
       const wasOnline = this.setPos(userId, Number(b.lat), Number(b.lng), b.cats, b.online != null ? !!b.online : null);
       return this.json({ wasOnline });
     }
     if (req.method === 'POST' && path.endsWith('/del')) {
       const b: any = await req.json().catch(() => ({}));
-      this.pos.delete(String(b.userId || ''));
+      const uid = String(b.userId || '');
+      this.pos.delete(uid);
+      try { this.state.storage.delete('p:' + uid).catch(() => {}); } catch {}
       return this.json({ ok: true });
     }
     if (path.endsWith('/get')) {
       const uid = String(u.searchParams.get('userId') || '');
+      await this.load();
       return this.json({ driver: this.pos.get(uid) || null });
     }
     if (path.endsWith('/all')) {
+      await this.load();
       const now = Date.now();
       const drivers: any[] = [];
       for (const v of this.pos.values()) {
-        if (now - Number(v.ts || 0) <= 10 * 60 * 1000) drivers.push(v);
+        if (now - Number(v.ts || 0) <= 18 * 60 * 1000) drivers.push(v);
       }
       return this.json({ drivers });
     }
@@ -2736,11 +3051,18 @@ export class DriverGeo {
     let m: any = null;
     try { m = JSON.parse(typeof raw === 'string' ? raw : ''); } catch { return; }
     if (!m || typeof m !== 'object') return;
-    if (m.offline) { this.pos.delete(userId); return; }
+    if (m.offline) {
+      this.pos.delete(userId);
+      try { this.state.storage.delete('p:' + userId).catch(() => {}); } catch {}
+      await this.d1Online(userId, false);
+      return;
+    }
     const lat = Number(m.lat), lng = Number(m.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     const cats = Array.isArray(m.cats) ? m.cats.map((x: any) => String(x).slice(0, 30)).slice(0, 6) : null;
-    this.setPos(userId, lat, lng, cats, true);
+    await this.load();
+    const wasOnline = this.setPos(userId, lat, lng, cats, true);
+    if (!wasOnline) await this.d1Online(userId, true);
   }
   async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {
     // Mantém a posição até expirar (TTL na leitura); nova ligação repõe.

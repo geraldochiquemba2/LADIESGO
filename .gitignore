@@ -3,6 +3,7 @@ node_modules/
 *.env.local
 render-env.txt
 dist/
+dist-dry/
 build/
 .expo/
 ios/

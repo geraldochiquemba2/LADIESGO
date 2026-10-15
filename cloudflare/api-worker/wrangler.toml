@@ -34,3 +34,6 @@ new_sqlite_classes = ["DriverGeo"]
 # Segredos (nunca commitar):
 # wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require
 # wrangler secret put JWT_SECRET     -> string longa aleatoria 32+ chars
+# wrangler secret put TG_BOT_TOKEN   -> token do bot Telegram (BotFather) p/ fotos do admin
+# wrangler secret put TG_CHAT_ID     -> id do canal/grupo destino (ex: -1001234567890)
+# (em dev: põe as mesmas chaves em .dev.vars, ficheiro ignorado pelo git)
