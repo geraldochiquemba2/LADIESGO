@@ -132,6 +132,12 @@ async function requireAuth(c: any, next: any) {
   }
 }
 
+// ─── abrir o site (4 passos) no navegador do sistema ───
+// O shell nativo (mobile/App.tsx) abre no Safari/browser qualquer navegação
+// para um host diferente de ladiesgo.pages.dev. Este endpoint vive no host da
+// API, por isso o link abre fora da WebView e segue para a landing.
+app.get('/open', (c) => c.redirect('https://ladiesgo.pages.dev/ladiesgo', 302));
+
 // ─── health ───
 app.get('/ping', (c) => c.json({ ok: true, ts: Date.now(), worker: true }));
 app.get('/api/v1/health', (c) => c.json({ ok: true, ts: Date.now() }));
