@@ -2683,7 +2683,7 @@ export class TripRinger {
 // Neon: só leituras esporádicas de estado (≤1/15s por viagem ativa) e via
 // POST /notify das transições (hook notifyTripPush); escritas Neon continuam
 // exclusivas do REST existente (accept/arrived/start/complete/cancel).
-const PUSH_GPS_MIN_MS = 10_000;
+const PUSH_GPS_MIN_MS = 4_000;
 const PUSH_STATUS_TTL_MS = 15_000;
 export class TripPush {
   state: any;
@@ -2811,7 +2811,7 @@ export class TripPush {
     if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return;
     const now = Date.now();
     const att: any = (() => { try { return ws.deserializeAttachment() || {}; } catch { return {}; } })();
-    // Motorista: máx 1 fix/10s. SÓ memória do DO — nada no Neon por fix.
+    // Motorista: máx 1 fix/4s. SÓ memória do DO — nada no Neon por fix.
     if (tags.indexOf('driver') >= 0 && claimed === 'driver') {
       if (now - Number(att.lastFixAt || 0) < PUSH_GPS_MIN_MS) return;
       att.lastFixAt = now;
@@ -2819,9 +2819,10 @@ export class TripPush {
       await this.refreshStatus(false);
       // A motorista é monitorizada do início ao fim da viagem, por isso a sua
       // posição é sempre transmitida à passageira. Para não spammar, só se
-      // redesenha quando o carro anda (>=150m) ou a cada 30s.
+      // redesenha quando o carro anda (>=20m) ou a cada 8s — o suficiente para
+      // a passageira ver o carro deslizar suavemente.
       const movedKm = att.pushAt ? havKm(Number(att.pushLat), Number(att.pushLng), la, lo) : 1;
-      if (movedKm >= 0.15 || now - Number(att.pushAt || 0) >= 30000) {
+      if (movedKm >= 0.02 || now - Number(att.pushAt || 0) >= 8000) {
         att.pushLat = la; att.pushLng = lo; att.pushAt = now;
         this.broadcastExcept(ws, { t: 'driver', lat: la, lng: lo, ts: now });
         this.pushEta();
