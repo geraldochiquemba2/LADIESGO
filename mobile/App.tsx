@@ -15,7 +15,7 @@ import { BG_LOCATION_TASK } from './src/services/bgLocation';
 // localização, notificações com som, e upload de fotos/documentos.
 // ?v= rebenta a cache da WebView: sem isto o iOS servia o HTML antigo
 // e as melhorias do mapa não apareciam. Aumenta a cada deploy do site.
-const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261013';
+const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261015';
 const API_URL = 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
 const EAS_PROJECT_ID = 'ec5885e0-c677-4023-b65a-6642fe20f3fd';
 
@@ -172,15 +172,30 @@ export default function App() {
       Linking.openURL(url).catch(() => {});
       return false;
     }
-    // Apps de navegação (Waze/Google/Apple Maps) e qualquer site externo
-    // abrem na app própria: dentro da WebView prendiam o loading no roxo.
+    // Apps de navegação (Waze/Google/Apple Maps), WhatsApp e qualquer site
+    // externo abrem na app própria: dentro da WebView prendiam o ecrã no roxo.
     try {
       const u = new URL(url);
+      // WhatsApp: abrir directamente a app (whatsapp://) em vez do wa.me web,
+      // que dentro da WebView ficava preso no ecrã lilás.
+      if (u.hostname === 'wa.me' || u.hostname === 'api.whatsapp.com') {
+        const ph = u.searchParams.get('phone') || '';
+        const tx = u.searchParams.get('text') || '';
+        let wa = 'whatsapp://send';
+        if (ph) wa += '?phone=' + ph + (tx ? '&text=' + encodeURIComponent(tx) : '');
+        else if (tx) wa += '?text=' + encodeURIComponent(tx);
+        Linking.openURL(wa).catch(() => Linking.openURL(url).catch(() => {}));
+        return false;
+      }
       if (u.protocol === 'http:' || u.protocol === 'https:') {
         if (u.hostname === 'ladiesgo.pages.dev') return true;
         Linking.openURL(url).catch(() => {});
         return false;
       }
+      // Qualquer outro esquema (whatsapp:, waze:, googlemaps:, tel:...) abre na
+      // app respectiva. Sem isto a WebView tentava carregá-lo e prendia no roxo.
+      Linking.openURL(url).catch(() => {});
+      return false;
     } catch {}
     return true;
   };
