@@ -70,10 +70,11 @@ const server = http.createServer(async (req, res) => {
       if (nums.length !== 4 || !nums.every(Number.isFinite)) throw 0;
       const [aLa, aLo, bLa, bLo] = nums;
       const q = aLo + ',' + aLa + ';' + bLo + ',' + bLa + '?overview=full&geometries=geojson';
-      const urls = ['http://router.project-osrm.org/route/v1/driving/', 'https://router.project-osrm.org/route/v1/driving/'];
+      const vq = encodeURIComponent(JSON.stringify({ locations: [{ lat: aLa, lon: aLo }, { lat: bLa, lon: bLo }], costing: 'auto', format: 'osrm', shape_format: 'geojson', directions_type: 'none' }));
+      const urls = ['http://router.project-osrm.org/route/v1/driving/' + q, 'https://router.project-osrm.org/route/v1/driving/' + q, 'https://valhalla1.openstreetmap.de/route?json=' + vq];
       for (const base of urls) {
         try {
-          const r = await fetch(base + q, { signal: AbortSignal.timeout(9000) });
+          const r = await fetch(base, { signal: AbortSignal.timeout(4000) });
           const j = await r.json();
           const g = j && j.routes && j.routes[0] && j.routes[0].geometry && j.routes[0].geometry.coordinates;
           if (g && g.length) {

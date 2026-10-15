@@ -1320,13 +1320,18 @@ app.get('/api/route', async (c) => {
   if (rhit) return rhit;
   try {
     const q = `${qf(from[1])},${qf(from[0])};${qf(to[1])},${qf(to[0])}?overview=full&geometries=geojson`;
+    const vq = encodeURIComponent(JSON.stringify({
+      locations: [{ lat: from[0], lon: from[1] }, { lat: to[0], lon: to[1] }],
+      costing: 'auto', format: 'osrm', shape_format: 'geojson', directions_type: 'none',
+    }));
     const bases = [
-      'https://router.project-osrm.org/route/v1/driving/',
-      'https://routing.openstreetmap.de/routed-car/route/v1/driving/',
+      'https://router.project-osrm.org/route/v1/driving/' + q,
+      'https://routing.openstreetmap.de/routed-car/route/v1/driving/' + q,
+      'https://valhalla1.openstreetmap.de/route?json=' + vq,
     ];
     for (const base of bases) {
       try {
-        const r = await fetch(base + q, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(6000) });
+        const r = await fetch(base, { headers: { 'User-Agent': 'LadiesGo/1.0' }, signal: AbortSignal.timeout(4000) });
         const j: any = await r.json();
         const g = j?.routes?.[0]?.geometry?.coordinates;
         if (g?.length) return cachePut(c, rkey, 3600, { points: g.map((p: number[]) => [p[1], p[0]]), distance_m: j.routes[0].distance, duration_s: j.routes[0].duration });
