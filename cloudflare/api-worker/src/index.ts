@@ -2786,6 +2786,7 @@ export class TripPush {
     try { m = JSON.parse(typeof raw === 'string' ? raw : String(raw)); } catch { return; }
     if (!m || typeof m !== 'object') return;
     if (m.t === 'gps') { await this.onGps(ws, m).catch(() => {}); return; }
+    if (m.t === 'hdg') { await this.onHdg(ws, m).catch(() => {}); return; }
     if (m.t === 'chat') {
       const text = String((m as any).text || '').trim().slice(0, 300);
       if (!text) return;
@@ -2842,6 +2843,23 @@ export class TripPush {
       try { ws.serializeAttachment(att); } catch {}
       return;
     }
+  }
+  // Rumo (bússola) da motorista: repassa à passageira para o carro rodar mesmo
+  // parado. Sem persistência e com throttle por socket (no anexo, que sobrevive
+  // à hibernação). Só a motorista envia.
+  async onHdg(ws: any, m: any) {
+    let tags: string[] = [];
+    try { tags = this.state.getTags(ws) || []; } catch {}
+    if (tags.indexOf('driver') < 0) return;
+    const h = Number(m?.h);
+    if (!Number.isFinite(h)) return;
+    const now = Date.now();
+    const att: any = (() => { try { return ws.deserializeAttachment() || {}; } catch { return {}; } })();
+    if (now - Number(att.lastHdgAt || 0) < 200) return;
+    att.lastHdgAt = now;
+    try { ws.serializeAttachment(att); } catch {}
+    const hh = ((h % 360) + 360) % 360;
+    this.broadcastExcept(ws, { t: 'hdg', h: hh, ts: now });
   }
   async refreshStatus(force: boolean) {
     const now = Date.now();
