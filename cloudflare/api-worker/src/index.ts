@@ -1118,7 +1118,8 @@ function placeCat(t: string): string {
   if (/^10 condominios/.test(b)) return 'Condomínio';
   if (/municipio/.test(b)) return 'Município';
   if (b === 'yes') return 'Local';
-  if (/(neighbourhood|suburb|quarter)/.test(b)) return 'Bairro';
+  if (/(neighbourhood|suburb|quarter|city_block)/.test(b)) return 'Bairro';
+  if (b === 'apartment') return 'Edifício';
   if (b === 'square') return 'Praça';
   if (/bureau_de_change/.test(b)) return 'Câmbio';
   if (/(restaurant|fast_food|bakery|food|cafe)/.test(b) || b === 'bar') return 'Restaurante';
@@ -1144,11 +1145,21 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
   try {
     const sql = neon(c.env.DB);
     const tf = fold(q);
+    const tk = tf.split(' ').filter((t: string) => t.length >= 2).slice(0, 3);
+    const t1 = tk[0] || tf, t2 = tk[1] || '', t3 = tk[2] || '';
+    // Todos os tokens têm de aparecer em norm (nome+rua+município+tipo), por
+    // isso "kilamba bloco" encontra os blocos do Kilamba com o número (ex.:
+    // "Bloco D27") em vez de cair no Photon/Nominatim sem número.
+    // Ordena por: prefixo do nome, depois bloco/quarteirão, depois distância.
     const rows: any[] = await sql`
-      SELECT name, lat, lng, type, municipality, province, street, "number",
-        CASE WHEN nname LIKE ${tf + '%'} THEN 1 ELSE 0 END AS pfx
+      SELECT name, nname, lat, lng, type, municipality, province, street, "number"
       FROM places
-      WHERE norm LIKE ${'%' + tf + '%'}
+      WHERE norm LIKE ${'%' + t1 + '%'}
+        AND (${t2} = '' OR norm LIKE ${'%' + t2 + '%'})
+        AND (${t3} = '' OR norm LIKE ${'%' + t3 + '%'})
+      ORDER BY ((CASE WHEN nname LIKE ${tf + '%'} THEN 2 ELSE 0 END)
+        + (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END)) DESC,
+        (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
       LIMIT 400
     `;
     const out = rows.map((r: any) => {
@@ -1168,10 +1179,11 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
         province: String(r.province || 'Luanda'),
         street: String(r.street || ''),
         distanceKm: Math.round(havKm(lat, lng, Number(r.lat), Number(r.lng)) * 10) / 10,
-        _p: Number(r.pfx) || 0,
+        _p: String(r.nname || '').startsWith(tf) ? 1 : 0,
+        _b: /^(bloco\b|quarteir)/i.test(String(r.name || '').trim()) ? 1 : 0,
       };
     }).filter((p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lng));
-    out.sort((a: any, b: any) => (b._p - a._p) || (a.distanceKm - b.distanceKm));
+    out.sort((a: any, b: any) => (b._p - a._p) || (b._b - a._b) || (a.distanceKm - b.distanceKm));
     const seen = new Set<string>();
     const dedup = out.filter((p: any) => {
       const k = p.name.toLowerCase();
@@ -1179,7 +1191,7 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
       seen.add(k);
       return true;
     });
-    return dedup.slice(0, 15).map((p: any) => { delete p._p; return p; });
+    return dedup.slice(0, 15).map((p: any) => { delete p._p; delete p._b; return p; });
   } catch { return []; }
 }
 app.get('/api/places/search', async (c) => {
@@ -1189,7 +1201,7 @@ app.get('/api/places/search', async (c) => {
   if (q.length < 3 || !Number.isFinite(lat) || !Number.isFinite(lng)) {
     return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
   }
-  const pkey = 'places:v8:' + q.toLowerCase() + ':' + Math.round(lat * 1000) / 1000 + ',' + Math.round(lng * 1000) / 1000;
+  const pkey = 'places:v11:' + q.toLowerCase() + ':' + Math.round(lat * 1000) / 1000 + ',' + Math.round(lng * 1000) / 1000;
   const phit = await cacheGet(c, pkey);
   if (phit) return phit;
   // Base local primeiro: instantâneo, offline e com distância à localização.
