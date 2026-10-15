@@ -643,7 +643,7 @@ app.get('/api/v1/trips/history', requireAuth, async (c) => {
       status: NEON2WEB[t.status] || t.status,
       by: t.cancelledBy || '', reason: t.cancelReason || '',
       other: d ? (t.passenger_name || '') : (t.driver_name || ''),
-      ts: t.createdAt, from: t.pickupAddress || '',
+      ts: t.createdAt ? new Date(t.createdAt).getTime() : null, from: t.pickupAddress || '',
       pay: t.paymentMethod === 'CARD' ? 'Cartão' : 'Numerário',
       stopsN: Array.isArray(t.stops) ? t.stops.length : 0,
       stops: (Array.isArray(t.stops) ? t.stops : []).map((x: any) => ({ n: String(x.n || '').slice(0, 60) })),
