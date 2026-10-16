@@ -255,7 +255,18 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
     try { await sql`UPDATE users SET "fcmToken" = NULL, "updatedAt" = NOW() WHERE "fcmToken" = ${body.fcmToken} AND id != ${user.sub}`; } catch {}
   }
   const rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "profilePhoto" = COALESCE(${photo}, "profilePhoto"), "updatedAt" = NOW() WHERE id = ${user.sub} RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
-  return c.json(rows[0] || {});
+  // Registo no canal Telegram (mesmo fluxo do painel admin): só quando vem foto nova.
+  let tgOn = false;
+  if (photo) {
+    tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
+    if (tgOn) {
+      const u0: any = rows[0] || {};
+      const caption = `LadiesGo · foto de ${u0.name || u0.phone || ''} (${u0.role || ''})`;
+      try { c.executionCtx.waitUntil(tgSendPhoto(c.env, photo, caption).catch(() => false)); }
+      catch { tgSendPhoto(c.env, photo, caption).catch(() => false); }
+    }
+  }
+  return c.json({ ...(rows[0] || {}), telegram: photo ? tgOn : undefined });
 });
 // DELETE /api/v1/users/push-token — Logout: este aparelho deixa de receber pushes + motorista fica offline
 app.delete('/api/v1/users/push-token', requireAuth, async (c) => {
@@ -681,6 +692,17 @@ function pushStatus(c: any, tripId: string, status: string) {
   try { c.executionCtx.waitUntil(notifyTripPush(c.env, tripId, status)); }
   catch { notifyTripPush(c.env, tripId, status); }
 }
+async function pushPaxArrived(env: any, tripId: string) {
+  try {
+    const sql = neon(env.DB);
+    const rows = await sql`SELECT "passengerId" FROM trips WHERE id = ${tripId} LIMIT 1`;
+    if (!rows.length) return;
+    const u = await sql`SELECT "fcmToken" FROM users WHERE id = ${rows[0].passengerId} LIMIT 1`;
+    const tok = u[0]?.fcmToken;
+    if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
+    await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: tok, sound: 'default', title: '🦋 A tua motorista chegou!', body: 'Dita o teu código de segurança para começar a viagem.', data: { tripId, type: 'arrived' } }]) });
+  } catch {}
+}
 // ─── RequestsHub: feed de pedidos por WebSocket-hibernação (server push) ───
 // Substitui o polling REST /trips/incoming da motorista online: 1 ligação WS
 // por motorista (hibernável = sem custo de duração) e o servidor faz "poke"
@@ -779,7 +801,7 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
     const pu = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 && String(t.status) !== 'IN_PROGRESS' ? { lat: pl.lat, lng: pl.lng } : null });
   }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
   const liveD = t.driverUserId ? await geoGet(c.env, String(t.driverUserId)) : null;
@@ -907,6 +929,7 @@ app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
   const rows = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status = 'ACCEPTED' RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
   pushStatus(c, c.req.param('id'), 'DRIVER_ARRIVED');
+  try { c.executionCtx.waitUntil(pushPaxArrived(c.env, c.req.param('id'))); } catch {}
   return c.json(rows[0]);
 });
 app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
@@ -1967,7 +1990,7 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
     const pu = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 && String(t.status) !== 'IN_PROGRESS' ? { lat: pl.lat, lng: pl.lng } : null });
   }
   let driver = null;
   if (t.driverId) {
@@ -2235,6 +2258,8 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
     reason: r.cancelReason || '',
     scheduledAt: r.scheduledAt ? new Date(r.scheduledAt).getTime() : 0,
     completedAt: r.completedAt ? new Date(r.completedAt).getTime() : 0,
+    arrivedAt: r.arrivedAt ? new Date(r.arrivedAt).getTime() : 0,
+    startedAt: r.startedAt ? new Date(r.startedAt).getTime() : 0,
   };
 }
 
@@ -2328,7 +2353,7 @@ async function buildOfferQueue(env: any, sql: any, pLa: number, pLo: number, rid
 // Push dirigido a UMA motorista (oferta exclusiva).
 async function pushTripToDriver(sql: any, driverId: string, tripId: string, title: string, body: string) {
   try {
-    const r = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} LIMIT 1`;
+    const r = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 1`;
     const tok = r[0]?.fcmToken;
     if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
     await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: tok, sound: 'default', title, body, data: { tripId, type: 'new-trip' } }]) });
@@ -2509,6 +2534,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
     }
     pushStatus(c, id, neonSt);
+    if (neonSt === 'DRIVER_ARRIVED') { try { c.executionCtx.waitUntil(pushPaxArrived(c.env, id)); } catch {} }
     if (neonSt === 'ACCEPTED' || neonSt === 'CANCELLED') hubPoke(c);
     return c.json({ ok: true, status: st });
   } catch (e) {
@@ -2567,7 +2593,7 @@ app.post('/api/v1/trips/:id/position', requireAuth, async (c) => {
 // Push com som (Expo) — usado no pedido imediato e no cron de repetição.
 async function pushTripToDrivers(sql: any, tripId: string, pickupName: string, destN: string, stopsN: number, fare: number, title: string, catName?: string) {
   try {
-    const cands = await sql`SELECT u."fcmToken", d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
+    const cands = await sql`SELECT u."fcmToken", d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
     const toks = cands.filter((r: any) => !catName || !Array.isArray(r.cats) || !r.cats.length || r.cats.map((x: any) => String(x)).indexOf(catName) >= 0);
     const body = `${pickupName} → ${destN}${stopsN ? ` · +${stopsN} paragem${stopsN > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`;
     const msgs = toks.map((r: any) => ({ to: r.fcmToken, sound: 'default', title, body, data: { tripId, type: 'new-trip' } })).filter((m: any) => m.to);
@@ -2658,7 +2684,7 @@ export class TripRinger {
         }
         try { await hubBroadcast(this.env); } catch {}
         try {
-          const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' LIMIT 100`;
+          const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
           const msgs = toks.map((r: any) => ({
             to: r.fcmToken, sound: 'default',
             title: '🔔 Viagens disponíveis — LadiesGo!',
