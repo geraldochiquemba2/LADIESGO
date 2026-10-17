@@ -60,3 +60,8 @@ de conta depois de um refresh restaura um token antigo e o login passa a dar
 `Failed to fetch auth token: 400 Bad Request` / `Not logged in` (aconteceu a 2026-10-17).
 Boas praticas: antes de trocar de conta copiar `default.toml` -> `default.<conta>account.toml`;
 em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).
+
+## Estado de produção (resumo operacional)
+- Conta nova (isabel): escritas bloqueadas até 00:00 UTC. Leituras OK. Fase 1a 348f7ff deployada.
+- Após 00:00 UTC: aplicar migrations/0008_places_fts.sql na D1 remota (new account).
+- Smoke test guest/register/toggle-online: 500→200/201 com reset.
