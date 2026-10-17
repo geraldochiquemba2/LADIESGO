@@ -1,0 +1,49 @@
+# ============================================================================
+# LADIESGO 2026-10-17 - Conta Cloudflare NOVA (2a conta).
+# Motivo: a conta antiga (subdominio "ladiesgo-ao") esgotou a quota diaria de
+# Workers Free (100k/dia -> erro 1027 / HTTP 429). Migrado para quota nova.
+#
+# Deploy:   wrangler deploy --config wrangler.newaccount.toml
+# D1:       ladiesgo (ea61eb36-483c-484f-b364-f82c844c0b30)
+# Worker:   https://ladiesgo-api.ladiesgo-angola.workers.dev
+# Conta:    isabelcanjamba62@gmail.com / 2ebfcbf70c6ea8d2b84130041528e249
+#
+# A config ORIGINAL (conta antiga) e: wrangler.toml  (NAO apagar).
+# Para voltar ao normal, ver cloudflare/README.md secao 4.
+# ============================================================================
+name = "ladiesgo-api"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[vars]
+JWT_EXPIRES_IN = "7d"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ladiesgo"
+database_id = "ea61eb36-483c-484f-b364-f82c844c0b30"
+migrations_dir = "migrations"
+
+[durable_objects]
+bindings = [
+  { name = "RINGER", class_name = "TripRinger" },
+  { name = "TRIPPUSH", class_name = "TripPush" },
+  { name = "REQUESTSHUB", class_name = "RequestsHub" },
+  { name = "DRIVERGEO", class_name = "DriverGeo" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TripRinger"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TripPush"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["RequestsHub"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["DriverGeo"]

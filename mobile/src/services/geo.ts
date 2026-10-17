@@ -78,7 +78,8 @@ export function curvePath(a: [number, number], b: [number, number]): [number, nu
 }
 
 function apiRoot(): string {
-  const base = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
+  // >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA (ladiesgo-angola); a conta antiga ladiesgo-ao esgotou a quota de Workers (erro 1027). VOLTAR AO NORMAL = trocar "ladiesgo-api.ladiesgo-angola.workers.dev" por "ladiesgo-api.ladiesgo-ao.workers.dev" e gerar novo build. Ver cloudflare/README.md
+  const base = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.ladiesgo-angola.workers.dev/api/v1';
   return base.replace(/\/api\/v1\/?$/, '');
 }
 
