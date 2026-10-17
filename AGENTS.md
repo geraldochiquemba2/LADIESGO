@@ -32,3 +32,31 @@ A conta original esgotou a quota diária do **Workers Free** (100.000 pedidos/di
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).
 - O webapp usa **WebSocket primeiro** com polling de fallback (`pollTrip` 8s), por isso o uso real fica bem abaixo da quota.
+
+## Limites do plano Free (decorar)
+- **Workers:** 100.000 pedidos/dia por **conta** (reset 00:00 UTC). Estourar → **erro 1027 / HTTP 429**; a conta inteira fica fora até reiniciar.
+- **D1:** 100.000 linhas **escritas**/dia e 5.000.000 lidas/dia por **conta** (reset 00:00 UTC). Estourar as escritas → **erro 7500**: TODA a escrita devolve **500** (criar utilizador, ficar online, pedidos, chamadas) até reiniciar; a **leitura continua a funcionar**. É por conta, não por base de dados — criar outra D1 **não** contorna.
+
+## Incidentes de quota (2026-10-17) — NAO REPETIR
+Dois limites foram esgotados no mesmo dia, ambos pela via do assistente (nao por uso real).
+Prova: os logs em `~/.wrangler/logs` registam `"agent":"opencode"`, e o historico do PowerShell
+so tem comandos `opencode`.
+- **Conta antiga — 100.000 pedidos/dia (erro 1027):** causado pelos testes de carga
+  (`loadtest/firetest.mjs`, `loadtest/ws-storm.mjs`, `loadtest/k6/ladiesgo.js`), ~2000 contas de teste.
+  Esses scripts apontam para `ladiesgo-api.ladiesgo-ao.workers.dev` — ver o `AVISO` no topo de cada um.
+- **Conta nova / isabel — 100.000 escritas/dia na D1 (erro 7500):** causado por **reimportar a BD
+  inteira repetidamente** durante a migracao (o log do wrangler mostra ~9 `POST .../d1/database/.../import`
+  da mesma BD a 2026-10-17; cada import completo reinsere os 23.345 registos de `places`).
+
+Regras para nao repetir:
+- **Nunca** correr `loadtest/` contra producao nem contra a conta que serve a API. Usar staging/2a conta.
+- **Nunca** reimportar a BD toda em ciclo; importar so o que mudou. Um import completo ~23k escritas e o teto diario e 100k.
+- Preferir `wrangler d1 migrations apply` (incremental) a reimportar o dump completo.
+
+## Tokens de login (cuidado com o use-account.ps1)
+`use-account.ps1` copia `default.<conta>account.toml` -> `default.toml`, mas o wrangler **renova e
+RODA** o token dentro de `default.toml` e NAO o escreve de volta no ficheiro da conta. Logo, trocar
+de conta depois de um refresh restaura um token antigo e o login passa a dar
+`Failed to fetch auth token: 400 Bad Request` / `Not logged in` (aconteceu a 2026-10-17).
+Boas praticas: antes de trocar de conta copiar `default.toml` -> `default.<conta>account.toml`;
+em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).

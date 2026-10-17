@@ -1,3 +1,8 @@
+// ============================================================================
+// AVISO (incidente 2026-10-17): teste de carga que ajuda a esgotar a quota de
+// Workers Free (100.000 pedidos/dia -> erro 1027) da conta em API. NAO correr
+// contra producao nem contra a conta que serve a API. Apontar a staging.
+// ============================================================================
 // LadiesGo fire test — k6 (HTTP + WebSocket) for a DISTRIBUTED generator.
 //
 // Prereq: generate accounts.json first with the Node provisioner:

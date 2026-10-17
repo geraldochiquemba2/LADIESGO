@@ -1,3 +1,8 @@
+// ============================================================================
+// AVISO (incidente 2026-10-17): criar milhares de contas MOTORISTAS/PASSAGEIRAS
+// grava milhares de linhas na D1 e gasta a quota de pedidos do Workers Free.
+// NAO correr contra producao nem contra a conta que serve a API. Ver AGENTS.md.
+// ============================================================================
 // LadiesGo fire test: generate the account pool that the k6 script consumes.
 // Creates N drivers (admin) + N passengers, optionally marks drivers online and
 // sets their location, then writes accounts.json (SharedArray-ready) for k6.

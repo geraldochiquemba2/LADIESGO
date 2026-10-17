@@ -1,3 +1,9 @@
+// ============================================================================
+// AVISO (incidente 2026-10-17): este teste esgotou a quota de Workers Free
+// (100.000 pedidos/dia -> erro 1027) da conta em REST. NAO correr contra
+// producao nem contra a conta que serve a API (isabel/ladiesgo-angola).
+// Usar staging. Ver LADIESGO/AGENTS.md -> "Incidentes de quota".
+// ============================================================================
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

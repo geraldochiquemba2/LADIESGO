@@ -54,3 +54,13 @@ Sem socket obrigatório: REST polling em `GET /trips/:id` devolve motorista+ETA.
 - `C:\Users\Geraldo\backup-split.sql` — versão com as fotos base64 divididas (o import falha com `SQLITE_TOOBIG` se as fotos num INSERT unico forem demasiado grandes).
 
 **Nota:** o `JWT_SECRET` da conta nova é o de dev (`.dev.vars`) -> as sessões antigas caem; o login por password continua a funcionar.
+
+**Incidente de quota da D1 (2026-10-17) — NAO REPETIR:**
+Logo depois da migracao, a conta nova ficou sem poder **gravar** na D1 (erro 7500: 100.000 linhas
+escritas/dia do plano Free, por **conta**). Causa: a BD foi reimportada **~9 vezes** no mesmo dia
+(ver `~/.wrangler/logs` -> `POST .../d1/database/ea61eb36.../import`); cada import completo reinsere
+os 23.345 registos de `places`, e varias tentativas falharam com `SQLITE_TOOBIG` e foram repetidas.
+Enquanto a quota de escrita esta esgotada, TODA a escrita (criar utilizador, ficar online, pedidos,
+chamadas) devolve **500** ate as 00:00 UTC (01:00 Angola); a leitura continua a funcionar.
+Regra: importar a BD so uma vez e so o que mudou; preferir `wrangler d1 migrations apply`. O teto
+diario de escritas e 100k e o de leituras 5M.

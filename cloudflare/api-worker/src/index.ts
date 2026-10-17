@@ -1184,34 +1184,60 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
     // Todos os tokens têm de aparecer em norm (nome+rua+município+tipo), por
     // isso "kilamba bloco" encontra os blocos do Kilamba com o número (ex.:
     // "Bloco D27") em vez de cair no Photon/Nominatim sem número.
-    // Ordena por: prefixo do nome, depois bloco/quarteirão, depois distância.
-    // A esmagadora maioria das pesquisas começa pelo nome do local. O caminho
-    // rápido usa o índice places_nname_idx via GLOB de prefixo (o LIKE com o %
-    // à frente não usava índice e lia as ~23k linhas TODAS a cada pesquisa).
-    // Se houver poucos prefixos, cai no LIKE clássico (recall total) abaixo.
-    const g1 = t1.replace(/([*?\[\]])/g, '[$1]') + '*';
-    let rows: any[] = await sql`
-      SELECT name, nname, lat, lng, type, municipality, province, street, "number"
-      FROM places
-      WHERE nname GLOB ${g1}
-        AND (${t2} = '' OR norm LIKE ${'%' + t2 + '%'})
-        AND (${t3} = '' OR norm LIKE ${'%' + t3 + '%'})
-      ORDER BY (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END) DESC,
-        (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
-      LIMIT 400
-    `;
+    // Ordenação final: prefixo do nome, depois bloco/quarteirão, depois distância.
+    // Cadeia de pesquisa (da mais rápida para a mais cara):
+    //   1) FTS5 indexado (places_fts)  2) GLOB de prefixo (places_nname_idx)
+    //   3) LIKE clássico (recall total, sem índice; lia as ~23k linhas TODAS).
+    // 1) FTS5 (`places_fts`, migração 0008): casamento por palavras/tokens,
+    //    indexado -> lê pouquíssimas linhas mesmo em pesquisas de vários termos.
+    //    Se a tabela ainda não existir (migração não aplicada), o try/catch cai
+    //    para os caminhos GLOB/LIKE abaixo — a pesquisa nunca quebra.
+    let rows: any[] = [];
+    try {
+      const expr = tk
+        .map((t: string) => t.replace(/[^\p{L}\p{N}]+/gu, ''))
+        .filter((t: string) => t.length >= 2)
+        .map((t: string) => t + '*')
+        .join(' ');
+      if (expr) {
+        rows = await sql`
+          SELECT p.name, p.nname, p.lat, p.lng, p.type, p.municipality, p.province, p.street, p."number"
+          FROM places_fts JOIN places p ON p.id = places_fts.rowid
+          WHERE places_fts MATCH ${expr}
+          ORDER BY (CASE WHEN p.name LIKE 'Bloco %' OR p.name LIKE 'Bloco%' OR p.name LIKE 'Quarteir%' THEN 1 ELSE 0 END) DESC,
+            (ABS(p.lat - ${lat}) + ABS(p.lng - ${lng})) ASC
+          LIMIT 400
+        `;
+      }
+    } catch { rows = []; }
     if (rows.length < 8) {
+      // 2) Prefixo do nome via índice places_nname_idx (GLOB) — rede de segurança
+      //    (recall para prefixos que o FTS não apanhe).
+      const g1 = t1.replace(/([*?\[\]])/g, '[$1]') + '*';
       rows = await sql`
         SELECT name, nname, lat, lng, type, municipality, province, street, "number"
         FROM places
-        WHERE norm LIKE ${'%' + t1 + '%'}
+        WHERE nname GLOB ${g1}
           AND (${t2} = '' OR norm LIKE ${'%' + t2 + '%'})
           AND (${t3} = '' OR norm LIKE ${'%' + t3 + '%'})
-        ORDER BY ((CASE WHEN nname LIKE ${tf + '%'} THEN 2 ELSE 0 END)
-          + (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END)) DESC,
+        ORDER BY (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END) DESC,
           (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
         LIMIT 400
       `;
+      // 3) LIKE clássico (recall total, sem índice) — último recurso.
+      if (rows.length < 8) {
+        rows = await sql`
+          SELECT name, nname, lat, lng, type, municipality, province, street, "number"
+          FROM places
+          WHERE norm LIKE ${'%' + t1 + '%'}
+            AND (${t2} = '' OR norm LIKE ${'%' + t2 + '%'})
+            AND (${t3} = '' OR norm LIKE ${'%' + t3 + '%'})
+          ORDER BY ((CASE WHEN nname LIKE ${tf + '%'} THEN 2 ELSE 0 END)
+            + (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END)) DESC,
+            (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
+          LIMIT 400
+        `;
+      }
     }
     const out = rows.map((r: any) => {
       const type = String(r.type || '');
@@ -1848,6 +1874,9 @@ app.get('/api/v1/drivers/status', requireAuth, async (c) => {
 });
 
 // PUT /api/v1/drivers/toggle-online — Toggle online status
+// QUOTA D1: grava 1 linha EM CADA chamada (sem guarda de transicao). A app usa sobretudo
+// POST /api/v1/drivers/position (que so grava no offline<->online). Manter assim barato;
+// nao chamar este endpoint em polling. Ver LADIESGO/AGENTS.md "Limites do plano Free".
 app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
@@ -1866,6 +1895,11 @@ app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
 });
 
 // PUT /api/v1/drivers/location — Update driver location
+// QUOTA D1: grava uma linha INCONDICIONALMENTE a cada chamada (por fix de GPS). E o endpoint
+// mais perigoso para o teto de 100k escritas/dia: se a app o chamar em ciclo (fallback de GPS
+// ou cliente antigo), esgota a quota sozinho. O caminho normal envia o GPS por WebSocket ao
+// Durable Object DriverGeo (nao toca a D1). NAO usar em polling; se possivel, so gravar quando
+// a posicao muda o suficiente. Ver LADIESGO/AGENTS.md "Limites do plano Free".
 app.put('/api/v1/drivers/location', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');

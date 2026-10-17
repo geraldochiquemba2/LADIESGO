@@ -1,3 +1,8 @@
+// ============================================================================
+// AVISO (incidente 2026-10-17): teste de carga que ajuda a esgotar a quota de
+// Workers Free (100.000 pedidos/dia -> erro 1027) da conta em REST. NAO correr
+// contra producao nem contra a conta que serve a API. Ver AGENTS.md.
+// ============================================================================
 // LadiesGo fire test: WebSocket storm against the global singleton DOs.
 //   - requests-live  -> RequestsHub (idFromName('requests:global'))   [needs driver JWT]
 //   - live-geo       -> DriverGeo   (idFromName('geo:global'))        [any JWT]

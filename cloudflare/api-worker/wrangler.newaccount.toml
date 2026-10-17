@@ -10,6 +10,11 @@
 #
 # A config ORIGINAL (conta antiga) e: wrangler.toml  (NAO apagar).
 # Para voltar ao normal, ver cloudflare/README.md secao 4.
+#
+# QUOTA D1 (Free): 100.000 linhas ESCRITAS/dia POR CONTA (reset 00:00 UTC). Se estourar ->
+# erro 7500: toda a escrita devolve 500 (online/pedidos/chamadas) ate reiniciar; leitura OK.
+# NAO reimportar a BD inteira em ciclo: cada import completo reinsere os 23.345 `places`
+# (foi isto que esgotou a quota a 2026-10-17). Preferir: wrangler d1 migrations apply.
 # ============================================================================
 name = "ladiesgo-api"
 main = "src/index.ts"
