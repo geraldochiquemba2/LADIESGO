@@ -147,7 +147,7 @@ table{border:1px solid #f1edf9}
     <table><thead><tr><th>Motorista</th><th>Licença</th><th>Viatura</th><th>Desde</th><th>Decisão</th></tr></thead><tbody id="pending"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
     <div class="filters"><input id="drvQ" placeholder="Pesquisar motorista, viatura, matricula..."></div>
     <p style="margin:0 0 14px"><a href="/motoristas" target="_blank" rel="noopener" class="chip" style="text-decoration:none;display:inline-block">Página de motoristas ↗</a></p>
-    <h2>Motoristas online agora</h2>
+    <h2>Apenas motoristas</h2>
     <table><thead><tr><th>Nome</th><th>Viatura</th><th>Categorias</th><th>Posição</th><th>Atualizado</th><th>Perfil</th></tr></thead><tbody id="drivers"><tr><td colspan="6" class="mut">A carregar…</td></tr></tbody></table>
     <div id="drvDetail" style="margin-top:14px"></div>
     <h2>Histórico por motorista</h2>
@@ -284,7 +284,7 @@ function paintCards(){
   const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
   const com=receita*0.14,drvShare=receita*0.86;
   $('cards').innerHTML=
-    card('Motoristas online',online,'drivers')+card('Pendentes',cSt('pending'),'pending')+
+    card('Apenas motoristas',online,'drivers')+card('Pendentes',cSt('pending'),'pending')+
     card('Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'),'active')+card('Concluídas',cSt('completed'),'completed')+
     card('Canceladas',cSt('cancelled'),'cancelled')+
     '<div class="card" data-pg="revenue"><small>Receita (bruto)</small><b>'+fmt(receita)+' Kz</b><div style="margin-top:6px;font-size:11.5px;color:var(--mut);line-height:1.7">🏦 Nós (14%): <b style="display:inline;font-size:13px;color:#61188E">'+fmt(com)+' Kz</b><br>🚕 Motoristas (86%): <b style="display:inline;font-size:13px;color:#0d9488">'+fmt(drvShare)+' Kz</b></div></div>';
