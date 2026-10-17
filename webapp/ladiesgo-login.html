@@ -2,7 +2,7 @@
 <html lang="pt" style="background:#61188E">
 <head>
 <script>/* LadiesGo: /api/* -> Worker (Pages é estático; em localhost usa o server.js local) */
-!function(){var A='https://ladiesgo-api.ladiesgo-ao.workers.dev',h=location.hostname;if(h==='localhost'||h==='127.0.0.1'||h===''||h.indexOf('192.168.')===0||h.indexOf('10.')===0||h.indexOf('172.')===0)return;var o=window.fetch;window.fetch=function(u,x){try{if(typeof u==='string'){if(u.indexOf('/api/')===0)u=A+u;}else if(u instanceof Request){var p=new URL(u.url,location.href);if(p.origin===location.origin&&p.pathname.indexOf('/api/')===0)u=new Request(A+p.pathname+p.search,u);}}catch(e){}return o.call(this,u,x);};}();</script>
+!function(){var A='https://ladiesgo-api.ladiesgo-ao.workers.dev',h=location.hostname;var o=window.fetch;window.fetch=function(u,x){try{if(typeof u==='string'){if(u.indexOf('/api/')===0)u=A+u;}else if(u instanceof Request){var p=new URL(u.url,location.href);if(p.origin===location.origin&&p.pathname.indexOf('/api/')===0)u=new Request(A+p.pathname+p.search,u);}}catch(e){}return o.call(this,u,x);};}();</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#61188E">
@@ -25,6 +25,7 @@
   .top{position:absolute;z-index:5;top:calc(env(safe-area-inset-top,0px) + 12px);left:14px;right:14px;display:flex;justify-content:flex-start;gap:10px;align-items:center}
   .brand{display:flex;align-items:center;gap:6px;font-size:28px;font-weight:800;color:#fff;-webkit-text-stroke:2px #4a1a8f;paint-order:stroke fill;text-shadow:0 3px 12px rgba(0,0,0,.4)}
   .brand svg{width:38px}
+  #logo .wl,#logo .wr{animation:none!important;transform:none!important}
   
   .fly{position:absolute;left:0;z-index:2;animation:fly 17s linear infinite}
   @keyframes fly{0%{transform:translate(-50px,0) rotate(8deg)}25%{transform:translate(110px,-36px) rotate(-8deg)}50%{transform:translate(220px,18px) rotate(10deg)}75%{transform:translate(330px,-28px) rotate(-6deg)}100%{transform:translate(500px,6px) rotate(6deg)}}
@@ -132,7 +133,7 @@ const $=id=>document.getElementById(id),lerp=(a,b,k)=>a+(b-a)*k;
 let seed=7;const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
 const wing='M20 14C15 2 3 2 3 9C3 15 11 18 20 17ZM20 18C13 19 9 24 12 27C15 30 19 25 20 22Z';
 const bf=c=>`<svg viewBox="0 0 40 30"><g class="wl"><path d="${wing}" fill="${c}" stroke="#fff" stroke-width="1.2"/></g><g class="wr"><path transform="translate(40 0) scale(-1 1)" d="${wing}" fill="${c}" stroke="#fff" stroke-width="1.2"/></g><rect x="19" y="10" width="2" height="16" rx="1" fill="#3a1470"/></svg>`;
-$('logo').innerHTML='<img src="logo-v2.jpg" alt="LadiesGo!" style="height:46px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)">';
+$('logo').innerHTML=bf('#fff')+'<span>LadiesGo!</span>';
 setTimeout(()=>$('splash').classList.add('off'),2400);
 [['#ff9ad5',22,'26%',0],['#d9a8ff',30,'40%',-7],['#ffd0f0',18,'14%',-12]].forEach(([c,w,top,d])=>{const e=document.createElement('div');e.className='fly';e.style.cssText=`width:${w}px;top:${top};animation-delay:${d}s;animation-duration:${16+w/3}s`;e.innerHTML=bf(c);$('sceneBox').appendChild(e)});
 

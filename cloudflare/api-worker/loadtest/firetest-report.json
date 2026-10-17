@@ -1,0 +1,85 @@
+{
+  "title": "LadiesGo fire test report (Luanda launch)",
+  "date": "2026-10-16",
+  "targetApi": "https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1",
+  "method": "Custom harnesses: loadtest/firetest.mjs (scaled concurrent-trips), loadtest/ws-storm.mjs (WS storm vs global DOs), wrangler tail CPU profiling, raw-connection probes.",
+  "verdict": "Blocker fixed and verified. PBKDF2_ITER 100000->10000, worker redeployed (version 37948e5a-543a-49ab-ab76-39168aebb220). Post-fix: 0 x 503/1102; trip levels 20/40 = 100% (784 reqs, all 200). Remaining constraint is the single-client connection cap, not the backend.",
+  "fix": {
+    "change": "cloudflare/api-worker/src/index.ts:56 PBKDF2_ITER 100000 -> 10000",
+    "compatibility": "verifyPassword reads iterations from the stored hash, so existing 100k hashes still verify; only new hashes use 10k.",
+    "deployedVersion": "37948e5a-543a-49ab-ab76-39168aebb220",
+    "verified": {
+      "beforeFix": "setup aborted with 503/1102 at 22-54 requests even at concurrency 1; tail showed 48/209 invocations exceededCpu",
+      "afterFix_setup": "100 drivers + 100 passengers created/logged cleanly, 0 x 503",
+      "afterFix_levels_20_40": "100% success, 784 requests, statusCounts {200:784}",
+      "afterFix_levels_50_100": "0 x 503; failures were client-side TypeError (fetch failed) due to the ~30 new-connection client cap"
+    }
+  },
+  "headlineFindings": [
+    {
+      "id": "CPU-1102",
+      "severity": "blocker",
+      "finding": "Under sustained auth/DB load the Worker returns HTTP 503 with Cloudflare error 1102 ('Worker exceeded CPU time limit'). Happened in all scaled runs, even with setup concurrency 1 (serial).",
+      "evidence": {
+        "wranglerTail_createOnly_130events": { "outcomes": { "ok": 130 }, "cpuMs": { "min": 15, "p50": 26, "p95": 37, "max": 46 } },
+        "wranglerTail_createLoginBurst_209events": { "outcomes": { "ok": 161, "exceededCpu": 48 }, "exceededCpuFraction": 0.23 },
+        "scaledTripRunsAbortedInSetup": [100, 200, 300],
+        "page042Docs": "error 1102 == Worker exceeded CPU time limit"
+      },
+      "rootCauseHypothesis": "index.ts:56 PBKDF2_ITER=100000. Every login/register/reset/admin-driver-create runs 100k PBKDF2-SHA256 via WebCrypto, giving 15-46ms CPU per request; under bursts it crosses the configured CPU limit (~50ms) -> 1102.",
+      "recommendations": [
+        "Reduce PBKDF2_ITER from 100000 to 10000 (10x CPU cut) OR move hashing off the hot path.",
+        "Confirm Workers plan and raise/Set CPU limit (wrangler.toml [limits] cpu_ms) on a paid plan.",
+        "Add client retry/backoff for 503 as mitigation."
+      ]
+    },
+    {
+      "id": "singleton-DOs",
+      "severity": "high",
+      "finding": "Three global singleton Durable Objects are single points of contention at Luanda scale: RequestsHub (requests:global), DriverGeo (geo:global), TripRinger (global). All traffic for all cities in Angola hits one instance each.",
+      "recommendations": [
+        "Shard by city/geocell (idFromName('geo:'+cell), 'requests:'+city).",
+        "Load-test with a distributed generator (single client is insufficient; see CLIENT-CAP)."
+      ]
+    },
+    {
+      "id": "CLIENT-CAP",
+      "severity": "info",
+      "finding": "A single client from this environment cannot open more than ~26-36 concurrent NEW TLS connections to Cloudflare: 50 concurrent raw HTTPS to cloudflare.com and to the worker -> ~28 ok / 22 stalled; identical 50 to google.com -> 50 ok. So it is the client->Cloudflare path, not the backend. HTTP keep-alive works (100 concurrent trips ok).",
+      "recommendations": [
+        "Use a distributed load generator (k6 cloud, multiple VMs/IPs, or a Cloudflare Worker-based generator) for true 5000-concurrent tests."
+      ]
+    },
+    {
+      "id": "WS-HANDSHAKE",
+      "severity": "medium",
+      "finding": "WebSocket handshake to the DO path costs ~1.1-1.4s each sequentially (pong RTT only ~340ms). 50 concurrent handshakes -> only ~30 succeed (mostly the client cap above). Not yet proven as a backend defect.",
+      "recommendations": [
+        "Re-run from a distributed generator to separate connection-establishment cost from the client cap."
+      ]
+    },
+    {
+      "id": "BASELINE-100",
+      "severity": "info",
+      "finding": "Prior validated run: 100 concurrent full trip lifecycles (request->accept->arrived->pin->start->complete) = 100% success, 100% HTTP 200, ~919 trips/min, no errors. p50 lifecycle ~5.6s (network RTT dominated: edge -AMS).",
+      "source": "loadtest/results-965275047.json"
+    }
+  ],
+  "runArtifacts": [
+    "loadtest/wsstorm-187975432.json",
+    "loadtest/geo-seq20.json",
+    "loadtest/geo-herd50.json",
+    "loadtest/geo-herd50-ws.json",
+    "loadtest/firetest-1.json",
+    "loadtest/firetest-2.json",
+    "loadtest/firetest-3.json",
+    "loadtest/firetest-4.json"
+  ],
+  "sideEffects": "Test runs created several hundred driver/passenger accounts and some trips in production D1. No delete endpoint; trips were cancelled. Consider cleanup SQL.",
+  "nextSteps": [
+    "Fix PBKDF2/CPU (blocker), redeploy, re-run firetest.mjs setup.",
+    "Set up staging (2nd Worker + 2nd D1 via [env.staging]) to avoid polluting production.",
+    "Run distributed 5000-concurrent WS+HTTP test and capture Cloudflare Workers Metrics (Exceeded CPU / Exceeded Memory charts).",
+    "Shard the three singleton DOs by city/geocell."
+  ]
+}

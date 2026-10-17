@@ -1,0 +1,410 @@
+{
+  "target": "https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1",
+  "startedAt": "2026-10-16T22:37:18.561Z",
+  "run": "190238560",
+  "config": {
+    "max": 100,
+    "levels": [
+      50,
+      100
+    ],
+    "out": "firetest-postfix.json"
+  },
+  "levels": [
+    {
+      "n": 50,
+      "total": 50,
+      "succeeded": 42,
+      "failed": 8,
+      "successRate": 84,
+      "wallMs": 12256,
+      "throughputPerMin": 205.6,
+      "lifecycle": {
+        "p50": 4353.6,
+        "p95": 11665.7,
+        "max": 12266,
+        "min": 2777.3,
+        "avg": 5714.6
+      },
+      "steps": {
+        "request": {
+          "p50": 2249.1,
+          "p95": 8748.1,
+          "max": 8749.8,
+          "min": 623.9,
+          "avg": 3196.4
+        },
+        "accept": {
+          "p50": 426.3,
+          "p95": 648.3,
+          "max": 665.1,
+          "min": 333.9,
+          "avg": 498.4
+        },
+        "arrived": {
+          "p50": 309.9,
+          "p95": 527.8,
+          "max": 961.5,
+          "min": 245.8,
+          "avg": 396.9
+        },
+        "getPin": {
+          "p50": 363.5,
+          "p95": 580.7,
+          "max": 638.4,
+          "min": 293.9,
+          "avg": 429.2
+        },
+        "start": {
+          "p50": 343.3,
+          "p95": 655.1,
+          "max": 1238.5,
+          "min": 300.8,
+          "avg": 447.5
+        },
+        "complete": {
+          "p50": 808.8,
+          "p95": 891,
+          "max": 933.8,
+          "min": 553.8,
+          "avg": 746.2
+        }
+      },
+      "errorsByType": {
+        "request:0": 8
+      },
+      "failures": [
+        {
+          "i": 34,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 36,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 37,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 39,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 40,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 44,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 45,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 48,
+          "step": "request",
+          "detail": "0 fetch failed"
+        }
+      ]
+    },
+    {
+      "n": 100,
+      "total": 100,
+      "succeeded": 62,
+      "failed": 38,
+      "successRate": 62,
+      "wallMs": 12123,
+      "throughputPerMin": 306.9,
+      "lifecycle": {
+        "p50": 5079.3,
+        "p95": 11596.1,
+        "max": 12149.5,
+        "min": 2715.9,
+        "avg": 6271.8
+      },
+      "steps": {
+        "request": {
+          "p50": 2615.7,
+          "p95": 9013.8,
+          "max": 9049.2,
+          "min": 758.3,
+          "avg": 3640.6
+        },
+        "accept": {
+          "p50": 584.1,
+          "p95": 845.7,
+          "max": 1220,
+          "min": 339.8,
+          "avg": 534.6
+        },
+        "arrived": {
+          "p50": 493,
+          "p95": 582,
+          "max": 940.1,
+          "min": 253.2,
+          "avg": 442.2
+        },
+        "getPin": {
+          "p50": 340.6,
+          "p95": 572.1,
+          "max": 600.2,
+          "min": 287.6,
+          "avg": 425.6
+        },
+        "start": {
+          "p50": 542.4,
+          "p95": 620.5,
+          "max": 838.8,
+          "min": 295.4,
+          "avg": 481.9
+        },
+        "complete": {
+          "p50": 798.2,
+          "p95": 910.6,
+          "max": 1023.3,
+          "min": 574.8,
+          "avg": 746.8
+        }
+      },
+      "errorsByType": {
+        "request:0": 38
+      },
+      "failures": [
+        {
+          "i": 26,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 27,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 28,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 39,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 40,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 42,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 43,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 44,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 47,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 48,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 49,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 50,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 51,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 52,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 54,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 55,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 56,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 58,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 60,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 61,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 62,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 64,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 65,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 66,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 69,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 70,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 71,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 72,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 73,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 74,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 75,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 76,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 77,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 78,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 79,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 83,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 85,
+          "step": "request",
+          "detail": "0 fetch failed"
+        },
+        {
+          "i": 89,
+          "step": "request",
+          "detail": "0 fetch failed"
+        }
+      ]
+    }
+  ],
+  "ws": {
+    "ok": true,
+    "checks": {
+      "hello": {
+        "received": true,
+        "tripId": "7bf02c4c-ee7f-46a7-8c9b-1e590d37c99c"
+      },
+      "pingPong": true,
+      "driverGps": {
+        "got": true,
+        "lat": -8.9,
+        "lng": 13.2
+      },
+      "paxGps": {
+        "got": true
+      },
+      "chat": {
+        "got": true,
+        "text": "LT-ws-hello",
+        "from": "LT-Pax"
+      }
+    }
+  },
+  "cleanup": {
+    "driversOffline": 100
+  },
+  "notes": [],
+  "finishedAt": "2026-10-16T22:38:24.703Z",
+  "durationSec": 66.1,
+  "totalHttpRequests": 1424,
+  "statusCounts": {
+    "200": 1378,
+    "TypeError": 46
+  },
+  "headline": 0
+}

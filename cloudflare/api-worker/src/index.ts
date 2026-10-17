@@ -53,7 +53,9 @@ async function verifyJwt(token: string, secret: string): Promise<any> {
 
 // ─── Passwords: PBKDF2-SHA256 via WebCrypto (substitui o bcrypt/pgcrypto do Neon) ───
 // Formato do hash: pbkdf2$<iteracoes>$<saltB64url>$<hashB64url>
-const PBKDF2_ITER = 100000;
+// ITER=100000 excedia o limite de CPU do Worker (erro 1102) sob carga (15-46ms/pedido).
+// 10000 mantem seguranca aceitavel e e retrocompativel: verifyPassword le as iteracoes do hash guardado.
+const PBKDF2_ITER = 10000;
 async function pbkdf2Bits(pw: string, salt: Uint8Array, iter: number): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, key, 256);
@@ -100,7 +102,14 @@ async function getCategories(sql: any) {
   const rows = await sql`SELECT code, name, color, mult FROM ride_categories ORDER BY sort, code`;
   return rows.map((r: any) => ({ code: r.code, name: r.name, color: r.color, mult: Number(r.mult) }));
 }
+// ride_categories quase nunca muda, mas catMaps() é chamado em quase todos os
+// endpoints. Sem cache, cada pedido fazia um SELECT (queima a quota de leitura
+// do D1). Guardamos por isolate com TTL curto e invalidamos nas escritas admin.
+let CAT_CACHE: { at: number; data: { byCode: Record<string, string>; byName: Record<string, string>; mults: Record<string, number> } } | null = null;
+const CAT_TTL_MS = 60 * 1000;
+function bustCatCache() { CAT_CACHE = null; }
 async function catMaps(sql: any) {
+  if (CAT_CACHE && Date.now() - CAT_CACHE.at < CAT_TTL_MS) return CAT_CACHE.data;
   const byCode: Record<string, string> = { ECONOMY: 'Económico', COMFORT: 'Conforto', PREMIUM: 'Família' };
   const byName: Record<string, string> = { 'Económico': 'ECONOMY', 'Conforto': 'COMFORT', 'Família': 'PREMIUM' };
   const mults: Record<string, number> = { ...RIDE_MULT };
@@ -109,7 +118,9 @@ async function catMaps(sql: any) {
       byCode[c.code] = c.name; byName[c.name] = c.code; mults[c.code] = c.mult;
     }
   } catch {}
-  return { byCode, byName, mults };
+  const data = { byCode, byName, mults };
+  CAT_CACHE = { at: Date.now(), data };
+  return data;
 }
 function surgeNow(): number {
   const h = new Date().getHours();
@@ -1439,8 +1450,12 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
       return c.json({ trips: pRows, total: Number(pTotal[0]?.total || 0) });
     }
     if (status) {
-      const totalRes = await sql`SELECT COUNT(*)::int AS total FROM trips WHERE status = ${status}`;
-      const tripsRes = await sql`
+      const isActive = status === 'ACTIVE';
+      const totalRes = isActive
+        ? await sql`SELECT COUNT(*)::int AS total FROM trips WHERE status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')`
+        : await sql`SELECT COUNT(*)::int AS total FROM trips WHERE status = ${status}`;
+      const tripsRes = isActive
+        ? await sql`
         SELECT t.*, 
           u.name AS passenger_name, u.phone AS passenger_phone,
           du.name AS driver_name, du.phone AS driver_phone, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
@@ -1448,7 +1463,19 @@ app.get('/api/v1/admin/trips', adminMiddleware, async (c) => {
         LEFT JOIN users u ON u.id = t."passengerId"
         LEFT JOIN drivers d ON d.id = t."driverId"
         LEFT JOIN users du ON du.id = d."userId"
-        WHERE status = ${status}
+        WHERE t.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')
+        ORDER BY t."createdAt" DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `
+        : await sql`
+        SELECT t.*, 
+          u.name AS passenger_name, u.phone AS passenger_phone,
+          du.name AS driver_name, du.phone AS driver_phone, d."carMake" AS car_make, d."carModel" AS car_model, d."carPlate" AS car_plate
+        FROM trips t
+        LEFT JOIN users u ON u.id = t."passengerId"
+        LEFT JOIN drivers d ON d.id = t."driverId"
+        LEFT JOIN users du ON du.id = d."userId"
+        WHERE t.status = ${status}
         ORDER BY t."createdAt" DESC
         LIMIT ${limit} OFFSET ${offset}
       `;
@@ -1543,7 +1570,7 @@ app.get('/api/v1/admin/driver-stats', adminMiddleware, async (c) => {
 app.get('/api/v1/admin/drivers', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
   const driversRes = await sql`
-    SELECT d.*, u.name, u.phone, u."profilePhoto"
+    SELECT d.*, u.name, u.phone, u."profilePhoto", u."isActive" AS "userActive"
     FROM drivers d
     JOIN users u ON u.id = d."userId"
     WHERE d.status = 'APPROVED'
@@ -1615,17 +1642,17 @@ try {
   }
 });
 
-// POST /api/v1/admin/users/:id/reset-password — Repor senha padrão (admin)
+// POST /api/v1/admin/users/:id/reset-password — Repor senha padrão + reativar conta (admin)
 app.post('/api/v1/admin/users/:id/reset-password', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
   const { id } = c.req.param();
   const resetHash = await hashPassword('0987654321');
   const rows = await sql`
     UPDATE users SET "passwordHash" = ${resetHash},
-      "mustChangePassword" = true, "updatedAt" = NOW()
+      "mustChangePassword" = true, "isActive" = true, "updatedAt" = NOW()
     WHERE id = ${id} RETURNING id`;
   if (!rows.length) return c.json({ message: 'Utilizador não encontrado.' }, 404);
-  return c.json({ success: true });
+  return c.json({ success: true, reactivated: true });
 });
 
 // POST /api/v1/admin/wallet/credit — Carregar a conta de um motorista (numero + valor pago)
@@ -2185,6 +2212,7 @@ app.post('/api/v1/admin/categories', adminMiddleware, async (c) => {
   const code = name.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 16) || 'CAT';
   try {
     await getCategories(sql);
+    bustCatCache();
     const rows = await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES (${code}, ${name}, ${color}, ${mult}, 99) RETURNING code, name, color, mult`;
     const r = rows[0];
     return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult) } });
@@ -2207,6 +2235,7 @@ app.put('/api/v1/admin/categories/:code', adminMiddleware, async (c) => {
     return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5).' }, 400);
   }
   await getCategories(sql);
+  bustCatCache();
   const rows = await sql`UPDATE ride_categories SET name = ${name}, color = ${color}, mult = ${mult} WHERE code = ${code} RETURNING code, name, color, mult`;
   if (!rows.length) return c.json({ message: 'Categoria não encontrada.' }, 404);
   const r = rows[0];
@@ -2330,23 +2359,39 @@ async function buildOfferQueue(env: any, sql: any, pLa: number, pLo: number, rid
   let byCode: Record<string, string> = {};
   try { byCode = (await catMaps(sql)).byCode; } catch {}
   const pos = await geoAll(env);
-  const byUser = new Map<string, any>();
-  for (const p of pos) if (p && p.userId) byUser.set(String(p.userId), p);
+  // Candidatas calculadas em memória (DriverGeo) por proximidade. Assim o D1 só
+  // lê essas (<= candLimit) em vez de TODAS as motoristas online a cada pedido
+  // — era o maior consumo de linhas lidas (quota D1).
+  const hasPickup = Number.isFinite(pLa) && Number.isFinite(pLo);
+  const cands: { userId: string; km: number; stale: number }[] = [];
+  for (const p of pos) {
+    if (!p || !p.userId) continue;
+    const lat = Number(p.lat), lng = Number(p.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const km = hasPickup ? havKm(pLa, pLo, lat, lng) : 0;
+    if (Number.isFinite(km) && km <= radiusKm) cands.push({ userId: String(p.userId), km, stale: Date.now() - Number(p.ts || 0) });
+  }
+  if (!cands.length) return [];
+  cands.sort((a, b) => (a.km - b.km) || (a.stale - b.stale));
+  const candLimit = Math.min(cands.length, Math.max(limit * 4, 40));
+  const ids = cands.slice(0, candLimit).map((c) => c.userId);
+  const kmByUser = new Map(cands.map((c) => [c.userId, c.km]));
   let rows: any[] = [];
   try {
-    rows = await sql`SELECT d.id, d."userId", d.cats FROM drivers d WHERE d."isOnline" = true AND d.status = 'APPROVED' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS'))`;
+    const P = 'SELECT d.id, d."userId", d.cats FROM drivers d WHERE d."userId" IN (';
+    const S = ') AND d."isOnline" = true AND d.status = \'APPROVED\' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN (\'ACCEPTED\',\'DRIVER_ARRIVED\',\'IN_PROGRESS\'))';
+    const strings: any[] = [P, ...Array(Math.max(0, ids.length - 1)).fill(', '), S];
+    rows = await (sql as any)(strings, ...ids);
   } catch { return []; }
   const wantCat = byCode[rideCode] || '';
   return rows
     .map((d: any) => {
-      const p = byUser.get(String(d.userId));
-      if (!p || !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng))) return null;
       if (Array.isArray(d.cats) && d.cats.length && wantCat && d.cats.map((x: any) => String(x)).indexOf(wantCat) < 0) return null;
-      const km = Number.isFinite(pLa) && Number.isFinite(pLo) ? havKm(pLa, pLo, Number(p.lat), Number(p.lng)) : 0;
-      return { id: String(d.id), km, stale: Date.now() - Number(p.ts || 0) };
+      const km = kmByUser.has(String(d.userId)) ? (kmByUser.get(String(d.userId)) as number) : radiusKm;
+      return { id: String(d.id), km };
     })
-    .filter((d: any) => d && Number.isFinite(d.km) && d.km <= radiusKm)
-    .sort((a: any, b: any) => (a.km - b.km) || (a.stale - b.stale))
+    .filter((d: any) => d)
+    .sort((a: any, b: any) => a.km - b.km)
     .slice(0, limit)
     .map((d: any) => d.id);
 }
@@ -2572,6 +2617,10 @@ app.get('/api/v1/trips/public/:id', async (c) => {
       pickup: { name: String(t.pickupAddress || ''), lat: Number(t.pickupLat), lng: Number(t.pickupLng) },
       dest: { name: String(t.dropoffAddress || ''), lat: Number(t.dropoffLat), lng: Number(t.dropoffLng) },
       stops: stops.map((s: any) => ({ n: String(s.n || ''), a: String(s.a || ''), lat: Number(s.lat), lng: Number(s.lng) })),
+      cancelledBy: t.cancelledBy || '',
+      cancelReason: t.cancelReason || '',
+      createdAt: t.createdAt || '',
+      updatedAt: t.updatedAt || '',
       driver, passenger: { name: pu[0]?.name || 'Passageira', phone: pu[0]?.phone || '' },
     });
   } catch (e) {
@@ -2773,7 +2822,7 @@ export class TripPush {
     }
     // Estado de throttle guardado no anexo do socket: sobrevive à hibernação
     // (ao contrário de campos em memória) e não grava em storage.
-    try { server.serializeAttachment({ lastFixAt: 0, pushLat: 0, pushLng: 0, pushAt: 0, lastPaxAt: 0 }); } catch {}
+    try { server.serializeAttachment({ lastFixAt: 0, pushLat: 0, pushLng: 0, pushAt: 0, lastPaxAt: 0, uid }); } catch {}
     // A API de hibernação não tem callback webSocketOpen(): o hello é enviado aqui,
     // logo após o accept, antes de devolver o 101.
     try { server.send(JSON.stringify(this.helloFrame())); } catch {}
@@ -2842,6 +2891,10 @@ export class TripPush {
       if (now - Number(att.lastFixAt || 0) < PUSH_GPS_MIN_MS) return;
       att.lastFixAt = now;
       this.driver = { lat: la, lng: lo, ts: now };
+      // Espelha o fix na DriverGeo global: é o que alimenta o polling da
+      // passageira (/trips/:id?view=web) e o link de partilha (/trips/public).
+      // Sem isto ficavam presos a posições antigas enquanto o WS ia fresco.
+      try { const _gp = geoSet(this.env, { userId: String(att.uid || ''), lat: la, lng: lo }); try { this.state.waitUntil(_gp); } catch { } } catch {}
       await this.refreshStatus(false);
       // A motorista é monitorizada do início ao fim da viagem, por isso a sua
       // posição é sempre transmitida à passageira. Para não spammar, só se

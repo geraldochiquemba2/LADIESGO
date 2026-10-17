@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
 <script>/* LadiesGo: /api/* -> Worker (Pages é estático; em localhost usa o server.js local) */
-!function(){var A='https://ladiesgo-api.ladiesgo-ao.workers.dev',h=location.hostname;if(h==='localhost'||h==='127.0.0.1'||h===''||h.indexOf('192.168.')===0||h.indexOf('10.')===0||h.indexOf('172.')===0)return;var o=window.fetch;window.fetch=function(u,x){try{if(typeof u==='string'){if(u.indexOf('/api/')===0)u=A+u;}else if(u instanceof Request){var p=new URL(u.url,location.href);if(p.origin===location.origin&&p.pathname.indexOf('/api/')===0)u=new Request(A+p.pathname+p.search,u);}}catch(e){}return o.call(this,u,x);};}();</script>
+!function(){var A='https://ladiesgo-api.ladiesgo-ao.workers.dev',h=location.hostname;var o=window.fetch;window.fetch=function(u,x){try{if(typeof u==='string'){if(u.indexOf('/api/')===0)u=A+u;}else if(u instanceof Request){var p=new URL(u.url,location.href);if(p.origin===location.origin&&p.pathname.indexOf('/api/')===0)u=new Request(A+p.pathname+p.search,u);}}catch(e){}return o.call(this,u,x);};}();</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#5b21c9">
@@ -39,6 +39,7 @@
   th{background:#faf8ff;color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em}
   tr:last-child td{border-bottom:0}
   tr.pick{cursor:pointer}tr.pick:hover td{background:#faf7ff}tr.pick.sel td{background:#ede9fe}
+  #trips tr.rrow td{border-bottom:2.5px solid #c9a3e0}
   .pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:700}
   .pending{background:#fef3c7;color:#92400e}.accepted,.arrived{background:#e0e7ff;color:#3730a3}
   .in_progress{background:#f3e8ff;color:#6b21a8}.completed{background:#dcfce7;color:#166534}
@@ -57,7 +58,7 @@
   #login input{display:block;width:100%;border:1.5px solid var(--ln);border-radius:12px;padding:12px;margin:6px 0 12px;font:inherit;font-size:16px}
   #login button{width:100%;height:50px;border:0;border-radius:14px;background:linear-gradient(135deg,#61188E,#61188E);color:#fff;font:inherit;font-weight:800;font-size:16px;cursor:pointer}
   #loginErr{min-height:20px;color:#c2185b;font-size:13px;font-weight:700;text-align:center;margin-bottom:8px}
-  @media(max-width:640px){table,thead,tbody,th,td,tr{display:block}thead{display:none}td{border:0;padding:4px 14px}tr{border-bottom:1px solid var(--ln);padding:6px 0}#map{height:300px}}
+  @media(max-width:640px){table,thead,tbody,th,td,tr{display:block}thead{display:none}td{border:0;padding:4px 14px}tr{border-bottom:1px solid var(--ln);padding:6px 0}#trips tr.rrow{border-bottom:2.5px solid #c9a3e0}#map{height:300px}}
 :root{--b:#5b21c9;--b2:#61188E;--ink:#15111f;--mut:#6c6680;--ln:#ece8f5;--bg:#f5f3fa;--ok:#12a150;--warn:#b45309;--red:#d92d4b}
 .app{display:flex;min-height:100vh}
 .side{flex:none;width:238px;background:linear-gradient(180deg,#3a0f74,#2a0c58);color:#fff;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:18px 14px}
@@ -116,11 +117,11 @@ table{border:1px solid #f1edf9}
 <div class="brand">🦋 <span>LadiesGo!<small>Painel de operações</small></span></div>
 <nav id="tabs">
 <button data-t="monitor" class="sel">🗺 <span>Monitor</span></button>
-<button data-t="trips">🧾 <span>Viagens</span></button>
 <button data-t="drivers">🚕 <span>Motoristas</span></button>
 <button data-t="clients">👤 <span>Passageiras</span></button>
 <button data-t="cats">🏷 <span>Categorias</span></button>
 <button data-t="wallet">💳 <span>Carteiras</span></button>
+<button data-t="finance">💸 <span>Finanças</span></button>
 <button data-t="new">➕ <span>Registar</span></button>
 </nav>
 <div class="side-foot"><button id="admRefresh" title="Atualizar agora">⟳ Atualizar</button><button id="admOut">Sair</button></div>
@@ -131,7 +132,6 @@ table{border:1px solid #f1edf9}
 <div class="cards" id="cards"></div>
   <section id="sec-monitor">
     <div class="filters"><input id="mSearch" placeholder="Pesquisar motorista, matrícula, passageira ou local…"></div>
-    <div id="map"></div>
     <div class="legend"><span><i style="background:#2563eb"></i>passageiro</span><span><i style="background:#12a150"></i>online</span><span><i style="background:#eab308"></i>a caminho</span><span><i style="background:#5b21c9"></i>pedido</span><span><i style="background:#f59e0b"></i>aceite</span><span><i style="background:#f97316"></i>chegou</span><span><i style="background:#61188E"></i>em viagem</span><span><i style="background:#0d9488"></i>concluída</span><span><i style="background:#d92d4b"></i>cancelada</span></div>
     <h2>Ativas agora (clica para ver no mapa)</h2>
     <table><thead><tr><th>Passageira</th><th>De → Para</th><th>Cat.</th><th>Preço</th><th>Estado</th><th>Motorista</th></tr></thead><tbody id="active"><tr><td colspan="6" class="mut">Sem viagens ativas.</td></tr></tbody></table>
@@ -145,11 +145,12 @@ table{border:1px solid #f1edf9}
     <h2>Aprovações pendentes</h2>
     <table><thead><tr><th>Motorista</th><th>Licença</th><th>Viatura</th><th>Desde</th><th>Decisão</th></tr></thead><tbody id="pending"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
     <div class="filters"><input id="drvQ" placeholder="Pesquisar motorista, viatura, matricula..."></div>
+    <p style="margin:0 0 14px"><a href="/motoristas" target="_blank" rel="noopener" class="chip" style="text-decoration:none;display:inline-block">Página de motoristas ↗</a></p>
     <h2>Motoristas online agora</h2>
-    <table><thead><tr><th>Nome</th><th>Viatura</th><th>Categorias</th><th>Posição</th><th>Atualizado</th></tr></thead><tbody id="drivers"><tr><td colspan="5" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Nome</th><th>Viatura</th><th>Categorias</th><th>Posição</th><th>Atualizado</th><th>Perfil</th></tr></thead><tbody id="drivers"><tr><td colspan="6" class="mut">A carregar…</td></tr></tbody></table>
     <div id="drvDetail" style="margin-top:14px"></div>
     <h2>Histórico por motorista</h2>
-    <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Ganhos</th></tr></thead><tbody id="drvHist"></tbody></table>
+    <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Bruto</th><th>Nós (14%)</th><th>Motorista (86%)</th></tr></thead><tbody id="drvHist"></tbody></table>
   </section>
   <section id="sec-cats" style="display:none">
     <h2>Categorias de viatura</h2>
@@ -178,6 +179,15 @@ table{border:1px solid #f1edf9}
     <div class="filters"><input id="wSearch" placeholder="Pesquisar por número…"></div>
     <table><thead><tr><th>Motorista</th><th>Número</th><th>Saldo</th><th>Viagens neg.</th><th>Estado</th><th></th></tr></thead><tbody id="wallets"><tr><td colspan="6" class="mut">A carregar…</td></tr></tbody></table>
   </section>
+  <section id="sec-finance" style="display:none">
+    <h2>Visão geral</h2>
+    <div class="cards" id="fCards"></div>
+    <h2 style="margin-top:14px">Por motorista</h2>
+    <p class="mut">Bruto = total pago pelas passageiras nas viagens concluídas. Nós ficamos com <b>14%</b> (comissão); a motorista fica com <b>86%</b>.</p>
+    <div class="filters"><input id="fDrvQ" placeholder="Pesquisar motorista…" autocomplete="off"><select id="fDrvOrder"><option value="revenue">Ordenar por bruto</option><option value="com">Ordenar por comissão</option><option value="net">Ordenar por motorista (86%)</option></select></div>
+    <table><thead><tr><th>Motorista</th><th>Viagens</th><th>Bruto</th><th>Nós (14%)</th><th>Motorista (86%)</th><th></th></tr></thead><tbody id="fDrv"><tr><td colspan="6" class="mut">A carregar…</td></tr></tbody></table>
+    <div class="mut" id="fDrvFoot" style="margin-top:8px"></div>
+  </section>
   <section id="sec-clients" style="display:none">
     <h2>Registadas</h2>
     <table><thead><tr><th>Cliente</th><th>Desde</th><th>Papel</th><th>Senha</th></tr></thead><tbody id="users"><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>
@@ -198,7 +208,7 @@ const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 const dstr=ts=>{try{return new Date(ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return''}};
 function toast(msg,ok){try{const t=$('toast');if(!t)return;t.textContent=msg;t.className=ok===false?'err':(ok==='ok'?'ok':'');requestAnimationFrame(()=>t.classList.add('on'));clearTimeout(t._x);t._x=setTimeout(()=>t.classList.remove('on'),2600);}catch(e){}}
 let ALL=[],DRV=[],USERS=[],CATS=[],selTrip=null,needFit=false,map=null,layerG=null,roadLine=null,roadSeq=0,openDrv=null,openTrip=null,mapFilter=null,selDrv=null,drvQ='',mapQuery='',PEND=[],STATS=null,uPage=1,uRole='',uQ='',UTOT=0,selUser=null,tPage=1,TTOT=0;
-var STM_R={pending:'REQUESTED',accepted:'ACCEPTED',arrived:'DRIVER_ARRIVED',in_progress:'IN_PROGRESS',completed:'COMPLETED',cancelled:'CANCELLED'};
+var STM_R={active:'ACTIVE',pending:'REQUESTED',accepted:'ACCEPTED',arrived:'DRIVER_ARRIVED',in_progress:'IN_PROGRESS',completed:'COMPLETED',cancelled:'CANCELLED'};
 // Normaliza a API real (NestJS/Neon) para o formato do painel; o mock local passa direto.
 var STM={REQUESTED:'pending',ACCEPTED:'accepted',DRIVER_ARRIVED:'arrived',IN_PROGRESS:'in_progress',COMPLETED:'completed',CANCELLED:'cancelled'};
 function normT(t){if(!t||t.pickupAddress===undefined){if(!t||!t.id)return t;return{id:t.id,passenger:t.passenger||'',passengerId:t.passengerId,passengerPhone:t.passengerPhone||t.passenger_phone||'',from:t.from||'',to:t.to||'',cat:t.cat||'',fare:(t.fare!=null?t.fare:0),status:((typeof STM!=='undefined'&&STM[t.status])||t.status||''),ts:t.ts,pay:t.pay||'',by:t.by||'',reason:t.reason||'',driver:t.driver||'',driverId:t.driverId,driverPhone:t.driverPhone||t.driver_phone||'',pickup:(t.pickup||(t.pickupLat!=null?{lat:Number(t.pickupLat),lng:Number(t.pickupLng)}:null)),dest:(t.dest||(t.dropoffLat!=null?{lat:Number(t.dropoffLat),lng:Number(t.dropoffLng)}:null)),stops:(Array.isArray(t.stops)?t.stops:[]),vehicle:t.vehicle||''};}const dN=(t.driver&&t.driver.user&&(t.driver.user.name||t.driver.user.phone))||'';const pN=(t.passenger&&(t.passenger.name||t.passenger.phone))||'';const f=t.pickupAddress||'',to=t.dropoffAddress||'';return{id:t.id,passenger:pN,passengerId:t.passengerId,from:f,to:f+' · '+to,cat:t.rideType||'',fare:(t.finalFare!=null?t.finalFare:(t.fareEstimate||0)),status:(STM[t.status]||t.status),ts:t.createdAt,pay:t.paymentMethod||'',by:t.cancelledBy||'',reason:t.cancelReason||'',driver:dN,driverId:t.driverId,pickup:(t.pickupLat!=null?{lat:t.pickupLat,lng:t.pickupLng}:null),dest:(t.dropoffLat!=null?{lat:t.dropoffLat,lng:t.dropoffLng}:null),stops:(Array.isArray(t.stops)?t.stops:[]),vehicle:[t.vehicleLabel,t.vehiclePlate].filter(Boolean).join(' · ')}}
@@ -251,26 +261,32 @@ async function saveUserPhoto(userId,file,msgId,avId){
 }
 
 function boot(){
-  if(map)return;
+  if($('panel').dataset.boot)return;
+  $('panel').dataset.boot='1';
   injectAdminUI();
   $('login').style.display='none';$('panel').style.display='';
-  map=L.map('map').setView([-8.839,13.2894],12);
+  if($('map')){map=L.map('map').setView([-8.839,13.2894],12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
   map.attributionControl.setPrefix('© OpenStreetMap');
-  layerG=L.layerGroup().addTo(map);map.on('popupopen',e=>{try{openDrv=e.popup&&e.popup._drvId||null}catch(_){}try{openTrip=(e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId)||null}catch(_){}});map.on('popupclose',e=>{try{if(openDrv&&e.popup&&e.popup._drvId===openDrv)openDrv=null}catch(_){}try{if(openTrip&&e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId===openTrip)openTrip=null}catch(_){}});
+  layerG=L.layerGroup().addTo(map);map.on('popupopen',e=>{try{openDrv=e.popup&&e.popup._drvId||null}catch(_){}try{openTrip=(e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId)||null}catch(_){}});map.on('popupclose',e=>{try{if(openDrv&&e.popup&&e.popup._drvId===openDrv)openDrv=null}catch(_){}try{if(openTrip&&e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId===openTrip)openTrip=null}catch(_){}});}
   load();
 }
 function tStatusReal(){try{const v=($('fStatus')||{}).value||'';return STM_R[v]||''}catch(e){return''}}
 function paintCards(){
-  const s=STATS||{},raw=s.trips||{};
-  if(s.byStatus)Object.keys(s.byStatus).forEach(k=>{raw[STM[k]||k]=s.byStatus[k]});
+  const s=STATS||{},raw={};
+  const src=s.trips||{};
+  Object.keys(src).forEach(k=>{raw[String(k).toLowerCase()]=src[k]});
+  if(s.byStatus)Object.keys(s.byStatus).forEach(k=>{raw[String(k).toLowerCase()]=s.byStatus[k]});
   const cSt=st=>raw[st]||0;
-  const online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
+  let online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
+  try{if(DRV.length)online=DRV.filter(x=>x&&x.isOnline!==false).length}catch(e){}
   const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
+  const com=receita*0.14,drvShare=receita*0.86;
   $('cards').innerHTML=
     card('Motoristas online',online,'drivers')+card('Pendentes',cSt('pending'),'pending')+
     card('Ativas',cSt('accepted')+cSt('arrived')+cSt('in_progress'),'active')+card('Concluídas',cSt('completed'),'completed')+
-    card('Canceladas',cSt('cancelled'),'cancelled')+card('Receita',fmt(receita)+' Kz','revenue');
+    card('Canceladas',cSt('cancelled'),'cancelled')+
+    '<div class="card" data-pg="revenue"><small>Receita (bruto)</small><b>'+fmt(receita)+' Kz</b><div style="margin-top:6px;font-size:11.5px;color:var(--mut);line-height:1.7">🏦 Nós (14%): <b style="display:inline;font-size:13px;color:#61188E">'+fmt(com)+' Kz</b><br>🚕 Motoristas (86%): <b style="display:inline;font-size:13px;color:#0d9488">'+fmt(drvShare)+' Kz</b></div></div>';
 }
 function paintPagers(){
   const tp=$('tPager');
@@ -305,25 +321,41 @@ async function showUserTrips(id,name){
     if(el)el.innerHTML=list.length?'<table><thead><tr><th>Quando</th><th>De → Para</th><th>Preço</th><th>Estado</th></tr></thead><tbody>'+list.map(x=>'<tr><td class="mut">'+dstr(x.ts)+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+x.status+'</span></td></tr>').join('')+'</tbody></table>':'<p class="mut">Sem viagens.</p>';
   }catch(e){const el=document.getElementById('utrips');if(el)el.innerHTML='<p class="mut">Falhou.</p>'}
 }
+let _loadSeq=0;
 async function load(){
+  const seq=++_loadSeq;
   try{
+    const jf=u=>fetch(u,{headers:ah(),cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null);
     const [s,t,d,u,p,cats]=await Promise.all([
-      fetch('/api/v1/admin/stats',{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/trips?page='+tPage+'&limit=20'+(tStatusReal()?('&status='+tStatusReal()):''),{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/drivers',{headers:ah()}).then(r=>r.json()),
-      fetch('/api/v1/admin/users?page='+uPage+'&limit=20'+(uRole?('&role='+uRole):'')+(uQ?('&q='+encodeURIComponent(uQ)):''),{headers:ah()}).then(r=>r.json()).catch(()=>({})),
-      fetch('/api/v1/admin/drivers/pending',{headers:ah()}).then(r=>r.json()).catch(()=>[]),
-      fetch('/api/v1/categories',{headers:ah()}).then(r=>r.json()).catch(()=>({categories:[]}))
+      jf('/api/v1/admin/stats'),
+      jf('/api/v1/admin/trips?page='+tPage+'&limit=20'+(tStatusReal()?('&status='+tStatusReal()):'')),
+      jf('/api/v1/admin/drivers'),
+      jf('/api/v1/admin/users?page='+uPage+'&limit=20'+(uRole?('&role='+uRole):'')+(uQ?('&q='+encodeURIComponent(uQ)):'')),
+      jf('/api/v1/admin/drivers/pending'),
+      jf('/api/v1/categories')
     ]);
-    STATS=s;ALL=((t&&t.trips)||[]).map(normT);TTOT=(t&&t.total)||ALL.length;DRV=((d&&d.drivers)||[]).map(normD);USERS=((u&&u.users)||[]);UTOT=(u&&u.total)||USERS.length;PEND=Array.isArray(p)?p:[];CATS=((cats&&cats.categories)||[]);
+    if(seq!==_loadSeq)return;
+    if(s)STATS=s;
+    if(t){ALL=((t.trips)||[]).map(normT);TTOT=(t.total!=null?t.total:ALL.length)}
+    if(d)DRV=((d.drivers)||[]).map(normD);
+    if(u){USERS=(u.users||[]);UTOT=(u.total!=null?u.total:USERS.length)}
+    if(p)PEND=Array.isArray(p)?p:[];
+    if(cats)CATS=(cats.categories||[]);
     paintCards();renderActive();renderTrips();renderDrivers();renderHist();renderUsers();renderPending();renderCats();paintPagers();drawMap();
-    const cSt=st=>ALL.filter(x=>x.status===st).length;
-    const online=(s.driversOnline!=null?s.driversOnline:(s.activeDrivers||0));
-    const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
-    paintCards();
+    try{if($('sec-finance')&&getComputedStyle($('sec-finance')).display!=='none')renderFinance();}catch(e){}
     $('clock').textContent=new Date().toLocaleTimeString('pt-PT');
-    renderActive();renderTrips();renderDrivers();renderHist();renderUsers();renderPending();renderCats();paintPagers();drawMap();
   }catch(e){}
+}
+function loadTrips(){
+  const seq=++_loadSeq;
+  const tb=$('trips');
+  if(tb)tb.innerHTML='<tr><td colspan="10" class="mut">A carregar…</td></tr>';
+  const u='/api/v1/admin/trips?page='+tPage+'&limit=20'+(tStatusReal()?('&status='+tStatusReal()):'');
+  return fetch(u,{headers:ah(),cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null).then(t=>{
+    if(seq!==_loadSeq)return;
+    if(t){ALL=((t.trips)||[]).map(normT);TTOT=(t.total!=null?t.total:ALL.length)}
+    renderTrips();paintPagers();
+  });
 }
 function renderPending(){try{var pb=$('pending');if(pb){var tbl=pb.closest?pb.closest('table'):null;if(tbl){tbl.style.display='none';var h=tbl.previousElementSibling;if(h&&h.tagName==='H2')h.style.display='none';}}}catch(e){}return;
   $('pending').innerHTML=PEND.map(x=>{const u=x.user||{};const car=[x.carMake,x.carModel,x.carYear].filter(Boolean).join(' ')+' · '+(x.carPlate||'');return '<tr><td><b>'+esc(u.name||'(sem nome)')+'</b><br><span class="mut">'+esc(u.phone||'')+'</span></td><td class="mono">'+esc(x.licenseNumber||'—')+'</td><td>'+esc(car)+'<br><span class="mut">'+esc(x.carColor||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td><button class="chip" data-a="appr" data-id="'+x.id+'">Aprovar</button> <button class="chip" data-a="rej" data-id="'+x.id+'">Rejeitar</button></td></tr>'}).join('')||'<tr><td colspan="5" class="mut">Sem pendentes.</td></tr>';
@@ -474,21 +506,25 @@ async function routeRoad(t){
     const r=await fetch('/api/route?from='+t.pickup.lat+','+t.pickup.lng+'&to='+t.dest.lat+','+t.dest.lng);
     const j=await r.json();
     if(my!==roadSeq)return;
-    if(j&&j.points&&j.points.length&&selTrip===t.id){if(roadLine)map.removeLayer(roadLine);roadLine=L.polyline(j.points,{color:'#15111f',weight:2,opacity:.8}).addTo(map)}
+    if(map&&j&&j.points&&j.points.length&&selTrip===t.id){if(roadLine)map.removeLayer(roadLine);roadLine=L.polyline(j.points,{color:'#15111f',weight:2,opacity:.8}).addTo(map)}
   }catch(e){}
 }
 function renderActive(){
   const a=ALL.filter(t=>['pending','accepted','arrived','in_progress'].indexOf(t.status)>=0&&matchTrip(t));
-  $('active').innerHTML=a.map(row6).join('')||'<tr><td colspan="6" class="mut">Sem viagens ativas.</td></tr>';
+  $('active').innerHTML=a.map(function(x){return row6(x)+routeRow(x)}).join('')||'<tr><td colspan="6" class="mut">Sem viagens ativas.</td></tr>';
 }
-const row6=x=>'<tr class="pick'+(x.id===selTrip?' sel':'')+'" data-id="'+x.id+'"><td><b>'+esc(x.passenger)+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(CAT_PT[x.cat]||((CATS||[]).filter(function(c){return c.code===x.cat})[0]||{}).name||x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+(STM_PT[x.status]||x.status)+'</span></td><td>'+esc(x.driver||'—')+(x.driverPhone?'<br><span class="mut">'+esc(x.driverPhone)+'</span>':'')+'</td></tr>';
+const routeRow=x=>'<tr class="rrow"><td colspan="6" style="padding:0 10px 9px"><button class="chip" data-a="viewroute" data-id="'+esc(x.id)+'">Ver percurso</button></td></tr>';
+const row6=x=>'<tr class="pick'+(x.id===selTrip?' sel':'')+'" data-id="'+x.id+'"><td><b>'+esc(x.passenger)+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(((CATS||[]).filter(function(c){return c.code===x.cat})[0]||{}).name||CAT_PT[x.cat]||x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+(STM_PT[x.status]||x.status)+'</span></td><td>'+esc(x.driver||'—')+(x.driverPhone?'<br><span class="mut">'+esc(x.driverPhone)+'</span>':'')+'</td></tr>';
+const routeRow10=x=>'<tr class="rrow"><td colspan="10" style="padding:0 10px 9px"><button class="chip" data-a="viewroute" data-id="'+esc(x.id)+'">Ver percurso</button></td></tr>';
 function renderTrips(){
   const q=($('fText').value||'').toLowerCase(),st=$('fStatus').value;
   const list=ALL.filter(x=>(!st||x.status===st||(st==='active'&&['accepted','arrived','in_progress'].indexOf(x.status)>=0))&&(!q||(x.passenger+' '+x.driver+' '+x.from+' '+x.to+' '+(x.vehicle||'')).toLowerCase().indexOf(q)>=0));
-  $('trips').innerHTML=list.map(x=>'<tr data-id="'+x.id+'" class="pick'+(x.id===selTrip?' sel':'')+'"><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(CAT_PT[x.cat]||((CATS||[]).filter(function(c){return c.code===x.cat})[0]||{}).name||x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+(STM_PT[x.status]||x.status)+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+(x.driverPhone?'<br><span class="mut">'+esc(x.driverPhone)+'</span>':'')+'</td><td>'+esc(x.vehicle||'—')+'</td></tr>').join('')||'<tr><td colspan="10" class="mut">Sem resultados.</td></tr>';
+  $('trips').innerHTML=list.map(x=>'<tr data-id="'+x.id+'" class="pick'+(x.id===selTrip?' sel':'')+'"><td class="mut">'+dstr(x.ts)+'</td><td><b>'+esc(x.passenger)+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(x.from)+' → '+esc(x.to)+stopsHtml(x)+'</td><td>'+esc(((CATS||[]).filter(function(c){return c.code===x.cat})[0]||{}).name||CAT_PT[x.cat]||x.cat)+'</td><td class="mono">'+fmt(x.fare)+' Kz</td><td><span class="pill '+x.status+'">'+(STM_PT[x.status]||x.status)+'</span></td><td>'+esc(x.by==='passenger'?'passageira':(x.by==='driver'?'motorista':(x.status==='cancelled'?'—':'')))+'</td><td class="mut">'+esc(x.reason||'')+'</td><td>'+esc(x.driver||'—')+(x.driverPhone?'<br><span class="mut">'+esc(x.driverPhone)+'</span>':'')+'</td><td>'+esc(x.vehicle||'—')+'</td></tr>'+routeRow10(x)).join('')||'<tr><td colspan="10" class="mut">Sem resultados.</td></tr>';
 }
 function renderDrivers(){
-  $('drivers').innerHTML=DRV.filter(function(x){try{var q=(drvQ||'').toLowerCase();if(!q)return true;return ((x.name||'')+' '+(x.carMake||'')+' '+(x.carPlate||'')).toLowerCase().indexOf(q)>=0;}catch(e){return true;}}).map(x=>'<tr data-drvrow="'+x.id+'" class="pick'+(x.id===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b></td><td>'+esc(([x.carMake,x.carPlate].filter(Boolean).join(' · '))||'—')+'</td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td></tr>').join('')||'<tr><td colspan="5" class="mut">Nenhuma motorista online.</td></tr>';
+  const busyDrv={};try{ALL.filter(t=>['accepted','arrived','in_progress'].indexOf(t.status)>=0&&t.driverId).forEach(t=>{busyDrv[t.driverId]=1})}catch(e){}
+  const list=DRV.filter(x=>x&&x.isOnline!==false);
+  $('drivers').innerHTML=list.filter(function(x){try{var q=(drvQ||'').toLowerCase();if(!q)return true;return ((x.name||'')+' '+(x.phone||'')+' '+(x.carMake||'')+' '+(x.carPlate||'')).toLowerCase().indexOf(q)>=0;}catch(e){return true;}}).map(x=>'<tr data-drvrow="'+x.id+'" class="pick'+(x.id===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b>'+(busyDrv[x.id]?' <span class="pill in_progress">Em viagem</span>':'')+(x.phone?'<br><span class="mut">'+esc(x.phone)+'</span>':'')+'</td><td>'+esc(([x.carMake,x.carPlate].filter(Boolean).join(' · '))||'—')+'</td><td>'+esc((x.cats||[]).join(', ')||'—')+'</td><td class="mono">'+(x.lat!=null?x.lat.toFixed(4):'—')+', '+(x.lng!=null?x.lng.toFixed(4):'—')+'</td><td class="mut">'+(x.age!=null?('há '+x.age+' s'):'—')+'</td><td><button class="chip" data-perfil="'+x.id+'">Ver perfil</button></td></tr>').join('')||'<tr><td colspan="6" class="mut">Nenhuma motorista online.</td></tr>';
 }
 function agg(key){
   const m={};
@@ -503,22 +539,66 @@ function agg(key){
 function renderHist(){
   if(selUser)return;
   const dh=agg('d'),dsv=(window._dstats&&window._dstats.length?window._dstats.map(function(z){return{key:z.driverId,n:z.name,tot:z.total,ok:z.completed,cx:z.cancelled,amt:z.revenue}}):null),dl0=dsv||dh,dl=selDrv?dl0.filter(x=>x.key===selDrv):dl0;if(!window._dstatsQ){window._dstatsQ=true;fetch('/api/v1/admin/driver-stats',{headers:ah()}).then(function(r){return r.ok?r.json():{}}).then(function(j){try{window._dstats=j.driverStats||[];}catch(e){}try{renderHist();}catch(e){}try{renderDrvDetail();}catch(e){}}).catch(function(){});}
-  $('drvHist').innerHTML=dl.map(x=>'<tr data-drvrow="'+x.key+'" class="pick'+(x.key===selDrv?' sel':'')+'"><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('')||(selDrv?'<tr><td colspan="5" class="mut">Sem viagens para esta motorista.</td></tr>':'');
+  $('drvHist').innerHTML=dl.map(x=>'<tr data-drvrow="'+x.key+'" class="pick'+(x.key===selDrv?' sel':'')+'"><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td><td class="mono" style="color:#61188E">'+fmt(x.amt*0.14)+' Kz</td><td class="mono" style="color:#0d9488">'+fmt(x.amt*0.86)+' Kz</td></tr>').join('')||(selDrv?'<tr><td colspan="7" class="mut">Sem viagens para esta motorista.</td></tr>':'');
   $('cliHist').innerHTML=agg('p').map(x=>'<tr><td><b>'+esc(x.n)+'</b></td><td>'+x.tot+'</td><td>'+x.ok+'</td><td>'+x.cx+'</td><td class="mono">'+fmt(x.amt)+' Kz</td></tr>').join('');
 }
-function renderDrvDetail(){try{var box=document.getElementById('drvDetail');if(!box)return;if(!selDrv){box.innerHTML='';return;}var trips=ALL.filter(function(t){return (t.driverId||('n:'+t.driver))===selDrv;});var live=null;try{live=DRV.filter(function(x){return x.id===selDrv;})[0]||null;}catch(e){}var nm=(live&&live.name)||(trips[0]&&trips[0].driver)||'';var ok=0,cx=0,amt=0;trips.forEach(function(t){if(t.status==='completed'){ok++;amt+=t.fare||0;}if(t.status==='cancelled')cx++;});var rows=trips.slice().sort(function(a,b){return (b.ts||0)-(a.ts||0);}).slice(0,30).map(function(t){var dt='';try{dt=new Date(t.ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){}return '<tr><td class="mut">'+dt+'</td><td><b>'+esc(t.passenger||'-')+'</b></td><td>'+esc(t.from||'')+' > '+esc(t.to||'')+'</td><td>'+esc(t.cat||'')+'</td><td class="mono">'+fmt(t.fare||0)+' Kz</td><td>'+esc(t.status||'')+'</td></tr>';}).join('');box.innerHTML='<h2>Tudo da motorista: '+esc(nm)+'</h2>'+(live?'<p class="mut">Online agora: '+esc(([live.carMake,live.carPlate].filter(Boolean).join(' · '))||'')+' · '+live.lat+', '+live.lng+'</p>':'<p class="mut">Offline de momento.</p>')+'<p><b>'+(function(){try{var gs=((window._dstats)||[]).filter(function(z){return z.driverId===selDrv})[0]||null;if(gs)return gs.total+' viagens · '+gs.completed+' concluidas · '+gs.cancelled+' canceladas · '+fmt(gs.revenue)+' Kz';}catch(e){}return trips.length+' viagens · '+ok+' concluidas · '+cx+' canceladas · '+fmt(amt)+' Kz';})()+'</b></p>'+'<div style="margin:8px 0"><button class="chip" data-a="wcredit" data-phone="'+esc(String((live&&live.phone)||''))+'">Carregar conta (carteira)</button></div>'+'<table><thead><tr><th>Quando</th><th>Passageira</th><th>Rota</th><th>Cat.</th><th>Preco</th><th>Estado</th></tr></thead><tbody>'+(rows||'<tr><td colspan="6" class="mut">Sem viagens.</td></tr>')+'</tbody></table>'+(live?'<div style="border:1.5px solid var(--ln);border-radius:14px;padding:12px;margin:10px 0"><b>Editar motorista e viatura</b><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px"><label class="mut sm">Nome<input id="edName" value="'+esc(live.name||'')+'" maxlength="60" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Marca<input id="edMake" value="'+esc(live.carMake||'')+'" maxlength="40" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Modelo<input id="edModel" value="'+esc(live.carModel||'')+'" maxlength="40" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Ano<input id="edYear" value="'+esc(live.carYear!=null?String(live.carYear):'')+'" maxlength="4" inputmode="numeric" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Cor<input id="edColor" value="'+esc(live.carColor||'')+'" maxlength="20" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Matrícula<input id="edPlate" value="'+esc(live.carPlate||'')+'" maxlength="12" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Carta<input id="edLic" value="'+esc(live.licenseNumber||'')+'" maxlength="30" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label></div><div style="display:flex;align-items:center;gap:10px;margin:10px 0 4px"><div id="edPhotoPrev" style="width:54px;height:54px;border-radius:50%;overflow:hidden;background:#f3e6ff;display:grid;place-items:center;font-weight:800;color:#61188E;font-size:22px">'+(live.profilePhoto?'<img src="'+esc(live.profilePhoto)+'" alt="" style="width:100%;height:100%;object-fit:cover">':esc(((nm||'?').trim()[0]||'?').toUpperCase()))+'</div><div><label for="edPhoto" style="color:#61188E;font-weight:700;text-decoration:underline;cursor:pointer;font-size:13px">Mudar foto</label><input id="edPhoto" type="file" accept="image/*" data-photo-user="'+esc(live.userId||'')+'" data-photo-av="edPhotoPrev" data-photo-msg="edPhotoMsg" style="display:none"><div class="mut sm" id="edPhotoMsg"></div></div></div><div style="margin-top:8px"><button class="chip" data-a="savedrv">Guardar</button> <span class="mut sm" id="edMsg"></span></div></div>':'');}catch(e){}}
+function renderDrvDetail(){try{var box=document.getElementById('drvDetail');if(!box)return;if(!selDrv){box.innerHTML='';return;}var trips=ALL.filter(function(t){return (t.driverId||('n:'+t.driver))===selDrv;});var live=null;try{live=DRV.filter(function(x){return x.id===selDrv;})[0]||null;}catch(e){}var nm=(live&&live.name)||(trips[0]&&trips[0].driver)||'';var ok=0,cx=0,amt=0;trips.forEach(function(t){if(t.status==='completed'){ok++;amt+=t.fare||0;}if(t.status==='cancelled')cx++;});var rows=trips.slice().sort(function(a,b){return (b.ts||0)-(a.ts||0);}).slice(0,30).map(function(t){var dt='';try{dt=new Date(t.ts).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){}return '<tr><td class="mut">'+dt+'</td><td><b>'+esc(t.passenger||'-')+'</b></td><td>'+esc(t.from||'')+' > '+esc(t.to||'')+'</td><td>'+esc(t.cat||'')+'</td><td class="mono">'+fmt(t.fare||0)+' Kz</td><td>'+esc(t.status||'')+'</td></tr>';}).join('');box.innerHTML='<h2>Tudo da motorista: '+esc(nm)+'</h2>'+(live?'<p class="mut">Online agora: '+esc(([live.carMake,live.carPlate].filter(Boolean).join(' · '))||'')+' · '+live.lat+', '+live.lng+'</p>':'<p class="mut">Offline de momento.</p>')+'<p><b>'+(function(){try{var gs=((window._dstats)||[]).filter(function(z){return z.driverId===selDrv})[0]||null;if(gs)return gs.total+' viagens · '+gs.completed+' concluidas · '+gs.cancelled+' canceladas · bruto '+fmt(gs.revenue)+' Kz · nós (14%) '+fmt(gs.revenue*0.14)+' Kz · motorista (86%) '+fmt(gs.revenue*0.86)+' Kz';}catch(e){}return trips.length+' viagens · '+ok+' concluidas · '+cx+' canceladas · bruto '+fmt(amt)+' Kz · nós (14%) '+fmt(amt*0.14)+' Kz · motorista (86%) '+fmt(amt*0.86)+' Kz';})()+'</b></p>'+'<div style="margin:8px 0"><button class="chip" data-a="wcredit" data-phone="'+esc(String((live&&live.phone)||''))+'">Carregar conta (carteira)</button></div>'+'<table><thead><tr><th>Quando</th><th>Passageira</th><th>Rota</th><th>Cat.</th><th>Preco</th><th>Estado</th></tr></thead><tbody>'+(rows||'<tr><td colspan="6" class="mut">Sem viagens.</td></tr>')+'</tbody></table>'+(live?'<div style="border:1.5px solid var(--ln);border-radius:14px;padding:12px;margin:10px 0"><b>Editar motorista e viatura</b><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px"><label class="mut sm">Nome<input id="edName" value="'+esc(live.name||'')+'" maxlength="60" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Marca<input id="edMake" value="'+esc(live.carMake||'')+'" maxlength="40" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Modelo<input id="edModel" value="'+esc(live.carModel||'')+'" maxlength="40" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Ano<input id="edYear" value="'+esc(live.carYear!=null?String(live.carYear):'')+'" maxlength="4" inputmode="numeric" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Cor<input id="edColor" value="'+esc(live.carColor||'')+'" maxlength="20" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Matrícula<input id="edPlate" value="'+esc(live.carPlate||'')+'" maxlength="12" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label><label class="mut sm">Carta<input id="edLic" value="'+esc(live.licenseNumber||'')+'" maxlength="30" style="width:100%;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"></label></div><div style="display:flex;align-items:center;gap:10px;margin:10px 0 4px"><div id="edPhotoPrev" style="width:54px;height:54px;border-radius:50%;overflow:hidden;background:#f3e6ff;display:grid;place-items:center;font-weight:800;color:#61188E;font-size:22px">'+(live.profilePhoto?'<img src="'+esc(live.profilePhoto)+'" alt="" style="width:100%;height:100%;object-fit:cover">':esc(((nm||'?').trim()[0]||'?').toUpperCase()))+'</div><div><label for="edPhoto" style="color:#61188E;font-weight:700;text-decoration:underline;cursor:pointer;font-size:13px">Mudar foto</label><input id="edPhoto" type="file" accept="image/*" data-photo-user="'+esc(live.userId||'')+'" data-photo-av="edPhotoPrev" data-photo-msg="edPhotoMsg" style="display:none"><div class="mut sm" id="edPhotoMsg"></div></div></div><div style="margin-top:8px"><button class="chip" data-a="savedrv">Guardar</button> <span class="mut sm" id="edMsg"></span></div></div>':'');}catch(e){}}
 function walletRow(w){const bal=Number(w.balance||0);const col=bal<0?'#d92d4b':'#0d9488';const st=w.blocked?'<span style="color:#d92d4b;font-weight:700">Bloqueada</span>':(Number(w.negTrips||0)>0?'<span style="color:#e0a800;font-weight:600">'+w.negTrips+'/3 negativas</span>':'Ativa');return '<tr><td><b>'+esc(w.name||'-')+'</b></td><td class="mono">'+esc(String(w.phone||'').replace('+244',''))+'</td><td class="mono" style="color:'+col+';font-weight:800">'+fmt(bal)+' Kz</td><td>'+Number(w.negTrips||0)+'</td><td>'+st+'</td><td><button class="chip" data-a="wcredit" data-phone="'+esc(w.phone||'')+'">Carregar</button></td></tr>';}
 async function renderWallet(){const tb=$('wallets');if(!tb)return;var q='';try{q=(($('wSearch')||{}).value||'').replace(/\D/g,'');}catch(e){}try{const r=await fetch('/api/v1/admin/wallet'+(q?('?q='+q):''),{headers:ah()});const j=await r.json();const list=(j&&j.wallets)||[];tb.innerHTML=list.map(walletRow).join('')||'<tr><td colspan="6" class="mut">Sem motoristas.</td></tr>';}catch(e){tb.innerHTML='<tr><td colspan="6" class="mut">Falhou a carregar.</td></tr>';}}
+const COM=0.14;
+function finList(){
+  try{if(!window._dstats||!window._dstats.length)return null;return window._dstats.map(function(z){return{key:z.driverId,name:z.name||'—',trips:z.total||0,completed:z.completed||0,cancelled:z.cancelled||0,bruto:z.revenue||0};});}catch(e){return null;}
+}
+function renderFinance(){
+  try{
+    if(!window._dstatsQ){window._dstatsQ=true;fetch('/api/v1/admin/driver-stats',{headers:ah()}).then(function(r){return r.ok?r.json():{}}).then(function(j){try{window._dstats=j.driverStats||[];}catch(e){}try{renderHist();}catch(e){}try{renderDrvDetail();}catch(e){}try{renderFinance();}catch(e){}}).catch(function(){});}
+  }catch(e){}
+  const fc=$('fCards');if(!fc)return;
+  const s=STATS||{},src=s.trips||{};
+  const raw={};Object.keys(src).forEach(function(k){raw[String(k).toLowerCase()]=src[k]});
+  if(s.byStatus)Object.keys(s.byStatus).forEach(function(k){raw[String(k).toLowerCase()]=s.byStatus[k]});
+  const bruto=raw['completed']?raw['completed']:0;
+  const receita=(s.revenueKz!=null?s.revenueKz:(s.totalRevenue||0));
+  const total=receita||bruto;
+  const com=total*COM,drv=total*(1-COM);
+  const avgTrip=raw['completed']?(total/raw['completed']):0;
+  const done=raw['completed']||0,canc=raw['cancelled']||0;
+  const cancelRate=(done+canc)?(canc/(done+canc)*100):0;
+  const fcard=function(l,v,sub,pg){return '<div class="card"'+(pg?(' data-pg="'+pg+'"'):'')+'><small>'+l+'</small><b>'+v+'</b>'+(sub?'<div style="margin-top:4px;font-size:12px;color:var(--mut)">'+sub+'</div>':'')+'</div>';};
+  fc.innerHTML=
+    fcard('Receita bruta',fmt(total)+' Kz','Viagens concluídas','revenue')+
+    fcard('Comissão LadiesGo (14%)',fmt(com)+' Kz','O que entra para nós')+
+    fcard('Ganho das motoristas (86%)',fmt(drv)+' Kz','O que fica com as motoristas')+
+    fcard('Viagens concluídas',String(done),'Ticket médio: '+fmt(avgTrip)+' Kz')+
+    fcard('Taxa de cancelamento',cancelRate.toFixed(1)+'%',canc+' cancelada(s)')+
+    fcard('Gasto médio por viagem',fmt(avgTrip)+' Kz','Média das concluídas');
+  const rows=finList()||[];
+  const q=(($('fDrvQ')||{}).value||'').toLowerCase();
+  const ord=(($('fDrvOrder')||{}).value||'revenue');
+  const frows=rows.filter(function(x){return !q||String(x.name||'').toLowerCase().indexOf(q)>=0;});
+  frows.forEach(function(x){x.com=x.bruto*COM;x.net=x.bruto*(1-COM);});
+  frows.sort(function(a,b){return ord==='com'?(b.com-a.com):ord==='net'?(b.net-a.net):(b.bruto-a.bruto);});
+  const tb=$('fDrv');if(tb)tb.innerHTML=frows.length?frows.map(function(x){return '<tr data-drvrow="'+esc(x.key)+'" class="pick'+(x.key===selDrv?' sel':'')+'"><td><b>'+esc(x.name)+'</b></td><td>'+x.trips+' <span class="mut sm">('+x.completed+' concl.)</span></td><td class="mono">'+fmt(x.bruto)+' Kz</td><td class="mono" style="color:#61188E">'+fmt(x.com)+' Kz</td><td class="mono" style="color:#0d9488">'+fmt(x.net)+' Kz</td><td><button class="chip" data-perfil="'+esc(x.key)+'">Ver perfil</button></td></tr>';}).join(''):'<tr><td colspan="6" class="mut">Sem dados ainda.</td></tr>';
+  const f=$('fDrvFoot');
+  if(f){
+    const tb2=frows.reduce(function(a,x){a.b+=x.bruto;a.c+=x.com;a.n+=x.net;return a;},{b:0,c:0,n:0});
+    f.innerHTML='<b>Totais:</b> Bruto '+fmt(tb2.b)+' Kz · Nós (14%) '+fmt(tb2.c)+' Kz · Motoristas (86%) '+fmt(tb2.n)+' Kz';
+  }
+}
 async function creditWallet(phone){const m=$('wMsg');const ph=(phone||(($('wPhone')||{}).value||'')).trim();const amt=Number(((($('wAmount')||{}).value||'').replace(/[^\d.]/g,'')));if(!ph){if(m)m.textContent='Escreve o número da motorista.';return}if(!(amt>0)){if(m)m.textContent='Escreve o valor pago.';return}if(m)m.textContent='A carregar…';try{const r=await fetch('/api/v1/admin/wallet/credit',{method:'POST',headers:ah(),body:JSON.stringify({phone:ph,amount:amt})});const j=await r.json();if(!r.ok)throw new Error((j&&j.message)||'Falhou');if(m)m.textContent='Carregado ✓ '+(j.user&&j.user.name?j.user.name+' · ':'')+'novo saldo: '+fmt(j.after)+' Kz'+(j.blocked?' (ainda bloqueada)':'');toast('Carregamento feito ✓','ok');try{$('wPhone').value='';$('wAmount').value='';}catch(e){}renderWallet();}catch(e){if(m)m.textContent='Erro: '+((e&&e.message)||e);}}
-function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','wallet','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',wallet:'Carteiras',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',wallet:'Pontos, comissões e carregamentos',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='wallet')try{renderWallet();}catch(e){}}
-document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}}catch(e){}});
+function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','wallet','finance','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}}
+document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}}catch(e){}});
 document.addEventListener('click',e=>{
-  const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='drivers'||k==='revenue'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');renderTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
+  const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='revenue'){goTab('finance');}else if(k==='drivers'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');tPage=1;loadTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
   if(f){const k=f.dataset.f;mapFilter=mapFilter===k?null:k;load();return}
+  const vr=e.target.closest('[data-a="viewroute"]');
+  if(vr){e.preventDefault();try{const rid=vr.dataset.id||'';if(rid)window.open('/t?id='+encodeURIComponent(rid),'_blank','noopener')}catch(err){}return}
+  const pf=e.target.closest('[data-perfil]');
+  if(pf){e.preventDefault();try{window.open('/motoristas?drv='+encodeURIComponent(pf.dataset.perfil),'_blank','noopener')}catch(err){}return}
   const dv=e.target.closest('[data-drv]');
   if(dv){e.preventDefault();const k=dv.dataset.drv||null;selDrv=selDrv===k?null:k;goTab('drivers');renderDrivers();renderHist();return}
   const sd=e.target.closest('[data-a="savedrv"]');if(sd){try{if(!selDrv)return;var gg=function(id){var el=document.getElementById(id);return el?((el.value||'').trim()):'';};var bd={name:gg('edName'),carMake:gg('edMake'),carModel:gg('edModel'),carYear:gg('edYear'),carColor:gg('edColor'),carPlate:gg('edPlate'),licenseNumber:gg('edLic')};var m=document.getElementById('edMsg');var say=function(x){if(m)m.textContent=x;};if(bd.carYear){var yy=parseInt(bd.carYear,10);if(!Number.isInteger(yy)||yy<1990||yy>new Date().getFullYear()+1){say('Ano inválido.');return}}say('A guardar…');fetch('/api/v1/admin/drivers/'+selDrv,{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(bd)}).then(function(r){return r.json().then(function(j){return{r:r,j:j}})}).then(function(o){if(!o.r.ok)throw new Error((o.j&&o.j.message)||'Falhou');say('Guardado ✓');toast('Motorista atualizada ✓');load();}).catch(function(e){say('Erro: '+((e&&e.message)||e));});return}catch(e){}}const rs=e.target.closest('[data-a="resetpw"]');
-  if(rs){if(confirm('Repor a senha de '+(rs.dataset.n||'')+' para a padrão 0987654321?')){fetch('/api/v1/admin/users/'+rs.dataset.id+'/reset-password',{method:'POST',headers:ah()}).then(r=>{if(!r.ok)throw 0;rs.textContent='✓';toast('Reset feito com sucesso ✓','ok');setTimeout(load,800)}).catch(()=>toast('Falhou o reset.',false))}return}
+  if(rs){if(confirm('Repor a senha de '+(rs.dataset.n||'')+' para a padrão 0987654321?')){fetch('/api/v1/admin/users/'+rs.dataset.id+'/reset-password',{method:'POST',headers:ah()}).then(r=>{if(!r.ok)throw 0;rs.textContent='✓';toast('Senha reposta e conta ativada ✓','ok');setTimeout(load,800)}).catch(()=>toast('Falhou o reset.',false))}return}
   const mk=e.target.closest('[data-a="mkdrv"]');
   if(mk){mkDriver();return}
   const sc=e.target.closest('[data-a="savecat"]');
@@ -530,7 +610,7 @@ document.addEventListener('click',e=>{
   const wr=e.target.closest('[data-a="wcredit"]');
   if(wr){try{goTab('wallet');$('wPhone').value=String(wr.dataset.phone||'').replace('+244','');$('wAmount').value='';$('wAmount').focus();$('wMsg').textContent='';}catch(e){}return}
   const pg=e.target.closest('[data-a="upage"],[data-a="tpage"]');
-  if(pg){const d=Number(pg.dataset.d)||0;if(pg.dataset.a==='upage')uPage=Math.max(1,uPage+d);else tPage=Math.max(1,tPage+d);load();return}
+  if(pg){const d=Number(pg.dataset.d)||0;if(pg.dataset.a==='upage'){uPage=Math.max(1,uPage+d);load();}else{tPage=Math.max(1,tPage+d);loadTrips();}return}
   const vu=e.target.closest('[data-a="usertrips"]');
   if(vu){showUserTrips(vu.dataset.id,vu.dataset.n||'');return}
   const cu=e.target.closest('[data-a="clearuser"]');
@@ -541,12 +621,12 @@ document.addEventListener('click',e=>{
   const t=e.target.closest('[data-t]');
   if(t){goTab(t.dataset.t);return}
   const dr=e.target.closest('[data-drvrow]');
-  if(dr){const k=dr.dataset.drvrow;selDrv=selDrv===k?null:k;renderDrivers();renderHist();renderDrvDetail();return}
+  if(dr){const k=dr.dataset.drvrow;selDrv=selDrv===k?null:k;renderDrivers();renderHist();renderDrvDetail();try{renderFinance();}catch(_){}return}
   const r=e.target.closest('tr.pick');
   if(r){selTrip=r.dataset.id===selTrip?null:r.dataset.id;needFit=!!selTrip;renderActive();drawMap();try{var _st=(ALL||[]).filter(function(x){return x.id===selTrip})[0];if(_st&&_st.pickup&&_st.dest)routeRoad(_st);}catch(e){}}
 });
 document.addEventListener('input',e=>{if(e.target&&(e.target.id==='fText'))renderTrips();else if(e.target&&(e.target.id==='mSearch')){mapQuery=(e.target.value||'').toLowerCase().trim();renderActive();if(map)drawMap()}else if(e.target&&(e.target.id==='ndPhone')){clearTimeout(ndT);ndT=setTimeout(checkNumber,500)}else if(e.target&&(e.target.id==='uSearch')){const v=e.target.value;clearTimeout(window._uT);window._uT=setTimeout(()=>{uQ=(v||'').trim();uPage=1;load()},450)}else if(e.target&&(e.target.id==='wSearch')){clearTimeout(window._wT);window._wT=setTimeout(()=>{try{renderWallet();}catch(_){}},400)}});
-document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus')){tPage=1;load()}else if(e.target&&(e.target.id==='uRole')){uRole=e.target.value||'';uPage=1;load()}});
+document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus')){tPage=1;loadTrips()}else if(e.target&&(e.target.id==='uRole')){uRole=e.target.value||'';uPage=1;load()}else if(e.target&&(e.target.id==='fDrvOrder')){try{renderFinance();}catch(_){}}});
 document.addEventListener('change',function(e){var t=e.target;if(!t||!t.getAttribute)return;if(t.id==='ndPhotoFile'){var _nf=(t.files||[])[0]||null;var _pv=document.getElementById('ndPhotoPrev');var _pm=document.getElementById('ndPhotoMsg');if(!_nf){ndPhotoData=null;if(_pv)_pv.innerHTML='';if(_pm)_pm.textContent='';return}resizePhoto(_nf,720,0.9).then(function(u){ndPhotoData=u;if(_pv)_pv.innerHTML='<img src="'+u+'" style="width:100%;height:100%;object-fit:cover">';if(_pm)_pm.textContent='Foto pronta a enviar.'}).catch(function(){ndPhotoData=null;if(_pm)_pm.textContent='Foto invalida.'});return}var uid=t.getAttribute('data-photo-user');if(uid&&(t.files||[]).length){saveUserPhoto(uid,t.files[0],t.getAttribute('data-photo-msg'),t.getAttribute('data-photo-av'));}});
 $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});

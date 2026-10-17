@@ -2,32 +2,32 @@
 # Sem isto o iOS/Android servia o mapa antigo da cache e as melhorias
 # (rota real, fallback OSM->CARTO, zona) não apareciam na app.
 /*.html
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /app
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /home
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /t
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /luanda-map
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 
 # URLs bonitas do Pages (pretty URLs, sem .html): o HTML final é
 # servido aqui — sem estas regras o no-cache acima não se aplicava.
 /ladiesgo
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /ladiesgo-login
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /ladiesgo-home
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /track
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /admin
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 /privacidade
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate, max-age=0
 
 # Imagens/logo: imutáveis, cache longa para poupar dados.
 /*.jpg

@@ -1,0 +1,62 @@
+{
+  "target": "https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1",
+  "run": "188443866",
+  "config": {
+    "n": 50,
+    "hold": 8,
+    "gpsMs": 2000,
+    "setup": 24,
+    "channels": "geo",
+    "uniq": false
+  },
+  "startedAt": "2026-10-16T22:07:23.866Z",
+  "phases": [
+    {
+      "channel": "live-geo",
+      "attempted": 50,
+      "opened": 34,
+      "failed": 16,
+      "successRate": 68,
+      "wallMs": 10667,
+      "openMs": {
+        "n": 34,
+        "p50": 2339.6,
+        "p95": 8546.9,
+        "max": 8552.9,
+        "min": 545.1,
+        "avg": 4021.3
+      },
+      "failDetail": {
+        "rejectedCount": 16,
+        "stallCount": 0
+      }
+    }
+  ],
+  "statusCounts": {
+    "200": 2
+  },
+  "cleanup": {},
+  "notes": [],
+  "hold": {
+    "opened": 34,
+    "total": 50,
+    "stillOpenAtEnd": 34,
+    "closedDuringHold": 0,
+    "gpsFramesSent": 170,
+    "gpsPerSec": 21.3,
+    "totalFramesReceived": 272,
+    "socketErrors": 16,
+    "pongSamples": 272,
+    "pongRtt": {
+      "n": 272,
+      "p50": 337,
+      "p95": 418.2,
+      "max": 425.6,
+      "min": 312.5,
+      "avg": 345.6
+    }
+  },
+  "finishedAt": "2026-10-16T22:07:48.184Z",
+  "durationSec": 24.3,
+  "totalHttpRequests": 2
+}

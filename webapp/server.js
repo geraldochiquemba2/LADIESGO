@@ -533,9 +533,12 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/app' || req.url.startsWith('/app?')) page = 'ladiesgo-login.html';
   else if (req.url === '/home' || req.url.startsWith('/home')) page = 'ladiesgo-home.html';
   else if (req.url === '/admin' || req.url.startsWith('/admin?')) page = 'admin.html';
+  else if (req.url === '/motoristas' || req.url.startsWith('/motoristas?')) page = 'motoristas.html';
   else if (req.url === '/historia') page = 'ladiesgo.html';
   else if (req.url === '/privacidade') page = 'privacidade.html';
   else if (req.url === '/luanda-map' || req.url.startsWith('/luanda-map?')) page = 'luanda-map.html';
+  else if (req.url === '/t' || req.url.startsWith('/t?')) page = 'track.html';
+  else if (req.url === '/track' || req.url.startsWith('/track?')) page = 'track.html';
   else if (req.url === '/old') page = 'index.html';
   else if (req.url === '/site') page = '../website/index.html';
   const file = path.join(__dirname, page);
