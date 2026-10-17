@@ -1185,17 +1185,34 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
     // isso "kilamba bloco" encontra os blocos do Kilamba com o número (ex.:
     // "Bloco D27") em vez de cair no Photon/Nominatim sem número.
     // Ordena por: prefixo do nome, depois bloco/quarteirão, depois distância.
-    const rows: any[] = await sql`
+    // A esmagadora maioria das pesquisas começa pelo nome do local. O caminho
+    // rápido usa o índice places_nname_idx via GLOB de prefixo (o LIKE com o %
+    // à frente não usava índice e lia as ~23k linhas TODAS a cada pesquisa).
+    // Se houver poucos prefixos, cai no LIKE clássico (recall total) abaixo.
+    const g1 = t1.replace(/([*?\[\]])/g, '[$1]') + '*';
+    let rows: any[] = await sql`
       SELECT name, nname, lat, lng, type, municipality, province, street, "number"
       FROM places
-      WHERE norm LIKE ${'%' + t1 + '%'}
+      WHERE nname GLOB ${g1}
         AND (${t2} = '' OR norm LIKE ${'%' + t2 + '%'})
         AND (${t3} = '' OR norm LIKE ${'%' + t3 + '%'})
-      ORDER BY ((CASE WHEN nname LIKE ${tf + '%'} THEN 2 ELSE 0 END)
-        + (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END)) DESC,
+      ORDER BY (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END) DESC,
         (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
       LIMIT 400
     `;
+    if (rows.length < 8) {
+      rows = await sql`
+        SELECT name, nname, lat, lng, type, municipality, province, street, "number"
+        FROM places
+        WHERE norm LIKE ${'%' + t1 + '%'}
+          AND (${t2} = '' OR norm LIKE ${'%' + t2 + '%'})
+          AND (${t3} = '' OR norm LIKE ${'%' + t3 + '%'})
+        ORDER BY ((CASE WHEN nname LIKE ${tf + '%'} THEN 2 ELSE 0 END)
+          + (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END)) DESC,
+          (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
+        LIMIT 400
+      `;
+    }
     const out = rows.map((r: any) => {
       const type = String(r.type || '');
       const base = type.split('[')[0].trim();
@@ -1235,7 +1252,10 @@ app.get('/api/places/search', async (c) => {
   if (q.length < 3 || !Number.isFinite(lat) || !Number.isFinite(lng)) {
     return c.json({ places: [] }, 200, { 'Cache-Control': 'public, max-age=600' });
   }
-  const pkey = 'places:v11:' + q.toLowerCase() + ':' + Math.round(lat * 1000) / 1000 + ',' + Math.round(lng * 1000) / 1000;
+  // Coordenadas arredondadas a ~1km: a mesma pesquisa em pontos próximos partilha
+  // cache (os 15 melhores resultados não mudam de forma percetível nesse raio),
+  // o que multiplica os acertos de cache e reduz os varrimentos à BD.
+  const pkey = 'places:v12:' + q.toLowerCase() + ':' + Math.round(lat * 100) / 100 + ',' + Math.round(lng * 100) / 100;
   const phit = await cacheGet(c, pkey);
   if (phit) return phit;
   // Base local primeiro: instantâneo, offline e com distância à localização.
