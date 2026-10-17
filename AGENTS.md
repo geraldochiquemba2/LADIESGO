@@ -65,3 +65,5 @@ em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).
 - Conta nova (isabel): escritas bloqueadas até 00:00 UTC. Leituras OK. Fase 1a 348f7ff deployada.
 - Após 00:00 UTC: aplicar migrations/0008_places_fts.sql na D1 remota (new account).
 - Smoke test guest/register/toggle-online: 500→200/201 com reset.
+- Conta antiga (ladiesgo-ao): 429 Error 1027 (Workers req/dia) — manter inativa.
+- Webapp aponta para conta nova; Pages OK.
