@@ -265,7 +265,10 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
   if (body?.fcmToken) {
     try { await sql`UPDATE users SET "fcmToken" = NULL, "updatedAt" = NOW() WHERE "fcmToken" = ${body.fcmToken} AND id != ${user.sub}`; } catch {}
   }
-  const rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "profilePhoto" = COALESCE(${photo}, "profilePhoto"), "updatedAt" = NOW() WHERE id = ${user.sub} RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
+  // QUOTA D1: guarda de idempotência — só escreve se algum campo mudar mesmo;
+  // sem mudança, devolve a linha atual (SELECT) para manter a resposta igual.
+  let rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "profilePhoto" = COALESCE(${photo}, "profilePhoto"), "updatedAt" = NOW() WHERE id = ${user.sub} AND (COALESCE(${body?.name ?? null}, name) IS NOT name OR COALESCE(${body?.fcmToken ?? null}, "fcmToken") IS NOT "fcmToken" OR COALESCE(${photo}, "profilePhoto") IS NOT "profilePhoto") RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
+  if (!rows.length) rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance" FROM users WHERE id = ${user.sub} LIMIT 1`;
   // Registo no canal Telegram (mesmo fluxo do painel admin): só quando vem foto nova.
   let tgOn = false;
   if (photo) {
@@ -300,7 +303,20 @@ app.delete('/api/v1/users/me', requireAuth, async (c) => {
   await sql`UPDATE users SET "isActive" = false, "updatedAt" = NOW() WHERE id = ${user.sub}`;
   return c.json({ success: true });
 });
-app.post('/api/v1/users/report', requireAuth, async (c) => c.json({ success: true }));
+// QUOTA D1: report persistido (antes era stub que descartava o report em silêncio).
+app.post('/api/v1/users/report', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const { reportedUserId, reason, tripId } = await c.req.json().catch(() => ({}));
+  const rid = String(reportedUserId || '').slice(0, 64);
+  const why = String(reason || '').slice(0, 500);
+  if (!rid || !why) return c.json({ message: 'Dados inválidos.' }, 400);
+  await sql`
+    INSERT INTO reports (id, "reporterId", "reportedUserId", reason, "tripId", "createdAt")
+    VALUES (gen_random_uuid()::text, ${user.sub}, ${rid}, ${why}, ${tripId ? String(tripId).slice(0, 64) : null}, NOW())
+  `;
+  return c.json({ success: true });
+});
 
 // ─── DRIVERS ───
 app.get('/api/v1/drivers/status', requireAuth, async (c) => {
@@ -318,7 +334,9 @@ app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
     const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${user.sub} LIMIT 1`;
     if (w.length && Number(w[0].walletBlocked || 0)) return c.json({ message: 'Saldo negativo. Carrega a tua conta para voltares a ficar online.' }, 403);
   }
-  const rows = await sql`UPDATE drivers SET "isOnline" = ${!!isOnline}, "updatedAt" = NOW() WHERE "userId" = ${user.sub} RETURNING "isOnline"`;
+  // QUOTA D1: guarda de transição — retry com o mesmo valor escreve 0 linhas.
+  let rows = await sql`UPDATE drivers SET "isOnline" = ${!!isOnline}, "updatedAt" = NOW() WHERE "userId" = ${user.sub} AND "isOnline" IS NOT ${!!isOnline} RETURNING "isOnline"`;
+  if (!rows.length) rows = await sql`SELECT "isOnline" FROM drivers WHERE "userId" = ${user.sub} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
   return c.json({ isOnline: !!rows[0].isOnline });
 });
@@ -678,8 +696,15 @@ app.get('/api/v1/trips/history', requireAuth, async (c) => {
 app.get('/api/v1/trips/active', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
-  const rows = await sql`SELECT t.* FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND (t."passengerId" = ${user.sub} OR d."userId" = ${user.sub}) ORDER BY t."createdAt" DESC LIMIT 1`;
-  return c.json(rows[0] || null);
+  // QUOTA D1: dois lookups indexados (passageira / motorista) em vez de um
+  // OR sobre JOIN que forçava varrimento sem índice. Mesma forma e mesmo
+  // "trip ativa mais recente" do que antes.
+  const asPax = await sql`SELECT t.* FROM trips t WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND t."passengerId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
+  const asDrv = await sql`SELECT t.* FROM trips t JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND d."userId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
+  const a = asPax[0] || null, b = asDrv[0] || null;
+  const ta = a && a.createdAt ? new Date(a.createdAt).getTime() : 0;
+  const tb = b && b.createdAt ? new Date(b.createdAt).getTime() : 0;
+  return c.json(ta >= tb ? a : b);
 });
 // ─── LIVE PUSH BASE (WS hibernável, 1 DO por viagem; polling REST continua) ───
 // GET /api/v1/trips/:id/live → upgrade WS para o TripPush do tripId.
@@ -950,7 +975,9 @@ app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
   const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
   if (!cur.length || cur[0].status !== 'DRIVER_ARRIVED') return c.json({ message: 'Transição inválida.' }, 400);
   if (String(pin || '') !== pinForTrip(id)) return c.json({ message: 'Código incorreto.' }, 400);
-  const rows = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
+  // QUOTA D1: guarda de transição — retry escreve 0 linhas.
+  const rows = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'DRIVER_ARRIVED' RETURNING *`;
+  if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
   pushStatus(c, id, 'IN_PROGRESS');
   return c.json(rows[0]);
 });
@@ -1831,413 +1858,6 @@ app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
   return c.json({ success: true, userId, driverStatus, password: '0987654321' });
 });
 
-// ─── MISSING MOBILE APP ENDPOINTS ───
-
-// DELETE /api/v1/users/me — Delete account
-app.delete('/api/v1/users/me', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  await sql`UPDATE users SET "isActive" = false, "updatedAt" = NOW() WHERE id = ${user.sub}`;
-  return c.json({ success: true });
-});
-
-// POST /api/v1/users/report — Report a user
-app.post('/api/v1/users/report', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const { reportedUserId, reason, tripId } = await c.req.json().catch(() => ({}));
-  if (!reportedUserId || !reason) return c.json({ message: 'Dados inválidos.' }, 400);
-  await sql`
-    INSERT INTO reports (id, "reporterId", "reportedUserId", reason, "tripId", "createdAt")
-    VALUES (gen_random_uuid()::text, ${user.sub}, ${reportedUserId}, ${reason}, ${tripId || null}, NOW())
-  `;
-  return c.json({ success: true });
-});
-
-// GET /api/v1/drivers/status — Get driver status
-app.get('/api/v1/drivers/status', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const rows = await sql`
-    SELECT d.*, u.name, u.phone
-    FROM drivers d
-    JOIN users u ON u.id = d."userId"
-    WHERE d."userId" = ${user.sub}
-    LIMIT 1
-  `;
-  if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
-  return c.json({
-    ...rows[0],
-    isOnline: !!rows[0].isOnline,
-    totalEarnings: Number(rows[0].totalEarnings || 0),
-  });
-});
-
-// PUT /api/v1/drivers/toggle-online — Toggle online status
-// QUOTA D1: grava 1 linha EM CADA chamada (sem guarda de transicao). A app usa sobretudo
-// POST /api/v1/drivers/position (que so grava no offline<->online). Manter assim barato;
-// nao chamar este endpoint em polling. Ver LADIESGO/AGENTS.md "Limites do plano Free".
-app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const { isOnline } = await c.req.json().catch(() => ({}));
-  if (isOnline) {
-    const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${user.sub} LIMIT 1`;
-    if (w.length && Number(w[0].walletBlocked || 0)) return c.json({ message: 'Saldo negativo. Carrega a tua conta para voltares a ficar online.' }, 403);
-  }
-  const rows = await sql`
-    UPDATE drivers SET "isOnline" = ${!!isOnline}, "updatedAt" = NOW()
-    WHERE "userId" = ${user.sub}
-    RETURNING "isOnline"
-  `;
-  if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
-  return c.json({ isOnline: !!rows[0].isOnline });
-});
-
-// PUT /api/v1/drivers/location — Update driver location
-// QUOTA D1: grava uma linha INCONDICIONALMENTE a cada chamada (por fix de GPS). E o endpoint
-// mais perigoso para o teto de 100k escritas/dia: se a app o chamar em ciclo (fallback de GPS
-// ou cliente antigo), esgota a quota sozinho. O caminho normal envia o GPS por WebSocket ao
-// Durable Object DriverGeo (nao toca a D1). NAO usar em polling; se possivel, so gravar quando
-// a posicao muda o suficiente. Ver LADIESGO/AGENTS.md "Limites do plano Free".
-app.put('/api/v1/drivers/location', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const { lat, lng } = await c.req.json().catch(() => ({}));
-  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
-    return c.json({ message: 'Posição inválida.' }, 400);
-  }
-  await sql`
-    UPDATE drivers SET "currentLat" = ${Number(lat)}, "currentLng" = ${Number(lng)}, "updatedAt" = NOW()
-    WHERE "userId" = ${user.sub}
-  `;
-  return c.json({ ok: true });
-});
-
-// GET /api/v1/drivers/earnings — Get driver earnings
-app.get('/api/v1/drivers/earnings', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
-  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
-  const offset = (page - 1) * limit;
-  const driverRes = await sql`SELECT id FROM drivers WHERE "userId" = ${user.sub} LIMIT 1`;
-  if (!driverRes.length) return c.json({ earnings: [], total: 0, page, limit });
-  const driverId = driverRes[0].id;
-  const totalRes = await sql`SELECT COUNT(*)::int AS total FROM trips WHERE "driverId" = ${driverId} AND status = 'COMPLETED'`;
-  const tripsRes = await sql`
-    SELECT id, "finalFare", "createdAt"
-    FROM trips
-    WHERE "driverId" = ${driverId} AND status = 'COMPLETED'
-    ORDER BY "createdAt" DESC
-    LIMIT ${limit} OFFSET ${offset}
-  `;
-  const total = Number(totalRes[0]?.total || 0);
-  const earnings = tripsRes.map((r: any) => ({
-    tripId: r.id,
-    amount: Number(r.finalFare || 0),
-    date: r.createdAt,
-  }));
-  return c.json({ earnings, total, page, limit });
-});
-
-// POST /api/v1/trips/estimate — Estimate trip fare
-app.post('/api/v1/trips/estimate', requireAuth, async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const dist = havKm(
-    Number(body.pickupLat), Number(body.pickupLng),
-    Number(body.dropoffLat), Number(body.dropoffLng)
-  );
-  const base = BASE_FARE + dist * PER_KM;
-  const surge = surgeNow();
-  const mult = RIDE_MULT[String(body.rideType || 'ECONOMY')] ?? 1.0;
-  const options = Object.keys(RIDE_MULT).map((type) => ({
-    type,
-    fare: Math.round(base * surge * RIDE_MULT[type] * 100) / 100,
-  }));
-  return c.json({
-    distanceKm: Math.round(dist * 10) / 10,
-    estimatedFare: Math.round(base * surge * mult * 100) / 100,
-    currency: 'Kz',
-    surgeMultiplier: surge,
-    surgeActive: surge > 1,
-    options,
-  });
-});
-
-// POST /api/v1/trips/request — Request a trip
-app.post('/api/v1/trips/request', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const b = await c.req.json().catch(() => ({}));
-  const active = await sql`
-    SELECT id, status FROM trips
-    WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')
-    ORDER BY "createdAt" DESC LIMIT 1
-  `;
-  if (active.length && active[0].status !== 'REQUESTED') {
-    return c.json({ message: 'You already have an active trip. Complete or cancel it first.' }, 400);
-  }
-  if (active.length) {
-    await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = 'Replaced by new booking', "updatedAt" = NOW() WHERE id = ${active[0].id}`;
-  }
-  const dist = havKm(Number(b.pickupLat), Number(b.pickupLng), Number(b.dropoffLat), Number(b.dropoffLng));
-  const fare = Math.round((BASE_FARE + dist * PER_KM) * surgeNow() * (RIDE_MULT[String(b.rideType || 'ECONOMY')] ?? 1) * 100) / 100;
-  const rows = await sql`
-    INSERT INTO trips (
-      id, "passengerId", "pickupAddress", "pickupLat", "pickupLng",
-      "dropoffAddress", "dropoffLat", "dropoffLng", status, "rideType",
-      "fareEstimate", "distanceKm", "paymentMethod", "createdAt", "updatedAt"
-    ) VALUES (
-      gen_random_uuid()::text, ${user.sub},
-      ${String(b.pickupAddress || 'Luanda')}, ${Number(b.pickupLat)}, ${Number(b.pickupLng)},
-      ${String(b.dropoffAddress || 'Luanda')}, ${Number(b.dropoffLat)}, ${Number(b.dropoffLng)},
-      'REQUESTED', ${String(b.rideType || 'ECONOMY')},
-      ${fare}, ${Math.round(dist * 10) / 10},
-      ${String(b.paymentMethod || 'CASH')}, NOW(), NOW()
-    ) RETURNING *
-  `;
-  return c.json(rows[0]);
-});
-
-// GET /api/v1/trips/active — Get active trip
-app.get('/api/v1/trips/active', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const rows = await sql`
-    SELECT t.*, du.name AS driver_name
-    FROM trips t
-    LEFT JOIN drivers d ON d.id = t."driverId"
-    LEFT JOIN users du ON du.id = d."userId"
-    WHERE (t."passengerId" = ${user.sub} OR d."userId" = ${user.sub})
-      AND t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')
-    ORDER BY t."createdAt" DESC LIMIT 1
-  `;
-  if (!rows.length) return c.json(null);
-  const t = rows[0];
-  let driver = null;
-  if (t.driverId) {
-    const d = await sql`SELECT d."currentLat", d."currentLng", u.name FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${t.driverId} LIMIT 1`;
-    if (d.length) {
-      const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
-      const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
-      const dk = havKm(Number(d[0].currentLat), Number(d[0].currentLng), targetLa, targetLo);
-      driver = {
-        lat: Number(d[0].currentLat),
-        lng: Number(d[0].currentLng),
-        name: d[0].name,
-        distanceKm: Math.round(dk * 10) / 10,
-        etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)),
-      };
-    }
-  }
-  const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
-  return c.json({
-    id: t.id,
-    passengerId: t.passengerId,
-    pickupAddress: t.pickupAddress,
-    pickupLat: t.pickupLat,
-    pickupLng: t.pickupLng,
-    dropoffAddress: t.dropoffAddress,
-    dropoffLat: t.dropoffLat,
-    dropoffLng: t.dropoffLng,
-    status: t.status,
-    rideType: t.rideType,
-    fareEstimate: Number(t.fareEstimate),
-    distanceKm: Number(t.distanceKm),
-    paymentMethod: t.paymentMethod,
-    driver,
-    pin,
-    createdAt: t.createdAt,
-  });
-});
-
-// GET /api/v1/trips/:id — Get trip details
-app.get('/api/v1/trips/:id', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const id = c.req.param('id');
-  const rows = await sql`
-    SELECT t.*, du.name AS driver_name
-    FROM trips t
-    LEFT JOIN drivers d ON d.id = t."driverId"
-    LEFT JOIN users du ON du.id = d."userId"
-    WHERE t.id = ${id} LIMIT 1
-  `;
-  if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
-  const t = rows[0];
-  if (c.req.query('view') === 'web') {
-    const drv = await webDriverInfo(c.env, sql, t.driverId);
-    const pu = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
-    const pl = paxLive.get(t.id);
-    const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 && String(t.status) !== 'IN_PROGRESS' ? { lat: pl.lat, lng: pl.lng } : null });
-  }
-  let driver = null;
-  if (t.driverId) {
-    const d = await sql`SELECT d."currentLat", d."currentLng", u.name FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${t.driverId} LIMIT 1`;
-    if (d.length) {
-      const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
-      const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
-      const dk = havKm(Number(d[0].currentLat), Number(d[0].currentLng), targetLa, targetLo);
-      driver = {
-        lat: Number(d[0].currentLat),
-        lng: Number(d[0].currentLng),
-        name: d[0].name,
-        distanceKm: Math.round(dk * 10) / 10,
-        etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)),
-      };
-    }
-  }
-  const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
-  return c.json({
-    id: t.id,
-    passengerId: t.passengerId,
-    pickupAddress: t.pickupAddress,
-    pickupLat: t.pickupLat,
-    pickupLng: t.pickupLng,
-    dropoffAddress: t.dropoffAddress,
-    dropoffLat: t.dropoffLat,
-    dropoffLng: t.dropoffLng,
-    status: t.status,
-    rideType: t.rideType,
-    fareEstimate: Number(t.fareEstimate),
-    distanceKm: Number(t.distanceKm),
-    paymentMethod: t.paymentMethod,
-    driver,
-    pin,
-    createdAt: t.createdAt,
-  });
-});
-
-// PUT /api/v1/trips/:id/accept — Accept trip
-app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const id = c.req.param('id');
-  const didRes = await sql`SELECT id FROM drivers WHERE "userId" = ${user.sub} LIMIT 1`;
-  if (!didRes.length) return c.json({ message: 'Só motoristas.' }, 403);
-  const did = didRes[0].id;
-  const cur = await sql`SELECT status FROM trips WHERE id = ${id} LIMIT 1`;
-  if (!cur.length || cur[0].status !== 'REQUESTED') return c.json({ message: 'Viagem indisponível.' }, 400);
-  const rows = await sql`
-    UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW()
-    WHERE id = ${id} RETURNING *
-  `;
-  return c.json(rows[0]);
-});
-
-// PUT /api/v1/trips/:id/arrived — Mark arrived
-app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const id = c.req.param('id');
-  const rows = await sql`
-    UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW()
-    WHERE id = ${id} AND status = 'ACCEPTED' RETURNING *
-  `;
-  if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
-  return c.json(rows[0]);
-});
-
-// PUT /api/v1/trips/:id/start — Start trip
-app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const { pin } = await c.req.json().catch(() => ({}));
-  const id = c.req.param('id');
-  const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
-  if (!cur.length || cur[0].status !== 'DRIVER_ARRIVED') return c.json({ message: 'Transição inválida.' }, 400);
-  if (String(pin || '') !== pinForTrip(id)) return c.json({ message: 'Código incorreto.' }, 400);
-  const rows = await sql`
-    UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW()
-    WHERE id = ${id} RETURNING *
-  `;
-  return c.json(rows[0]);
-});
-
-// PUT /api/v1/trips/:id/complete — Complete trip
-app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const id = c.req.param('id');
-  const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
-  if (!cur.length || cur[0].status !== 'IN_PROGRESS') return c.json({ message: 'Transição inválida.' }, 400);
-  const t = cur[0];
-  const rows = await sql`
-    UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW()
-    WHERE id = ${id} RETURNING *
-  `;
-  if (t.driverId) {
-    await sql`
-      UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8}
-      WHERE id = ${t.driverId}
-    `;
-  }
-  await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id);
-  return c.json(rows[0]);
-});
-
-// PUT /api/v1/trips/:id/cancel — Cancel trip
-app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const { reason } = await c.req.json().catch(() => ({}));
-  const rows = await sql`
-    UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = ${String(reason || '').slice(0, 80)}, "updatedAt" = NOW()
-    WHERE id = ${c.req.param('id')} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') RETURNING *
-  `;
-  if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
-  return c.json(rows[0]);
-});
-
-// POST /api/v1/ratings — Create rating
-app.post('/api/v1/ratings', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const b = await c.req.json().catch(() => ({}));
-  const { tripId, ratedId, score, comment } = b;
-  if (!tripId || !ratedId || !score) return c.json({ message: 'Dados inválidos.' }, 400);
-  await sql`
-    INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt")
-    VALUES (${String(tripId) + ':' + user.sub}, ${tripId}, ${user.sub}, ${ratedId}, ${score}, ${comment || ''}, NOW())
-    ON CONFLICT (id) DO NOTHING
-  `;
-  return c.json({ success: true });
-});
-
-// GET /api/v1/notifications — Get notifications
-app.get('/api/v1/notifications', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
-  const limit = Math.min(50, Math.max(1, parseInt(c.req.query('limit') || '20', 10)));
-  const offset = (page - 1) * limit;
-  const rows = await sql`
-    SELECT id, title, body, type, "isRead", data, "createdAt"
-    FROM notifications
-    WHERE "userId" = ${user.sub}
-    ORDER BY "createdAt" DESC
-    LIMIT ${limit} OFFSET ${offset}
-  `;
-  return c.json({ notifications: rows, page, limit });
-});
-
-// GET /api/v1/notifications/unread-count — Get unread count
-app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const rows = await sql`
-    SELECT COUNT(*)::int AS count FROM notifications WHERE "userId" = ${user.sub} AND "isRead" = false
-  `;
-  return c.json({ count: Number(rows[0]?.count || 0) });
-});
-
-// PUT /api/v1/notifications/read-all — Mark all as read
-app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  await sql`UPDATE notifications SET "isRead" = true WHERE "userId" = ${user.sub}`;
-  return c.json({ success: true });
-});
-
 // ─── CATEGORIAS (geridas no painel admin) ───
 // GET /api/v1/categories — Lista pública (a home usa para nomes/cores/preços)
 app.get('/api/v1/categories', async (c) => {
@@ -2620,9 +2240,12 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       const acc = await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'REQUESTED' RETURNING *`;
       if (!acc.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'DRIVER_ARRIVED') {
-      await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+      // QUOTA D1: guarda de transição — retry escreve 0 linhas.
+      const r = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'ACCEPTED'`;
+      if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'IN_PROGRESS') {
-      await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id}`;
+      const r = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'DRIVER_ARRIVED'`;
+      if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'COMPLETED') {
       const devTs = Number((b as any).ts);
       const doneAt = Number.isFinite(devTs) && Math.abs(devTs - Date.now()) <= 15 * 60 * 1000 ? new Date(devTs) : new Date();
@@ -2630,7 +2253,9 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
       await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id);
     } else if (neonSt === 'CANCELLED') {
-      await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id}`;
+      // QUOTA D1: guarda de transição — retry escreve 0 linhas.
+      const r = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')`;
+      if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     }
     pushStatus(c, id, neonSt);
     if (neonSt === 'DRIVER_ARRIVED') { try { c.executionCtx.waitUntil(pushPaxArrived(c.env, id)); } catch {} }
@@ -2724,12 +2349,19 @@ export class TripRinger {
     const lastKick: number = (await this.state.storage.get('lastKick')) || 0;
     if (now - lastKick > 60000) await this.state.storage.put('sent', 0);
     await this.state.storage.put('lastKick', now);
+    // QUOTA DO: kick reinicia a contagem de ticks (backoff do toca-toca).
+    try { await this.state.storage.put('ticks', 0); } catch {}
     await this.state.storage.setAlarm(now + 4000);
     return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
   }
   async alarm() {
     try {
       const sent: number = (await this.state.storage.get('sent')) || 0;
+      // QUOTA DO: backoff do toca-toca — 4s nos 1.º2 ticks, depois 8s e 15s
+      // (em vez de 4s fixos até alguém aceitar). O kick volta a 4s.
+      const ticks: number = ((await this.state.storage.get('ticks')) || 0) + 1;
+      try { await this.state.storage.put('ticks', ticks); } catch {}
+      const nextMs = ticks <= 2 ? 4000 : ticks <= 4 ? 8000 : 15000;
       const sql = neon(this.env.DB);
       const rows = await sql`
         SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "rideType" FROM trips
@@ -2741,7 +2373,7 @@ export class TripRinger {
         // Já há conversa: só o recetor é avisado por mensagem; não insistir aqui.
         try {
           const ch = await sql`SELECT id FROM chat_messages WHERE "tripId" = ${t.id} AND "createdAt" > NOW() - INTERVAL '3 minutes' LIMIT 1`;
-          if (ch.length) { await this.state.storage.setAlarm(Date.now() + 4000); return; }
+          if (ch.length) { await this.state.storage.setAlarm(Date.now() + nextMs); return; }
         } catch {}
         const addr = String(t.dropoffAddress || 'Luanda');
         const cut = addr.indexOf(' · ');
@@ -2752,6 +2384,8 @@ export class TripRinger {
         try {
           const full = await sql`SELECT * FROM trips WHERE id = ${t.id} LIMIT 1`;
           if (full.length && !full[0].offerBroadcast && (offerQueueOf(full[0]).length || full[0].offeredDriverId)) {
+            const prevOff = String(full[0].offeredDriverId || '');
+            const prevIdx = Number(full[0].offerIdx || 0);
             const fresh: any = await advanceOfferIfNeeded(this.env, sql, full[0]);
             if (!fresh.offerBroadcast) {
               const offId = String(fresh.offeredDriverId || '');
@@ -2764,18 +2398,26 @@ export class TripRinger {
                 ringN += 1;
                 await this.state.storage.put('ringN', ringN);
               }
-              try { await hubBroadcast(this.env); } catch {}
-              await this.state.storage.setAlarm(Date.now() + 4000);
+              // QUOTA DO: broadcast SÓ quando a oferta rodou de verdade
+              // (motorista ou índice mudou), não em cada tick.
+              if (offId !== prevOff || Number(fresh.offerIdx || 0) !== prevIdx) { try { await hubBroadcast(this.env); } catch {} }
+              await this.state.storage.setAlarm(Date.now() + nextMs);
               return;
             }
           }
         } catch {}
-        try { await hubBroadcast(this.env); } catch {}
-        if (sent < 3) { await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!', byCode[t.rideType] || ''); await this.state.storage.put('sent', sent + 1); }
+        // QUOTA DO: broadcast de fallback (sem oferta exclusiva) só quando há
+        // mesmo push para enviar, não a cada tick.
+        if (sent < 3) {
+          try { await hubBroadcast(this.env); } catch {}
+          await pushTripToDrivers(sql, t.id, String(t.pickupAddress || 'Ponto no mapa'), cut >= 0 ? addr.slice(0, cut) : addr, Array.isArray(t.stops) ? t.stops.length : 0, Number(t.fareEstimate || 0), '🔔 Novo pedido LadiesGo!', byCode[t.rideType] || '');
+          await this.state.storage.put('sent', sent + 1);
+        }
       } else {
         // Resumo só das viagens em broadcast (as exclusivas já avisam a
         // ofertada). Sem nenhuma aberta, reagenda em silêncio.
-        if (sent >= 3) { try { await this.state.storage.setAlarm(Date.now() + 4000); } catch {} return; }
+        // QUOTA DO: já enviado o máximo de resumos — reagenda a 15s em vez de 4s.
+        if (sent >= 3) { try { await this.state.storage.setAlarm(Date.now() + 15000); } catch {} return; }
         let openN = rows.length;
         try {
           const oc = await sql`SELECT COUNT(*)::int AS n FROM trips WHERE status = 'REQUESTED' AND "createdAt" > NOW() - INTERVAL '6 minutes' AND ("offerBroadcast" = TRUE OR "offerQueue" IS NULL)`;
@@ -2798,7 +2440,7 @@ export class TripRinger {
         } catch {}
         await this.state.storage.put('sent', sent + 1);
       }
-      await this.state.storage.setAlarm(Date.now() + 4000);
+      await this.state.storage.setAlarm(Date.now() + nextMs);
     } catch {
       try { await this.state.storage.setAlarm(Date.now() + 10000); } catch {}
     }
@@ -3098,7 +2740,6 @@ export class DriverGeo {
   // A hibernação do DO limpa a memória. Sem isto, as posições desapareciam
   // quando o objeto ficava ocioso e a passagreira deixava de ver carros.
   loaded = false;
-  lastPut: Map<string, number> = new Map();
   async load() {
     if (this.loaded) return;
     this.loaded = true;
@@ -3126,14 +2767,10 @@ export class DriverGeo {
       online: online != null ? !!online : !!(prev?.online),
       ts: Date.now(),
     });
-    // Persiste no storage (sobrevive à hibernação). Debounce por motorista.
-    try {
-      const now = Date.now();
-      if (now - (this.lastPut.get(userId) || 0) >= 15000) {
-        this.lastPut.set(userId, now);
-        this.state.storage.put('p:' + userId, this.pos.get(userId)).catch(() => {});
-      }
-    } catch {}
+    // QUOTA DO: sem storage.put por fix — posições vivem SÓ em memória.
+    // load() (prefixo 'p:') continua no cold start e encontra vazio (inócuo);
+    // os próximos fixes WS/HTTP repõem a presença em <10s. Corta ~57k
+    // escritas DO/dia com 20 motoristas.
     return wasOnline;
   }
   // Espelha a transição online/offline da ligação WS na D1, para o filtro
@@ -3226,17 +2863,6 @@ async function ringStart(env: any) {
     await stub.fetch('https://ringer/kick');
   } catch {}
 }
-
-// POST /api/v1/payments/create-intent — Create payment intent
-app.post('/api/v1/payments/create-intent', requireAuth, async (c) => {
-  // Mock for now - would integrate with Stripe in production
-  return c.json({ clientSecret: null, cash: true });
-});
-
-// POST /api/v1/payments/confirm — Confirm payment
-app.post('/api/v1/payments/confirm', requireAuth, async (c) => {
-  return c.json({ success: true });
-});
 
 export default {
   fetch: app.fetch,
