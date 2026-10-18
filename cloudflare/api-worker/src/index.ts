@@ -412,10 +412,15 @@ app.get('/api/v1/drivers/wallet', requireAuth, async (c) => {
 // GPS adaptativo do mobile (5s viagem / 10s idle) escreve aqui. Sem socket.
 // A posição vai para o DO DriverGeo (memória) — 0 escritas D1 por ping.
 app.put('/api/v1/drivers/location', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
   const user = c.get('user');
   const { lat, lng } = await c.req.json().catch(() => ({}));
   const la = Number(lat), lo = Number(lng);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
+  try {
+    const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${user.sub} LIMIT 1`;
+    if (w.length && Number(w[0].walletBlocked || 0)) return c.json({ message: 'Conta bloqueada.' }, 403);
+  } catch {}
   await geoSet(c.env, { userId: user.sub, lat: la, lng: lo });
   return c.json({ ok: true });
 });
@@ -430,9 +435,9 @@ app.get('/api/v1/drivers/nearby', async (c) => {
   // Exclui motoristas com corrida ativa (aceite/em curso): já estão a servir
   // outra passageira e não podem aparecer como disponíveis no mapa.
   try {
-    rows = await sql`SELECT d.id, d."userId", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
+    rows = await sql`SELECT d.id, d."userId", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND COALESCE(u."walletBlocked", 0) = 0 AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
   } catch {
-    rows = await sql`SELECT d.id, d."userId", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
+    rows = await sql`SELECT d.id, d."userId", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND COALESCE(u."walletBlocked", 0) = 0 AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
   }
   const out = rows
     .map((d: any) => {
@@ -557,6 +562,15 @@ app.post('/api/v1/drivers/position', async (c) => {
   }
   const la = Number(b.lat), lo = Number(b.lng);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
+  // Conta bloqueada (saldo negativo): nao volta online nem aparece no mapa.
+  try {
+    const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${userId} LIMIT 1`;
+    if (w.length && Number(w[0].walletBlocked || 0)) {
+      await geoDel(c.env, userId);
+      await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
+      return c.json({ message: 'Conta bloqueada. Carrega a tua carteira.' }, 403);
+    }
+  } catch {}
   const cats = Array.isArray(b.cats) ? b.cats.map((x: any) => String(x).slice(0, 30)).slice(0, 6) : null;
   // Posição em memória no DO (0 escritas D1/ping). Só toca na D1 na transição
   // offline→online (1 escrita por sessão, não por ping).
@@ -614,8 +628,8 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
     const { byCode } = await catMaps(sql);
     let myCats: string[] | null = null;
     try {
-      const dr = await sql`SELECT cats, "isOnline" FROM drivers WHERE id = ${did} LIMIT 1`;
-      if (!dr.length || !dr[0].isOnline) return c.json({ trips: [] });
+      const dr = await sql`SELECT d.cats, d."isOnline", COALESCE(u."walletBlocked", 0) AS wb FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${did} LIMIT 1`;
+      if (!dr.length || !dr[0].isOnline || Number(dr[0].wb || 0)) return c.json({ trips: [] });
       if (Array.isArray(dr[0].cats) && dr[0].cats.length) myCats = dr[0].cats.map((x: any) => String(x));
     } catch {}
     const rows = await sql`
@@ -918,7 +932,7 @@ async function driverIdFor(sql: any, userId: string) {
 const COMMISSION_RATE = 0.14;
 const NEG_TRIP_LIMIT = 3;
 function money(n: any): number { return Math.round(Number(n || 0) * 100) / 100; }
-async function applyCommission(sql: any, driverRowId: string, fare: any, tripId: string) {
+async function applyCommission(sql: any, driverRowId: string, fare: any, tripId: string, env?: any) {
   try {
     if (!driverRowId) return;
     const f = Number(fare || 0);
@@ -941,7 +955,10 @@ async function applyCommission(sql: any, driverRowId: string, fare: any, tripId:
     }
     await sql`UPDATE users SET "walletBalance" = ${after}, "negTrips" = ${negTrips}, "walletBlocked" = ${blocked}, "updatedAt" = NOW() WHERE id = ${userId}`;
     await sql`INSERT INTO wallet_tx (id, "userId", type, amount, "balanceAfter", "tripId", note, "createdAt") VALUES (gen_random_uuid()::text, ${userId}, 'COMMISSION', ${-commission}, ${after}, ${tripId}, ${'Comissao 14% da viagem'}, NOW())`;
-    if (blocked) await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
+    if (blocked) {
+      await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
+      try { if (env) await geoDel(env, userId); } catch {}
+    }
   } catch (e) { console.error('commission error:', e); }
 }
 app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
@@ -2106,8 +2123,8 @@ async function buildOfferQueue(env: any, sql: any, pLa: number, pLo: number, rid
   const kmByUser = new Map(cands.map((c) => [c.userId, c.km]));
   let rows: any[] = [];
   try {
-    const P = 'SELECT d.id, d."userId", d.cats FROM drivers d WHERE d."userId" IN (';
-    const S = ') AND d."isOnline" = true AND d.status = \'APPROVED\' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN (\'ACCEPTED\',\'DRIVER_ARRIVED\',\'IN_PROGRESS\'))';
+    const P = 'SELECT d.id, d."userId", d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."userId" IN (';
+    const S = ') AND d."isOnline" = true AND d.status = \'APPROVED\' AND COALESCE(u."walletBlocked", 0) = 0 AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN (\'ACCEPTED\',\'DRIVER_ARRIVED\',\'IN_PROGRESS\'))';
     const strings: any[] = [P, ...Array(Math.max(0, ids.length - 1)).fill(', '), S];
     rows = await (sql as any)(strings, ...ids);
   } catch { return []; }
@@ -2305,7 +2322,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       const doneAt = Number.isFinite(devTs) && Math.abs(devTs - Date.now()) <= 15 * 60 * 1000 ? new Date(devTs) : new Date();
       await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = ${doneAt as any}, "updatedAt" = NOW() WHERE id = ${id}`;
       if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
-      await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id);
+      await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id, c.env);
     } else if (neonSt === 'CANCELLED') {
       // QUOTA D1: guarda de transição — retry escreve 0 linhas.
       const r = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')`;
@@ -2843,6 +2860,15 @@ export class DriverGeo {
   async d1Online(userId: string, online: boolean) {
     try {
       const sql = neon(this.env.DB);
+      if (online) {
+        const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${userId} LIMIT 1`;
+        if (w.length && Number(w[0].walletBlocked || 0)) {
+          this.pos.delete(userId);
+          try { this.state.storage.delete('p:' + userId).catch(() => {}); } catch {}
+          await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
+          return;
+        }
+      }
       await sql`UPDATE drivers SET "isOnline" = ${online}, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
     } catch {}
   }
