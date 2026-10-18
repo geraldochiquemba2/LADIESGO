@@ -414,10 +414,12 @@ app.get('/api/v1/drivers/nearby', async (c) => {
   const byUser = new Map<string, any>();
   for (const p of pos) if (p && p.userId) byUser.set(String(p.userId), p);
   let rows: any[];
+  // Exclui motoristas com corrida ativa (aceite/em curso): já estão a servir
+  // outra passageira e não podem aparecer como disponíveis no mapa.
   try {
-    rows = await sql`SELECT d.id, d."userId", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' LIMIT 100`;
+    rows = await sql`SELECT d.id, d."userId", u.name, d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
   } catch {
-    rows = await sql`SELECT d.id, d."userId", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' LIMIT 100`;
+    rows = await sql`SELECT d.id, d."userId", u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
   }
   const out = rows
     .map((d: any) => {
