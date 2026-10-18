@@ -1033,7 +1033,7 @@ app.post('/api/v1/trips/:id/skip', requireAuth, async (c) => {
 });
 app.put('/api/v1/trips/:id/arrived', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
-  const rows = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status = 'ACCEPTED' RETURNING *`;
+  const rows = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = COALESCE("arrivedAt", NOW()), "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status IN ('ACCEPTED', 'DRIVER_ARRIVED') RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
   pushStatus(c, c.req.param('id'), 'DRIVER_ARRIVED');
   try { c.executionCtx.waitUntil(pushPaxArrived(c.env, c.req.param('id'))); } catch {}
@@ -1044,10 +1044,12 @@ app.put('/api/v1/trips/:id/start', requireAuth, async (c) => {
   const { pin } = await c.req.json().catch(() => ({}));
   const id = c.req.param('id');
   const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
-  if (!cur.length || cur[0].status !== 'DRIVER_ARRIVED') return c.json({ message: 'Transição inválida.' }, 400);
+  if (!cur.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+  if (cur[0].status === 'IN_PROGRESS') return c.json(cur[0]);
+  if (cur[0].status !== 'DRIVER_ARRIVED' && cur[0].status !== 'ACCEPTED') return c.json({ message: 'Transição inválida.' }, 400);
   if (String(pin || '') !== pinForTrip(id)) return c.json({ message: 'Código incorreto.' }, 400);
   // QUOTA D1: guarda de transição — retry escreve 0 linhas.
-  const rows = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'DRIVER_ARRIVED' RETURNING *`;
+  const rows = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "arrivedAt" = COALESCE("arrivedAt", NOW()), "updatedAt" = NOW() WHERE id = ${id} AND status IN ('ACCEPTED', 'DRIVER_ARRIVED') RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
   pushStatus(c, id, 'IN_PROGRESS');
   return c.json(rows[0]);
@@ -1056,7 +1058,9 @@ app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const id = c.req.param('id');
   const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
-  if (!cur.length || cur[0].status !== 'IN_PROGRESS') return c.json({ message: 'Transição inválida.' }, 400);
+  if (!cur.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+  if (cur[0].status === 'COMPLETED') return c.json(cur[0]);
+  if (cur[0].status !== 'IN_PROGRESS') return c.json({ message: 'Transição inválida.' }, 400);
   const t = cur[0];
   const rows = await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
   if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
@@ -2286,12 +2290,14 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const st = String(b.status || '');
   const neonSt = WEB2NEON[st];
-  const okNext: Record<string, string[]> = { ACCEPTED: ['REQUESTED'], DRIVER_ARRIVED: ['ACCEPTED'], IN_PROGRESS: ['DRIVER_ARRIVED'], COMPLETED: ['IN_PROGRESS'], CANCELLED: ['REQUESTED', 'ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'] };
+  const okNext: Record<string, string[]> = { ACCEPTED: ['REQUESTED'], DRIVER_ARRIVED: ['ACCEPTED'], IN_PROGRESS: ['ACCEPTED', 'DRIVER_ARRIVED'], COMPLETED: ['IN_PROGRESS'], CANCELLED: ['REQUESTED', 'ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'] };
   if (!neonSt || !okNext[neonSt]) return c.json({ message: 'Transição inválida.' }, 400);
   try {
     const cur = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
     if (!cur.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
     const t = cur[0];
+    // Retry / toque duplo: se ja esta no estado pedido, devolve sucesso (idempotente).
+    if (t.status === neonSt) return c.json({ ok: true, status: st });
     if (okNext[neonSt].indexOf(t.status) < 0) return c.json({ message: 'Transição inválida.' }, 400);
     if (neonSt === 'ACCEPTED') {
       const did = await driverIdFor(sql, String(b.driverId || ''));
@@ -2315,7 +2321,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       const r = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'ACCEPTED'`;
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'IN_PROGRESS') {
-      const r = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'DRIVER_ARRIVED'`;
+      const r = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "arrivedAt" = COALESCE("arrivedAt", NOW()), "updatedAt" = NOW() WHERE id = ${id} AND status IN ('ACCEPTED', 'DRIVER_ARRIVED')`;
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'COMPLETED') {
       const devTs = Number((b as any).ts);
@@ -2392,7 +2398,7 @@ app.post('/api/v1/trips/:id/position', requireAuth, async (c) => {
 // Push com som (Expo) — usado no pedido imediato e no cron de repetição.
 async function pushTripToDrivers(sql: any, tripId: string, pickupName: string, destN: string, stopsN: number, fare: number, title: string, catName?: string) {
   try {
-    const cands = await sql`SELECT u."fcmToken", d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
+    const cands = await sql`SELECT u."fcmToken", d.cats FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND COALESCE(u."walletBlocked", 0) = 0 AND u."fcmToken" LIKE 'ExponentPushToken%' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
     const toks = cands.filter((r: any) => !catName || !Array.isArray(r.cats) || !r.cats.length || r.cats.map((x: any) => String(x)).indexOf(catName) >= 0);
     const body = `${pickupName} → ${destN}${stopsN ? ` · +${stopsN} paragem${stopsN > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`;
     const msgs = toks.map((r: any) => ({ to: r.fcmToken, sound: 'default', title, body, data: { tripId, type: 'new-trip' } })).filter((m: any) => m.to);
@@ -2500,7 +2506,7 @@ export class TripRinger {
         }
         try { await hubBroadcast(this.env); } catch {}
         try {
-          const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND u."fcmToken" LIKE 'ExponentPushToken%' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
+          const toks = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d."isOnline" = true AND d.status = 'APPROVED' AND COALESCE(u."walletBlocked", 0) = 0 AND u."fcmToken" LIKE 'ExponentPushToken%' AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 100`;
           const msgs = toks.map((r: any) => ({
             to: r.fcmToken, sound: 'default',
             title: '🔔 Viagens disponíveis — LadiesGo!',
