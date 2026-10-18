@@ -3,11 +3,56 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { makeSql as neon, d1metrics, resetD1Metrics } from './db';
+import { newBucket, tryConsume } from './ratelimit';
+import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
 
 type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
+
+// ─── Rate Limiting HTTP (sliding window, 100 req/min por IP) ───
+// Fase 1 — implementação em memória por isolate (estável para começar).
+// Produção futura: Durable Objects ou Cloudflare Rate Limiting na edge.
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 100;
+const rateLimitHits = new Map<string, { count: number; resetAt: number }>();
+
+function clientIp(c: any): string {
+  // CF-Connecting-IP é definido pela Cloudflare e não é falsificável pelo cliente.
+  return c.req.header('CF-Connecting-IP') || c.req.header('X-Real-IP') || '0.0.0.0';
+}
+
+function rateLimitCleanup() {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitHits.entries()) {
+    if (now > entry.resetAt) rateLimitHits.delete(ip);
+  }
+}
+let rateLimitLastCleanup = 0;
+
+app.use('/api/*', async (c, next) => {
+  const path = c.req.path;
+  // Health checks nunca são rate-limited (load balancer precisa deles).
+  if (path === '/ping' || path === '/api/v1/health' || path === '/api/v1/auth/guest') return next();
+  const now = Date.now();
+  if (now - rateLimitLastCleanup > 60_000) { rateLimitLastCleanup = now; rateLimitCleanup(); }
+  const ip = clientIp(c);
+  const entry = rateLimitHits.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitHits.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return next();
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    return c.json(
+      { message: 'Demasiados pedidos. Tenta de novo dentro de momentos.', retryAfterSec: Math.ceil((entry.resetAt - now) / 1000) },
+      429,
+      { 'Retry-After': String(Math.ceil((entry.resetAt - now) / 1000)) },
+    );
+  }
+  return next();
+});
 
 // ─── JWT HS256 via WebCrypto (sem deps Node) ───
 function b64url(data: ArrayBuffer | Uint8Array | string): string {
@@ -181,18 +226,12 @@ app.post('/api/v1/auth/guest', async (c) => {
 });
 
 // LOGIN: verificação PBKDF2 (WebCrypto) no worker — mesmo modelo do Neon (hash na BD).
-// Acesso mestre de demonstração: 999999999 / 1234567890 entra como ADMIN sem tocar na BD.
+// Backdoor admin 999999999 REMOVIDO (Fase 1 — exigência P0 do relatorio-narcisista.md).
+// Qualquer admin deve ser criado na BD com role='ADMIN' e autenticar normalmente.
 app.post('/api/v1/auth/login', async (c) => {
   const { phone, password } = await c.req.json().catch(() => ({}));
   const cleanPhone = String(phone || '').trim();
-  const local = cleanPhone.startsWith('+244') ? cleanPhone.slice(4) : cleanPhone.replace(/\D/g, '');
   if (!cleanPhone || !password) return c.json({ message: 'Número ou senha incorretos' }, 401);
-  // Admin master (igual ao server.js local)
-  if (local === '999999999' && String(password) === '1234567890') {
-    const admin = { id: 'admin-root', name: 'Admin', phone: '+244999999999', role: 'ADMIN' };
-    const accessToken = await signJwt({ sub: admin.id, phone: admin.phone, role: admin.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
-    return c.json({ user: admin, accessToken, isNew: false });
-  }
   const sql = neon(c.env.DB);
   const rows = await sql`SELECT id, phone, "passwordHash", name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = ${cleanPhone} AND "isActive" = true LIMIT 1`;
   if (!rows.length || !(await verifyPassword(String(password), rows[0].passwordHash))) return c.json({ message: 'Número ou senha incorretos' }, 401);
@@ -2756,6 +2795,7 @@ export class DriverGeo {
   setPos(userId: string, lat: number, lng: number, cats: any, online: boolean | null): boolean {
     const prev = this.pos.get(userId) || null;
     const wasOnline = !!prev?.online;
+    const now = Date.now();
     this.pos.set(userId, {
       userId,
       driverId: prev?.driverId || '',
@@ -2765,12 +2805,21 @@ export class DriverGeo {
       // com a sessão online, mantém as categorias já em vigor.
       cats: prev && prev.online ? (prev.cats || null) : (cats != null ? cats : (prev?.cats || null)),
       online: online != null ? !!online : !!(prev?.online),
-      ts: Date.now(),
+      ts: now,
     });
-    // QUOTA DO: sem storage.put por fix — posições vivem SÓ em memória.
-    // load() (prefixo 'p:') continua no cold start e encontra vazio (inócuo);
-    // os próximos fixes WS/HTTP repõem a presença em <10s. Corta ~57k
-    // escritas DO/dia com 20 motoristas.
+    // QUOTA DO: persistir no storage só na transição offline→online e no
+    // máximo 1x/2min por motorista (via ps). Sem isto, a hibernação/restart
+    // do DO perdia o Map em memória e load() encontrava o storage vazio —
+    // motoristas continuavam "online" na D1 mas ficavam invisíveis no
+    // /drivers/nearby até ao próximo ping (o utilizador via "Sem motoristas
+    // de momento" e só sumia com toggle offline→online). ~720 escritas/dia
+    // por motorista (2min) mantém-se bem dentro da quota DO (100k/dia).
+    const goingOnline = online === true && !wasOnline;
+    if (goingOnline || !prev || now - Number(prev.ps || 0) > 120_000) {
+      const rec: any = { ...this.pos.get(userId), ps: now };
+      this.pos.set(userId, rec);
+      try { this.state.storage.put('p:' + userId, rec).catch(() => {}); } catch {}
+    }
     return wasOnline;
   }
   // Espelha a transição online/offline da ligação WS na D1, para o filtro
@@ -2832,9 +2881,16 @@ export class DriverGeo {
     return new Response('not found', { status: 404 });
   }
   async webSocketMessage(ws: any, raw: any) {
+    // Fase 2 — Cap de mensagem (64KB) + token bucket
+    const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw).length : (raw?.byteLength || 0);
+    if (bytes > WS_MAX_MESSAGE_BYTES) { try { ws.close(1009, 'mensagem grande'); } catch {} return; }
     const a = (ws.deserializeAttachment && ws.deserializeAttachment()) || {};
     const userId = String(a.userId || '');
     if (!userId) return;
+    // Token bucket
+    if (!a.bucket) a.bucket = newBucket();
+    if (!tryConsume(a.bucket)) return;
+    ws.serializeAttachment(a);
     let m: any = null;
     try { m = JSON.parse(typeof raw === 'string' ? raw : ''); } catch { return; }
     if (!m || typeof m !== 'object') return;

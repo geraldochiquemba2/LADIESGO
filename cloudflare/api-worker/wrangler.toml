@@ -4,6 +4,8 @@ compatibility_date = "2025-06-01"
 
 [vars]
 JWT_EXPIRES_IN = "7d"
+RATE_LIMIT_MAX = "100"
+RATE_LIMIT_WINDOW_MS = "60000"
 
 # D1 (SQLite) — substitui o Neon Postgres. Sem cartão, sem migrações do Postgres.
 [[d1_databases]]
