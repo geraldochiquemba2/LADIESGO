@@ -27,6 +27,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.ladiesgo.app",
+      "appleTeamId": "4ZQGZ9N775",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "A LadiesGo precisa da câmara para foto de perfil e documentos da motorista.",
