@@ -182,7 +182,7 @@ table{border:1px solid #f1edf9}
     <h2>Frota</h2>
     <table><thead><tr><th>Categoria</th><th>Viatura</th><th>Preço/km</th><th>Motorista</th><th>Estado</th><th>Reservas</th><th></th></tr></thead><tbody id="fleet"><tr><td colspan="7" class="mut">A carregar…</td></tr></tbody></table>
     <h2 style="margin-top:16px">Reservas recentes</h2>
-    <table><thead><tr><th>Quando</th><th>Passageira</th><th>Viatura</th><th>De → Para</th><th>Preço</th><th>Estado</th><th>Pos.</th></tr></thead><tbody id="pres"><tr><td colspan="7" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Quando</th><th>Passageira</th><th>Viatura</th><th>De → Para</th><th>Preço</th><th>Estado</th><th>Pos.</th><th></th></tr></thead><tbody id="pres"><tr><td colspan="8" class="mut">A carregar…</td></tr></tbody></table>
   </section>
   <section id="sec-new" style="display:none">
     <h2>Registar motorista</h2>
@@ -629,7 +629,7 @@ async function renderPremium(){
       +'<td class="mono">'+Number(x.activeReservations||0)+'</td>'
       +'<td><button class="chip" data-a="togglefleet" data-id="'+esc(x.id)+'" data-st="'+(x.status==='available'?'unavailable':'available')+'">'+(x.status==='available'?'Indisponível':'Disponível')+'</button> <button class="chip" data-a="releasefleet" data-id="'+esc(x.id)+'">Libertar</button> <button class="chip" data-a="delfleet" data-id="'+esc(x.id)+'">Apagar</button></td></tr>';
   }).join('')||'<tr><td colspan="7" class="mut">Sem carros na frota.</td></tr>';
-  const pb=$('pres');if(pb)pb.innerHTML='<tr><td colspan="7" class="mut">A carregar…</td></tr>';
+  const pb=$('pres');if(pb)pb.innerHTML='<tr><td colspan="8" class="mut">A carregar…</td></tr>';
   try{
     const r=await fetch('/api/v1/admin/premium/reservations',{headers:ah(),cache:'no-store'});const j=await r.json();
     if(seq!==_fleetSeq)return;
@@ -637,9 +637,10 @@ async function renderPremium(){
     if(pb)pb.innerHTML=list.length?list.map(function(x){
       var car=[x.car&&x.car.make,x.car&&x.car.model].filter(Boolean).join(' ')+(x.car&&x.car.plate?(' · '+x.car.plate):'');
       var rota=(x.pickup&&x.pickup.name?x.pickup.name:'')+' → '+(x.dest&&x.dest.name?x.dest.name:'');
-      return '<tr><td class="mut">'+dstr(x.createdAt)+'</td><td><b>'+esc(x.passengerName||'—')+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(car)+'</td><td>'+esc(rota)+'</td><td class="mono">'+fmt(x.priceTotal)+' Kz</td><td><span class="pill">'+esc(x.status||'')+'</span></td><td class="mono">'+Number(x.position||0)+'</td></tr>';
-    }).join(''):'<tr><td colspan="7" class="mut">Sem reservas.</td></tr>';
-  }catch(e){if(seq===_fleetSeq&&pb)pb.innerHTML='<tr><td colspan="7" class="mut">Falhou a carregar.</td></tr>';}
+      var acts=(x.status==='pending')?'<button class="chip" data-a="confirmres" data-id="'+esc(x.id)+'">Confirmar</button> <button class="chip" data-a="rejectres" data-id="'+esc(x.id)+'">Rejeitar</button>':'';
+      return '<tr><td class="mut">'+dstr(x.createdAt)+'</td><td><b>'+esc(x.passengerName||'—')+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(car)+'</td><td>'+esc(rota)+'</td><td class="mono">'+fmt(x.priceTotal)+' Kz</td><td><span class="pill">'+esc(x.status||'')+'</span></td><td class="mono">'+Number(x.position||0)+'</td><td>'+acts+'</td></tr>';
+    }).join(''):'<tr><td colspan="8" class="mut">Sem reservas.</td></tr>';
+  }catch(e){if(seq===_fleetSeq&&pb)pb.innerHTML='<tr><td colspan="8" class="mut">Falhou a carregar.</td></tr>';}
 }
 async function addFleet(){
   const m=$('pfMsg');if(m)m.textContent='';
@@ -667,6 +668,8 @@ function saveFleet(id){const v=Number(((($('fp_'+id)||{}).value||'').replace(/[^
 function toggleFleet(id,status){fleetPut(id,{status:status});}
 async function releaseFleet(id){try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id)+'/release',{method:'POST',headers:ah()});if(!r.ok)throw 0;toast('Carro libertado ✓','ok');renderPremium();}catch(e){toast('Falhou.',false);}}
 async function delFleet(id){if(!confirm('Apagar este carro premium?'))return;try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id),{method:'DELETE',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Carro apagado ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
+async function confirmRes(id){try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/confirm',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva confirmada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
+async function rejectRes(id){if(!confirm('Rejeitar esta reserva premium?'))return;try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/reject',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva rejeitada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}}
 document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}}catch(e){}});
 document.addEventListener('click',e=>{
@@ -696,6 +699,10 @@ document.addEventListener('click',e=>{
   if(rf){releaseFleet(rf.dataset.id);return}
   const df=e.target.closest('[data-a="delfleet"]');
   if(df){delFleet(df.dataset.id);return}
+  const cr=e.target.closest('[data-a="confirmres"]');
+  if(cr){confirmRes(cr.dataset.id);return}
+  const rj=e.target.closest('[data-a="rejectres"]');
+  if(rj){rejectRes(rj.dataset.id);return}
   const wc=e.target.closest('[data-a="credit"]');
   if(wc){creditWallet();return}
   const wr=e.target.closest('[data-a="wcredit"]');

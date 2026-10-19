@@ -3313,7 +3313,8 @@ function premiumResOut(r: any) {
   };
 }
 
-// Expira reservas pendentes fora do prazo e promove a próxima da fila (+10 min).
+// Expira reservas pendentes que passaram do horário marcado. A confirmação é
+// manual (pelo admin); por isso não há promoção de fila nem janela de 10 min.
 // Throttle por isolate: o varrimento só corre a cada 30s (antes os endpoints
 // premium chamavam-no em TODA chamada — GET incluído). `force` é usado no
 // pagamento, para não aceitar uma reserva que já expirou. Só escreve se houver
@@ -3327,14 +3328,6 @@ async function premiumExpire(sql: any, force = false) {
   const stale = await sql`SELECT id FROM premium_reservations WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} LIMIT 50`;
   if (!stale.length) return [];
   const exp = await sql`UPDATE premium_reservations SET status = 'expired' WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} RETURNING car_id`;
-  const carIds: string[] = Array.from(new Set((exp || []).map((r: any) => r.car_id))).filter(Boolean) as string[];
-  for (const carId of carIds) {
-    const front = await sql`SELECT id FROM premium_reservations WHERE car_id = ${carId} AND status = 'pending' ORDER BY position ASC LIMIT 1`;
-    if (front.length) {
-      const newExp = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      await sql`UPDATE premium_reservations SET expires_at = ${newExp} WHERE id = ${front[0].id}`;
-    }
-  }
   return exp || [];
 }
 
@@ -3426,6 +3419,36 @@ app.post('/api/v1/admin/premium/fleet/:id/release', adminMiddleware, async (c) =
   return c.json({ ok: true });
 });
 
+// POST /api/v1/admin/premium/reservations/:id/confirm — admin confirma o pagamento
+// (comprovante enviado fora da app). A reserva fica confirmada e o carro passa a
+// 'reserved' (indisponível) até o admin o libertar.
+app.post('/api/v1/admin/premium/reservations/:id/confirm', adminMiddleware, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  const rows = await sql`SELECT id, car_id, passenger_id FROM premium_reservations WHERE id = ${id} AND status = 'pending' LIMIT 1`;
+  if (!rows.length) return c.json({ message: 'Reserva não encontrada ou já processada.' }, 404);
+  const carId = rows[0].car_id;
+  const pid = rows[0].passenger_id;
+  await sql`UPDATE premium_reservations SET status = 'confirmed' WHERE id = ${id} AND status = 'pending'`;
+  await sql`UPDATE premium_fleet SET status = 'reserved' WHERE id = ${carId}`;
+  try {
+    if (pid) await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+      VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${pid}, ${'Reserva Premium confirmada'}, ${'O teu carro premium está confirmado. Vê os detalhes no app.'}, 'premium', 0, ${id}, NOW())`;
+  } catch {}
+  return c.json({ ok: true, status: 'confirmed' });
+});
+
+// POST /api/v1/admin/premium/reservations/:id/reject — admin recusa a reserva pendente.
+app.post('/api/v1/admin/premium/reservations/:id/reject', adminMiddleware, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  const upd = await sql`UPDATE premium_reservations SET status = 'cancelled' WHERE id = ${id} AND status = 'pending' RETURNING id`;
+  if (!upd.length) return c.json({ message: 'Reserva não encontrada ou já processada.' }, 404);
+  return c.json({ ok: true, status: 'cancelled' });
+});
+
 app.get('/api/v1/admin/premium/reservations', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
   const rows = await sql`
@@ -3477,15 +3500,21 @@ app.post('/api/v1/premium/reservations', requireAuth, async (c) => {
   const plat = Number(b.pickupLat), plng = Number(b.pickupLng), dlat = Number(b.destLat), dlng = Number(b.destLng);
   if (![plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) return c.json({ message: 'Indica o ponto de busca e o destino.' }, 400);
   await premiumExpire(sql);
+  // Antecedência: a única aceite é 1 hora. A reserva fica pendente até ao
+  // horário marcado e só o admin a confirma (após o comprovante, fora da app).
+  const schedMs = Date.parse(String(b.scheduledAt || ''));
+  if (!Number.isFinite(schedMs)) return c.json({ message: 'Indica a data e a hora da reserva.' }, 400);
+  if (schedMs < Date.now() + 60 * 60 * 1000) return c.json({ message: 'As reservas Premium exigem pelo menos 1 hora de antecedência.' }, 400);
+  const scheduledIso = new Date(schedMs).toISOString();
   const km = Math.max(1, Math.round(havKm(plat, plng, dlat, dlng) * 10) / 10);
   const price = Math.max(1, Math.round(km * Number(cr.price_per_km || 0)));
   const posRow = await sql`SELECT COUNT(*)::int AS n FROM premium_reservations WHERE car_id = ${carId} AND status IN ('pending','confirmed')`;
   const position = Number(posRow[0]?.n || 0) + 1;
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const expiresAt = scheduledIso;
   const id = 'pr_' + crypto.randomUUID().slice(0, 12);
   await sql`INSERT INTO premium_reservations (id, car_id, category, passenger_id, pickup_lat, pickup_lng, pickup_name, dest_lat, dest_lng, dest_name, scheduled_at, distance_km, price_total, position, status, expires_at, created_at)
-    VALUES (${id}, ${carId}, ${cr.category}, ${user.sub}, ${plat}, ${plng}, ${String(b.pickupName || '').slice(0, 120)}, ${dlat}, ${dlng}, ${String(b.destName || '').slice(0, 120)}, ${b.scheduledAt ? String(b.scheduledAt).slice(0, 40) : null}, ${km}, ${price}, ${position}, 'pending', ${expiresAt}, NOW())`;
-  return c.json({ ok: true, reservation: { id, carId, category: cr.category, position, distanceKm: km, priceTotal: price, expiresAt, status: 'pending' } });
+    VALUES (${id}, ${carId}, ${cr.category}, ${user.sub}, ${plat}, ${plng}, ${String(b.pickupName || '').slice(0, 120)}, ${dlat}, ${dlng}, ${String(b.destName || '').slice(0, 120)}, ${scheduledIso}, ${km}, ${price}, ${position}, 'pending', ${expiresAt}, NOW())`;
+  return c.json({ ok: true, reservation: { id, carId, category: cr.category, position, distanceKm: km, priceTotal: price, scheduledAt: scheduledIso, expiresAt, status: 'pending' } });
 });
 
 // GET /api/v1/premium/reservations/mine — minhas reservas premium
@@ -3521,29 +3550,6 @@ app.get('/api/v1/premium/reservations/:id', requireAuth, async (c) => {
   const r = rows[0];
   if (r.passenger_id !== user.sub && user.role !== 'ADMIN') return c.json({ message: 'Sem acesso a esta reserva.' }, 403);
   return c.json({ reservation: premiumResOut(r) });
-});
-
-// POST /api/v1/premium/reservations/:id/pay — passageira confirma/paga (só a 1ª da fila)
-app.post('/api/v1/premium/reservations/:id/pay', requireAuth, async (c) => {
-  const guard = writeGuard(c); if (guard) return guard;
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  const id = c.req.param('id');
-  await premiumExpire(sql, true);
-  const mine = await sql`SELECT id, car_id FROM premium_reservations WHERE id = ${id} AND passenger_id = ${user.sub} AND status = 'pending' LIMIT 1`;
-  if (!mine.length) return c.json({ message: 'Reserva expirada ou já processada.' }, 409);
-  const carId = mine[0].car_id;
-  const front = await sql`SELECT id FROM premium_reservations WHERE car_id = ${carId} AND status = 'pending' ORDER BY position ASC LIMIT 1`;
-  if (!front.length || front[0].id !== id) return c.json({ message: 'Aguarda a tua vez na fila.' }, 409);
-  const upd = await sql`UPDATE premium_reservations SET status = 'confirmed' WHERE id = ${id} AND status = 'pending' RETURNING id`;
-  if (!upd.length) return c.json({ message: 'Reserva expirada ou já processada.' }, 409);
-  await sql`UPDATE premium_fleet SET status = 'reserved' WHERE id = ${carId}`;
-  await sql`UPDATE premium_reservations SET status = 'expired' WHERE car_id = ${carId} AND status = 'pending'`;
-  try {
-    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
-      VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${user.sub}, ${'Reserva Premium confirmada'}, ${'O teu carro premium está confirmado. Vê os detalhes no app.'}, 'premium', 0, ${id}, NOW())`;
-  } catch {}
-  return c.json({ ok: true, status: 'confirmed' });
 });
 
 // DELETE /api/v1/premium/reservations/:id — passageira cancela a sua reserva

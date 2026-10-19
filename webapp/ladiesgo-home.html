@@ -843,7 +843,10 @@ function prmEsc(x){return String(x==null?'':x).replace(/[&<>"']/g,function(c){re
 function prmPost(path,body){return fetch('/api/v1'+path,{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body||{})});}
 function prmGet(path){return fetch('/api/v1'+path,{headers:ah()});}
 function prmWhen(s){if(!s)return '';var dt=new Date(s);if(isNaN(dt.getTime()))return '';function p(n){return (n<10?'0':'')+n;}return p(dt.getDate())+'/'+p(dt.getMonth()+1)+' '+p(dt.getHours())+':'+p(dt.getMinutes());}
-function prmDefaultTime(){var d=new Date(Date.now()+30*60000);function p(n){return (n<10?'0':'')+n;}return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());}
+function prmFmtLocal(d){function p(n){return (n<10?'0':'')+n;}return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());}
+function prmDefaultTime(){return prmFmtLocal(new Date(Date.now()+60*60000));}
+function prmMinTime(){return prmFmtLocal(new Date(Date.now()+60*60000));}
+var PRM_WA='+244932483543';
 function prmSheet(html){try{$('sheet').innerHTML=html;}catch(e){}}
 function prmSyncEntry(){try{var el=document.getElementById('dPremium');if(!el)return;var u=null;try{u=me();}catch(e){}el.style.display=(u&&u.role==='DRIVER')?'none':'';}catch(e){}}
 var _prm={ph:'list',cats:[],car:null,o:null,d:null,time:'',rid:null};
@@ -906,7 +909,8 @@ function renderPremiumForm(){
     +'<div class="mut sm" style="margin:2px 0 8px">'+prmEsc([car.make,car.model,car.plate].filter(Boolean).join(' · '))+' · ≈ '+Number(car.pricePerKm||0).toLocaleString('pt-PT')+' Kz/km</div>'
     +'<div style="margin:6px 0"><label class="mut">Ponto de busca (X)</label><input type="text" id="prmOrigin" value="'+String(oVal).replace(/"/g,'&quot;')+'" readonly placeholder="Onde queres ser buscada?" data-prm="pick" data-f="o" style="'+inp+';cursor:pointer"></div>'
     +'<div style="margin:10px 0"><label class="mut">Destino (Y)</label><input type="text" id="prmDest" value="'+String(dVal).replace(/"/g,'&quot;')+'" readonly placeholder="Para onde vais?" data-prm="pick" data-f="d" style="'+inp+';cursor:pointer"></div>'
-    +'<div style="margin:10px 0"><label class="mut">Data e hora</label><input type="datetime-local" id="prmTime" value="'+(prmEsc(_prm.time)||prmDefaultTime())+'" style="'+inp+'"></div>'
+    +'<div style="margin:10px 0"><label class="mut">Data e hora</label><input type="datetime-local" id="prmTime" value="'+(prmEsc(_prm.time)||prmDefaultTime())+'" min="'+prmMinTime()+'" style="'+inp+'"></div>'
+    +'<div class="mut sm" style="margin:-4px 0 6px">Só aceitamos reservas com pelo menos 1 hora de antecedência.</div>'
     +'<div id="prmEst" style="font-size:13px;font-weight:700;color:var(--b);margin:8px 0">'+prmEstimate()+'</div>'
     +'<button class="cta" data-prm="submit">Continuar</button>'
     +'<button class="cta line" style="margin-top:8px" data-prm="list">Voltar</button></div>');
@@ -932,13 +936,16 @@ function renderPremiumConfirm(){
     +'<div style="margin-top:6px">Distância: <b>'+km.toFixed(1)+' km</b></div>'
     +'<div>Preço total: <b style="color:#61188E">'+Number(price).toLocaleString('pt-PT')+' Kz</b></div>'
     +'</div>'
-    +'<p class="mut sm" style="margin:8px 0">Tens 10 minutos para pagar. Se não pagares, a reserva expira e o carro volta a ficar disponível para a próxima da fila.</p>'
-    +'<button class="cta" data-prm="create">Reservar e pagar</button>'
+    +'<p class="mut sm" style="margin:8px 0">Ao confirmar, a tua reserva fica <b>A aguardar confirmação</b>. Faz o pagamento e envia o comprovante pelo WhatsApp da operação; o admin confirma a reserva e o carro fica indisponível para as outras passageiras.</p>'
+    +'<button class="cta" data-prm="create">Confirmar reserva</button>'
     +'<button class="cta line" style="margin-top:8px" data-prm="form">Voltar</button></div>');
 }
 async function prmCreate(){
   var t=_prm.time||((document.getElementById('prmTime')||{}).value||'');
-  var body={carId:_prm.car.id,pickupLat:_prm.o.lat,pickupLng:_prm.o.lng,pickupName:_prm.o.name,destLat:_prm.d.lat,destLng:_prm.d.lng,destName:_prm.d.name,scheduledAt:t||new Date().toISOString()};
+  var ms=t?Date.parse(t):NaN;
+  if(!Number.isFinite(ms)){lte('Indica a data e a hora da reserva.');return;}
+  if(ms<Date.now()+60*60000){lte('As reservas Premium exigem pelo menos 1 hora de antecedência.');return;}
+  var body={carId:_prm.car.id,pickupLat:_prm.o.lat,pickupLng:_prm.o.lng,pickupName:_prm.o.name,destLat:_prm.d.lat,destLng:_prm.d.lng,destName:_prm.d.name,scheduledAt:new Date(ms).toISOString()};
   try{
     var r=await prmPost('/premium/reservations',body);
     var j=await r.json().catch(function(){return null;});
@@ -957,10 +964,10 @@ async function renderPremiumReserve(){
   var res=j&&j.reservation;
   if(!res){prmSheet('<div class="pwbox"><h2>Reserva</h2><p class="mut">Reserva não encontrada.</p><button class="cta" data-prm="mine">As minhas reservas</button></div>');return;}
   var car=res.car||{};var st=res.status;
-  var statusTxt={pending:'Aguarda pagamento',confirmed:'Confirmada ✓',expired:'Expirada',cancelled:'Cancelada',completed:'Concluída'}[st]||st;
-  var timer=(st==='pending')?'<div id="prmTimer" style="font-size:15px;font-weight:800;color:var(--b);margin:8px 0">Tempo restante: --:--</div>':'';
+  var statusTxt={pending:'Aguarda confirmação',confirmed:'Confirmada ✓',expired:'Expirada',cancelled:'Cancelada',completed:'Concluída'}[st]||st;
+  var pendingNote=(st==='pending')?'<p class="mut sm" style="margin:8px 0">A tua reserva está à espera de confirmação do admin. Paga e envia o comprovante pelo WhatsApp da operação; só depois o carro fica reservado para ti.</p>':'';
   var acts='';
-  if(st==='pending'){acts='<button class="cta" data-prm="pay" data-id="'+res.id+'">Já paguei — confirmar reserva</button><button class="cta line" style="margin-top:8px" data-prm="cancel" data-id="'+res.id+'">Cancelar reserva</button>';}
+  if(st==='pending'){acts='<button class="cta" data-prm="proof" data-id="'+res.id+'">Enviar comprovante (WhatsApp)</button><button class="cta line" style="margin-top:8px" data-prm="cancel" data-id="'+res.id+'">Cancelar reserva</button>';}
   else if(st==='confirmed'){acts=sharedCallBtn(car.driverPhone,'Ligar à motorista')+'<button class="cta line" style="margin-top:8px" data-prm="mine">As minhas reservas</button>';}
   else{acts='<button class="cta" data-prm="mine">As minhas reservas</button>';}
   prmSheet('<div class="pwbox"><h2 style="font-size:18px">A minha reserva '+prmEsc(car.category||'Premium')+'</h2>'
@@ -972,15 +979,13 @@ async function renderPremiumReserve(){
     +(res.scheduledAt?'<div class="mut sm">Quando: '+prmWhen(res.scheduledAt)+'</div>':'')
     +'<div style="margin-top:6px">Distância: <b>'+Number(res.distanceKm||0).toFixed(1)+' km</b></div>'
     +'<div>Preço total: <b style="color:#61188E">'+Number(res.priceTotal||0).toLocaleString('pt-PT')+' Kz</b></div>'
-    +'</div>'+timer
+    +'</div>'+pendingNote
     +'<div style="margin-top:10px">'+acts+'</div></div>');
-  if(st==='pending'){prmStartTimer(res.expiresAt);}
 }
-async function prmPay(id){
-  try{var r=await prmPost('/premium/reservations/'+id+'/pay',{});var j=await r.json().catch(function(){return null;});
-    if(!r.ok||!j||!j.ok){lte((j&&j.message)||'Não foi possível confirmar.');_prm.rid=id;renderPremiumReserve();return;}
-    lte('Reserva confirmada ✓');_prm.rid=id;renderPremiumReserve();
-  }catch(e){lte('Falhou: '+String(e.message||e));}
+async function prmSendProof(id){
+  var msg='Olá! Fiz uma reserva Premium no LadiesGo (referência '+String(id||'').slice(0,12)+'). Envio aqui o comprovante de pagamento. Obrigada!';
+  try{window.open('https://wa.me/'+PRM_WA.replace(/\D/g,'')+'?text='+encodeURIComponent(msg),'_blank');}catch(e){}
+  lte('Envia o comprovante pelo WhatsApp da operação.');
 }
 async function prmCancel(id){
   if(!confirm('Cancelar a tua reserva premium?'))return;
@@ -992,7 +997,7 @@ async function renderPremiumMine(){
   var list=(j&&j.reservations)||[];
   var body=list.length?list.map(function(res){
     var car=res.car||{};var st=res.status;
-    var stTxt={pending:'Aguarda pagamento',confirmed:'Confirmada',expired:'Expirada',cancelled:'Cancelada',completed:'Concluída'}[st]||st;
+    var stTxt={pending:'Aguarda confirmação',confirmed:'Confirmada',expired:'Expirada',cancelled:'Cancelada',completed:'Concluída'}[st]||st;
     return '<button type="button" data-prm="open" data-id="'+res.id+'" style="width:100%;text-align:left;background:#fff;border:1px solid var(--ln);border-radius:12px;padding:10px;margin-bottom:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;gap:8px"><b>'+prmEsc(car.make?[car.make,car.model].filter(Boolean).join(' '):(res.category||'Premium'))+'</b><span class="mut sm">'+prmEsc(stTxt)+'</span></div><div class="mut sm">'+prmEsc((res.pickup&&res.pickup.name)||'')+' → '+prmEsc((res.dest&&res.dest.name)||'')+'</div><div class="mut sm">'+prmWhen(res.createdAt)+' · '+Number(res.priceTotal||0).toLocaleString('pt-PT')+' Kz</div></button>';
   }).join(''):'<p class="mut">Ainda não tens reservas premium.</p>';
   prmSheet('<div class="pwbox"><h2 style="font-size:18px">Minhas reservas premium</h2>'+body+'<button class="cta line" style="margin-top:8px" data-prm="list">Voltar</button></div>');
@@ -1064,7 +1069,7 @@ document.addEventListener('click',function(e){
   if(k==='create'){e.preventDefault();prmCreate();return;}
   if(k==='back'){e.preventDefault();_prm.ph='list';renderPremiumList();return;}
   if(k==='form'){e.preventDefault();_prm.ph='form';renderPremiumForm();return;}
-  if(k==='pay'){e.preventDefault();prmPay(act.getAttribute('data-id'));return;}
+  if(k==='proof'){e.preventDefault();prmSendProof(act.getAttribute('data-id'));return;}
   if(k==='cancel'){e.preventDefault();prmCancel(act.getAttribute('data-id'));return;}
   if(k==='open'){e.preventDefault();_prm.rid=act.getAttribute('data-id');_prm.ph='reserve';renderPremiumReserve();return;}
   if(k==='mine'){e.preventDefault();renderPremiumMine();return;}
