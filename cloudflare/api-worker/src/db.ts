@@ -8,7 +8,7 @@
 // - colunas JSON conhecidas são re-parseadas (Postgres devolve JSONB já parseado)
 // - booleans/Date normalizados para o binding
 
-import { markWrite } from './budget';
+import { markWrite, markRead } from './budget';
 
 const JSON_COLS = new Set([
   'cats', 'offerQueue', 'offerSkipped', 'offerMissed',
@@ -71,10 +71,14 @@ export function makeSql(db: any) {
     let query = strings[0];
     for (let i = 0; i < values.length; i++) query += '?' + strings[i + 1];
     query = translate(query);
-    if (WRITE_RE.test(query)) markWrite();
+    const isWrite = WRITE_RE.test(query);
     const stmt = values.length ? db.prepare(query).bind(...values.map(normalize)) : db.prepare(query);
     const res: any = await stmt.all();
     const meta = res && res.meta;
+    // Contabilidade REAL: nº de linhas escritas/lidas devolvido pela D1
+    // (o teto Free conta LINHAS, não statements). UPDATE sem efeito conta 1.
+    if (isWrite) markWrite((meta && meta.rows_written) || 1);
+    else if (meta) markRead(meta.rows_read || 0);
     if (meta) {
       d1metrics.queries++;
       d1metrics.rowsRead += meta.rows_read || 0;

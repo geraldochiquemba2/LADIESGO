@@ -2503,19 +2503,21 @@ export class TripRinger {
     const lastKick: number = (await this.state.storage.get('lastKick')) || 0;
     if (now - lastKick > 60000) await this.state.storage.put('sent', 0);
     await this.state.storage.put('lastKick', now);
-    // QUOTA DO: kick reinicia a contagem de ticks (backoff do toca-toca).
-    try { await this.state.storage.put('ticks', 0); } catch {}
+    // QUOTA DO: kick reinicia a cadência do toca-toca (startAt = agora).
+    try { await this.state.storage.put('startAt', now); } catch {}
     await this.state.storage.setAlarm(now + 4000);
     return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
   }
   async alarm() {
     try {
       const sent: number = (await this.state.storage.get('sent')) || 0;
-      // QUOTA DO: backoff do toca-toca — 4s nos 1.º2 ticks, depois 8s e 15s
-      // (em vez de 4s fixos até alguém aceitar). O kick volta a 4s.
-      const ticks: number = ((await this.state.storage.get('ticks')) || 0) + 1;
-      try { await this.state.storage.put('ticks', ticks); } catch {}
-      const nextMs = ticks <= 2 ? 4000 : ticks <= 4 ? 8000 : 15000;
+      // QUOTA DO: backoff calculado pelo tempo desde o kick (startAt), sem
+      // escrever 'ticks' a cada tick — 4s nos 1.º 8s, depois 10s (até 40s) e
+      // 20s no resto. Menos acordos do alarm e 1 escrita de DO menos por tick.
+      const nowT = Date.now();
+      const startAt = Number((await this.state.storage.get('startAt')) || 0) || nowT;
+      const elapsed = nowT - startAt;
+      const nextMs = elapsed < 8000 ? 4000 : elapsed < 40000 ? 10000 : 20000;
       const sql = neon(this.env.DB);
       const rows = await sql`
         SELECT id, "pickupAddress", "dropoffAddress", "fareEstimate", stops, "rideType" FROM trips
@@ -3312,8 +3314,18 @@ function premiumResOut(r: any) {
 }
 
 // Expira reservas pendentes fora do prazo e promove a próxima da fila (+10 min).
-async function premiumExpire(sql: any) {
+// Throttle por isolate: o varrimento só corre a cada 30s (antes os endpoints
+// premium chamavam-no em TODA chamada — GET incluído). `force` é usado no
+// pagamento, para não aceitar uma reserva que já expirou. Só escreve se houver
+// mesmo algo a expirar (evita um UPDATE vazio a cada chamada).
+let premiumSweepAt = 0;
+async function premiumExpire(sql: any, force = false) {
+  const nowMs = Date.now();
+  if (!force && nowMs - premiumSweepAt < 30000) return [];
+  premiumSweepAt = nowMs;
   const now = new Date().toISOString();
+  const stale = await sql`SELECT id FROM premium_reservations WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} LIMIT 50`;
+  if (!stale.length) return [];
   const exp = await sql`UPDATE premium_reservations SET status = 'expired' WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} RETURNING car_id`;
   const carIds: string[] = Array.from(new Set((exp || []).map((r: any) => r.car_id))).filter(Boolean) as string[];
   for (const carId of carIds) {
@@ -3517,7 +3529,7 @@ app.post('/api/v1/premium/reservations/:id/pay', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
-  await premiumExpire(sql);
+  await premiumExpire(sql, true);
   const mine = await sql`SELECT id, car_id FROM premium_reservations WHERE id = ${id} AND passenger_id = ${user.sub} AND status = 'pending' LIMIT 1`;
   if (!mine.length) return c.json({ message: 'Reserva expirada ou já processada.' }, 409);
   const carId = mine[0].car_id;
