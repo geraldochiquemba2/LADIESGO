@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Linking } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Linking, AppState } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
@@ -55,19 +55,37 @@ export default function App() {
   const jwtRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
   const loadTimer = useRef<any>(null);
+  const bgAtRef = useRef<number>(0);
+  const pingTimer = useRef<any>(null);
+  const loadRetry = useRef(0);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
   const endLoading = () => {
     try { if (loadTimer.current) clearTimeout(loadTimer.current); } catch {}
     loadTimer.current = null;
+    loadRetry.current = 0;
     setLoading(false);
   };
   const beginLoading = () => {
     setLoading(true);
     try { if (loadTimer.current) clearTimeout(loadTimer.current); } catch {}
-    // Rede de segurança: nenhum load fica a girar para sempre.
-    loadTimer.current = setTimeout(() => setLoading(false), 25000);
+    // Rede de segurança: nenhum load fica a girar para sempre. Se o load
+    // nunca termina (ecra lilas sem erro), recarrega uma vez antes de desistir.
+    loadTimer.current = setTimeout(() => {
+      loadTimer.current = null;
+      try { if (AppState.currentState !== 'active') { setLoading(false); return; } } catch {}
+      if (loadRetry.current < 1) {
+        loadRetry.current++;
+        reloadWeb();
+        return;
+      }
+      setLoading(false);
+    }, 25000);
+  };
+  const reloadWeb = () => {
+    try { beginLoading(); } catch {}
+    try { webRef.current?.reload(); } catch {}
   };
 
   // Permissões NATIVAS ao abrir (uma vez): localização + notificações com som.
@@ -88,9 +106,40 @@ export default function App() {
     })();
   }, []);
 
+  // Ao voltar do fundo depois de muito tempo o iOS pode matar o processo da
+  // WebView (ecrã lilás/vazio, só se resolve fechando a app). Aqui procura-se
+  // viver: se a página não responder, recarrega sozinha.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'background' || st === 'inactive') {
+        if (!bgAtRef.current) bgAtRef.current = Date.now();
+        return;
+      }
+      if (st !== 'active') return;
+      const away = bgAtRef.current ? Date.now() - bgAtRef.current : 0;
+      bgAtRef.current = 0;
+      if (away < 20000) return;
+      try { if (pingTimer.current) clearTimeout(pingTimer.current); } catch {}
+      try {
+        webRef.current?.injectJavaScript("try{window.ReactNativeWebView.postMessage(JSON.stringify({t:'pong'}))}catch(e){}true;");
+      } catch {}
+      pingTimer.current = setTimeout(() => {
+        pingTimer.current = null;
+        try { if (AppState.currentState !== 'active') return; } catch {}
+        reloadWeb();
+      }, 4000);
+    });
+    return () => { try { sub.remove(); } catch {} };
+  }, []);
+
   const onMessage = (e: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data || '{}');
+      if (msg.t === 'pong') {
+        try { if (pingTimer.current) clearTimeout(pingTimer.current); } catch {}
+        pingTimer.current = null;
+        return;
+      }
       if (msg.t === 'need-gps') {
         // O site pede autorização nativa (1ª negação): o sistema mostra o
         // prompt se ainda for permitido; depois tenta o GPS do site de novo.
@@ -258,6 +307,8 @@ export default function App() {
               setFailed(true);
             }
           }}
+          onContentProcessDidTerminate={() => { reloadWeb(); }}
+          onRenderProcessGone={() => { reloadWeb(); return true; }}
         />
         {loading && !failed && (
           <View style={splash.overlay}>
