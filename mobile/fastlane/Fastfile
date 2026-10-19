@@ -1,22 +1,33 @@
 default_platform(:ios)
 
 platform :ios do
-  desc "Gera cert + perfil, compila o IPA com Xcode e envia para o TestFlight (sem EAS)"
+  desc "Gera/reutiliza certificado, compila o IPA com Xcode e envia para o TestFlight (sem EAS)"
   lane :release do
     api_key = app_store_connect_api_key(
       key_id: ENV.fetch("ASC_KEY_ID"),
       issuer_id: ENV.fetch("ASC_ISSUER_ID"),
       key_filepath: ENV.fetch("ASC_KEY_PATH"),
-      duration: 1200,
-      in_house: false
+      duration: 1200
     )
 
-    cert(api_key: api_key, development: false)
+    keychain_path = File.expand_path("~/Library/Keychains/ladiesgo.keychain-db")
+
+    if ENV["DIST_CERT_P12"].to_s.strip.empty?
+      UI.message("Sem DIST_CERT_P12 -> a criar certificado de distribuicao novo")
+      cert(
+        api_key: api_key,
+        development: false,
+        keychain_path: keychain_path,
+        keychain_password: ENV.fetch("KEYCHAIN_PW")
+      )
+      sh("security export -k '#{keychain_path}' -t identities -f pkcs12 -P '#{ENV.fetch('DIST_CERT_PASSWORD')}' -o dist_cert.p12")
+    else
+      UI.message("A reutilizar o certificado de DIST_CERT_P12")
+    end
 
     sigh(
       api_key: api_key,
       app_identifier: "com.ladiesgo.app",
-      cert_id: lane_context[SharedValues::CERT_CERTIFICATE_ID],
       force: true
     )
 
@@ -30,6 +41,8 @@ platform :ios do
       output_name: "ladiesgo.ipa",
       xcargs: "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')}",
       export_options: {
+        signingStyle: "manual",
+        teamID: "4ZQGZ9N775",
         provisioningProfiles: {
           "com.ladiesgo.app" => lane_context[SharedValues::SIGH_NAME]
         }
