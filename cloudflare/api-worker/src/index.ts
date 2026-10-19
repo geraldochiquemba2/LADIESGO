@@ -30,6 +30,26 @@ function rateLimitCleanup() {
     if (now > entry.resetAt) rateLimitHits.delete(ip);
   }
 }
+
+// Guest login está isento do rate-limit geral, mas cria 1 linha em `users` por chamada
+// (quota de ESCRITAS da D1). Throttle dedicado por IP para não esgotar a quota.
+const guestHits = new Map<string, { count: number; resetAt: number }>();
+const GUEST_MAX = 15;
+const GUEST_WINDOW_MS = 3_600_000;
+function guestThrottle(ip: string): { ok: boolean; retryAfter: number } {
+  const now = Date.now();
+  if (guestHits.size > 2000) {
+    for (const [k, e] of guestHits.entries()) if (now > e.resetAt) guestHits.delete(k);
+  }
+  const e = guestHits.get(ip);
+  if (!e || now > e.resetAt) {
+    guestHits.set(ip, { count: 1, resetAt: now + GUEST_WINDOW_MS });
+    return { ok: true, retryAfter: 0 };
+  }
+  e.count++;
+  if (e.count > GUEST_MAX) return { ok: false, retryAfter: Math.ceil((e.resetAt - now) / 1000) };
+  return { ok: true, retryAfter: 0 };
+}
 let rateLimitLastCleanup = 0;
 
 app.use('/api/*', async (c, next) => {
@@ -235,6 +255,8 @@ app.get('/debug/geo', (c) => {
 
 // ─── AUTH ───
 app.post('/api/v1/auth/guest', async (c) => {
+  const g = guestThrottle(clientIp(c));
+  if (!g.ok) return c.json({ message: 'Demasiadas contas seguidas. Tenta mais tarde.' }, 429, { 'Retry-After': String(g.retryAfter) });
   const sql = neon(c.env.DB);
   const body = await c.req.json().catch(() => ({}));
   const phone = `+guest${[...crypto.getRandomValues(new Uint8Array(6))].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
