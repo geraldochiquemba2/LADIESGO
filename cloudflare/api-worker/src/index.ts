@@ -3249,13 +3249,15 @@ app.post('/api/v1/shared/departures/:id/expire', requireAuth, async (c) => {
   return c.json({ ok: true, expired: (expired || []).length, ids: (expired || []).map((r: any) => r.id) });
 });
 
-// GET /api/v1/shared/departures/mine — Motorista lista suas próprias partidas (inclui full/expiradas)
+// GET /api/v1/shared/departures/mine — Motorista lista suas próprias partidas
+// (full incluídas; as que já passaram 2h do horário de partida desaparecem)
 app.get('/api/v1/shared/departures/mine', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const did = await driverIdFor(sql, user.sub);
   if (!did) return c.json({ message: 'Sem registo de motorista.' }, 404);
-  const rows = await sql`SELECT sd.*, (SELECT COUNT(*) FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.status = 'approved') AS approved_count FROM shared_departures sd WHERE sd.driver_id = ${did} ORDER BY sd.created_at DESC LIMIT 100`;
+  const nowIso = new Date().toISOString();
+  const rows = await sql`SELECT sd.*, (SELECT COUNT(*) FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.status = 'approved') AS approved_count FROM shared_departures sd WHERE sd.driver_id = ${did} AND (sd.expires_at IS NULL OR sd.expires_at > ${nowIso}) ORDER BY sd.created_at DESC LIMIT 100`;
   return c.json({ departures: (rows || []).map((r: any) => ({
     id: r.id, originName: r.origin_name, destName: r.dest_name, category: r.category,
     totalPrice: r.total_price, pricePerSeat: r.price_per_seat, totalSeats: r.total_seats,
