@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Linking, AppState } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Linking, AppState } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
@@ -322,7 +322,7 @@ export default function App() {
         />
         {loading && !failed && (
           <View style={splash.overlay}>
-            <ActivityIndicator color="#fff" size="large" />
+            <Image source={require('./assets/icon.png')} style={splash.logo} resizeMode="contain" />
           </View>
         )}
       </SafeAreaView>
@@ -356,7 +356,7 @@ const splash = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  logo: { width: 150, height: 150, marginBottom: 12 },
+  logo: { width: 160, height: 160, borderRadius: 32 },
   name: { fontSize: 36, fontWeight: 'bold', color: '#fff', letterSpacing: 1 },
   tagline: { color: '#e3d0ff', fontSize: 16, marginTop: 6, textAlign: 'center', paddingHorizontal: 32 },
 });
