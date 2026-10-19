@@ -14,7 +14,7 @@
 .tact[data-s="completed"]{--tg:rgba(217,45,75,.5)}
 @keyframes tactPulse{0%,100%{box-shadow:0 0 0 0 var(--tg,rgba(91,33,201,.45))}50%{box-shadow:0 0 0 10px rgba(255,255,255,0)}}
 html{-webkit-text-size-adjust:100%}input,select,textarea{font-size:16px !important}
-</style></head><body><svg width="0" height="0" style="position:absolute"><defs><symbol id="i-logo" viewBox="0 0 40 30"><path d="M20 14C15 2 3 2 3 9C3 15 11 18 20 17Z M20 18C13 19 9 24 12 27C15 30 19 25 20 22Z M20 14C25 2 37 2 37 9C37 15 29 18 20 17Z M20 18C27 19 31 24 28 27C25 30 21 25 20 22Z"/></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.6-4.6"/></symbol><symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10l9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol><symbol id="i-work" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></symbol><symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 6.5V12l3.5 2"/></symbol><symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol><symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol><symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 17v3a2 2 0 0 1-2.2 2A19 19 0 0 1 2 4.2 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7A2 2 0 0 1 22 17z"/></symbol><symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.7 7L3 21l2-5.5A8 8 0 1 1 21 12z"/></symbol><symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 6l-4-4-4 4M12 2v13"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol><symbol id="i-star" viewBox="0 0 24 24"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z"/></symbol><symbol id="i-cash" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.8"/></symbol><symbol id="i-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol><symbol id="i-next" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol><symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></symbol><symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10a7 7 0 0 1-14 0M12 17v5"/></symbol><symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol><symbol id="i-pin" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></symbol></defs></svg><div class="app">  <div id="map"></div><div id="orgpin"><svg width="34" height="34" viewBox="0 0 24 24" style="filter:drop-shadow(0 3px 5px rgba(0,0,0,.35))"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7z" fill="#7c3aed" stroke="#fff" stroke-width="1.4"/><circle cx="12" cy="9" r="2.6" fill="#fff"/></svg></div>  <button class="fab" id="ham" data-a="menu" aria-label="Menu">☰</button>  <div class="fab" id="brand"></div>  <div id="scrim" data-a="closemenu"></div>  <nav id="drawer" aria-label="Menu"><div class="dhead"><div class="dav" id="dav">👤</div><div><b id="dname">Passageira</b><small id="dphone">LadiesGo!</small></div></div><button class="ditem" data-a="profile">👤 Perfil</button><button class="ditem" data-a="wallet" id="dWallet" style="display:none">💳 Carteira</button><button class="ditem" data-a="cars" id="dCars" style="display:none">🚗 Viaturas</button><button class="ditem" data-a="backhome">🏠 Voltar ao início</button><button class="ditem" data-a="trust">🛡️ Contactos</button><button class="ditem" data-a="histmenu">🧾 Histórico</button><button class="ditem" data-a="shared" id="dShared">🚗 Partida Compartilhada</button><button class="ditem" data-a="sharedmine" id="dSharedMine" style="display:none">📋 Minhas viagens compartilhadas</button><button class="ditem" data-a="sos">🛡️ Segurança</button><div id="drvCats" style="display:none;padding:4px 14px 10px"><b style="font-size:13px">As minhas categorias</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="chip" data-a="cat" data-c="Económico">Económico</button><button class="chip" data-a="cat" data-c="Conforto">Conforto</button><button class="chip" data-a="cat" data-c="Família">Família</button></div></div><div class="dfoot"><button class="ditem danger" data-a="delaccount">🗑 Eliminar conta</button><button class="ditem danger" data-a="logout">⏻ Sair / Deslogar</button></div></nav>  <button class="fab" id="safe" data-a="sos" aria-label="Segurança"><svg class="i"><use href="#i-shield"/></svg></button><button class="fab" id="loc" data-a="locate" aria-label="Centrar posição"><span style="display:inline-block;transform:rotate(-45deg)">➤</span></button>  <div class="sheet" id="sheet"></div>  <div class="lte" id="lte"></div>  <div class="modal" id="lochelp"><div class="sheet"><div class="grab"></div><h2>📍 Ativa a localização</h2><p class="mut" style="margin:4px 0 8px">O problema não é o navegador — é nas <b>Definições do iPhone</b>:</p><div class="item"><span class="ic">1</span><span><b>Definições › Privacidade e Segurança › Localização</b><span class="mut sm">Liga os Serviços de Localização</span></span></div><div class="item"><span class="ic">2</span><span><b>Sites do Safari</b><span class="mut sm">Escolhe Perguntar ou Durante o uso</span></span></div><div class="item"><span class="ic">3</span><span><b>No Safari: botão aA › Localização</b><span class="mut sm">Põe em Permitir para este site</span></span></div><p class="mut sm" style="margin-top:8px">O Safari não abre as Definições sozinho — segue os passos e volta.</p><button class="cta" data-a="locsettings" id="locSetBtn" style="margin-top:8px;display:none">Abrir Definições</button><button class="cta" data-a="locretry" style="margin-top:8px">Tentar de novo</button><button class="cta line" data-a="locskip">Usar Luanda sem GPS</button></div></div><div class="modal" id="sos"><div class="sheet">    <div class="grab"></div><h2>Centro de segurança</h2><p class="mut" style="margin:2px 0 8px">Ajuda disponível durante toda a viagem.</p>    <button class="item" data-a="share"><span class="ic"><svg class="i"><use href="#i-share"/></svg></span><span><b>Partilhar viagem em tempo real</b><span class="mut sm">Envia o trajeto e a matrícula</span></span></button>    <button class="item" data-a="trust"><span class="ic"><svg class="i"><use href="#i-users"/></svg></span><span><b>Contactos de confiança</b><span class="mut sm" id="sosTrustSub">2 pessoas serão avisadas</span></span></button>    <button class="item red" data-a="emg"><span class="ic"><svg class="i"><use href="#i-phone"/></svg></span><span><b>Ligar para a emergência</b></span></button>    <button class="cta line" data-a="close">Estou bem</button></div></div>  <div class="splash" id="splash"><img src="splash.jpg" alt="LadiesGo!" style="width:min(68vw,280px);border-radius:24px;box-shadow:0 20px 60px rgba(0,0,0,.45)"></div></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>if(typeof L==='undefined'){document.write('<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"><\/script>');}</script><script>const $=id=>document.getElementById(id),lerp=(a,b,k)=>a+(b-a)*k;const ic=(n,c='')=>`<svg class="i ${c}"><use href="#i-${n}"/></svg>`;$('brand').innerHTML=`<svg class="i" viewBox="0 0 40 30"><use href="#i-logo"/></svg>LadiesGo!<span id="wbadge" data-a="wallet" role="button" aria-label="Saldo da carteira" style="display:none;align-items:center;gap:3px;margin-left:5px;background:#f3ecfb;color:#61188E;border-radius:999px;padding:2px 7px;font-size:11px;font-weight:800;letter-spacing:-.2px;white-space:nowrap">💳 —</span>`;setTimeout(()=>{$('splash').classList.add('off');try{if(window.__lgReadyNow)window.__lgReadyNow()}catch(e){}},1900);/* ---------- mapa real — Luanda, Angola ---------- */
+</style></head><body><svg width="0" height="0" style="position:absolute"><defs><symbol id="i-logo" viewBox="0 0 40 30"><path d="M20 14C15 2 3 2 3 9C3 15 11 18 20 17Z M20 18C13 19 9 24 12 27C15 30 19 25 20 22Z M20 14C25 2 37 2 37 9C37 15 29 18 20 17Z M20 18C27 19 31 24 28 27C25 30 21 25 20 22Z"/></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.6-4.6"/></symbol><symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10l9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol><symbol id="i-work" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></symbol><symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 6.5V12l3.5 2"/></symbol><symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol><symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol><symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 17v3a2 2 0 0 1-2.2 2A19 19 0 0 1 2 4.2 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7A2 2 0 0 1 22 17z"/></symbol><symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.7 7L3 21l2-5.5A8 8 0 1 1 21 12z"/></symbol><symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 6l-4-4-4 4M12 2v13"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol><symbol id="i-star" viewBox="0 0 24 24"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z"/></symbol><symbol id="i-cash" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.8"/></symbol><symbol id="i-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol><symbol id="i-next" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol><symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></symbol><symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10a7 7 0 0 1-14 0M12 17v5"/></symbol><symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol><symbol id="i-pin" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></symbol></defs></svg><div class="app">  <div id="map"></div><div id="orgpin"><svg width="34" height="34" viewBox="0 0 24 24" style="filter:drop-shadow(0 3px 5px rgba(0,0,0,.35))"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7z" fill="#7c3aed" stroke="#fff" stroke-width="1.4"/><circle cx="12" cy="9" r="2.6" fill="#fff"/></svg></div>  <button class="fab" id="ham" data-a="menu" aria-label="Menu">☰</button>  <div class="fab" id="brand"></div>  <div id="scrim" data-a="closemenu"></div>  <nav id="drawer" aria-label="Menu"><div class="dhead"><div class="dav" id="dav">👤</div><div><b id="dname">Passageira</b><small id="dphone">LadiesGo!</small></div></div><button class="ditem" data-a="profile">👤 Perfil</button><button class="ditem" data-a="wallet" id="dWallet" style="display:none">💳 Carteira</button><button class="ditem" data-a="cars" id="dCars" style="display:none">🚗 Viaturas</button><button class="ditem" data-a="backhome">🏠 Voltar ao início</button><button class="ditem" data-a="trust">🛡️ Contactos</button><button class="ditem" data-a="histmenu">🧾 Histórico</button><button class="ditem" data-a="shared" id="dShared">🚗 Partida Compartilhada</button><button class="ditem" data-a="sharedmine" id="dSharedMine" style="display:none">📋 Minhas viagens compartilhadas</button><button class="ditem" data-a="premium" id="dPremium">💎 Gold/Premium</button><button class="ditem" data-a="sos">🛡️ Segurança</button><div id="drvCats" style="display:none;padding:4px 14px 10px"><b style="font-size:13px">As minhas categorias</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="chip" data-a="cat" data-c="Económico">Económico</button><button class="chip" data-a="cat" data-c="Conforto">Conforto</button><button class="chip" data-a="cat" data-c="Família">Família</button></div></div><div class="dfoot"><button class="ditem danger" data-a="delaccount">🗑 Eliminar conta</button><button class="ditem danger" data-a="logout">⏻ Sair / Deslogar</button></div></nav>  <button class="fab" id="safe" data-a="sos" aria-label="Segurança"><svg class="i"><use href="#i-shield"/></svg></button><button class="fab" id="loc" data-a="locate" aria-label="Centrar posição"><span style="display:inline-block;transform:rotate(-45deg)">➤</span></button>  <div class="sheet" id="sheet"></div>  <div class="lte" id="lte"></div>  <div class="modal" id="lochelp"><div class="sheet"><div class="grab"></div><h2>📍 Ativa a localização</h2><p class="mut" style="margin:4px 0 8px">O problema não é o navegador — é nas <b>Definições do iPhone</b>:</p><div class="item"><span class="ic">1</span><span><b>Definições › Privacidade e Segurança › Localização</b><span class="mut sm">Liga os Serviços de Localização</span></span></div><div class="item"><span class="ic">2</span><span><b>Sites do Safari</b><span class="mut sm">Escolhe Perguntar ou Durante o uso</span></span></div><div class="item"><span class="ic">3</span><span><b>No Safari: botão aA › Localização</b><span class="mut sm">Põe em Permitir para este site</span></span></div><p class="mut sm" style="margin-top:8px">O Safari não abre as Definições sozinho — segue os passos e volta.</p><button class="cta" data-a="locsettings" id="locSetBtn" style="margin-top:8px;display:none">Abrir Definições</button><button class="cta" data-a="locretry" style="margin-top:8px">Tentar de novo</button><button class="cta line" data-a="locskip">Usar Luanda sem GPS</button></div></div><div class="modal" id="sos"><div class="sheet">    <div class="grab"></div><h2>Centro de segurança</h2><p class="mut" style="margin:2px 0 8px">Ajuda disponível durante toda a viagem.</p>    <button class="item" data-a="share"><span class="ic"><svg class="i"><use href="#i-share"/></svg></span><span><b>Partilhar viagem em tempo real</b><span class="mut sm">Envia o trajeto e a matrícula</span></span></button>    <button class="item" data-a="trust"><span class="ic"><svg class="i"><use href="#i-users"/></svg></span><span><b>Contactos de confiança</b><span class="mut sm" id="sosTrustSub">2 pessoas serão avisadas</span></span></button>    <button class="item red" data-a="emg"><span class="ic"><svg class="i"><use href="#i-phone"/></svg></span><span><b>Ligar para a emergência</b></span></button>    <button class="cta line" data-a="close">Estou bem</button></div></div>  <div class="splash" id="splash"><img src="splash.jpg" alt="LadiesGo!" style="width:min(68vw,280px);border-radius:24px;box-shadow:0 20px 60px rgba(0,0,0,.45)"></div></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>if(typeof L==='undefined'){document.write('<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"><\/script>');}</script><script>const $=id=>document.getElementById(id),lerp=(a,b,k)=>a+(b-a)*k;const ic=(n,c='')=>`<svg class="i ${c}"><use href="#i-${n}"/></svg>`;$('brand').innerHTML=`<svg class="i" viewBox="0 0 40 30"><use href="#i-logo"/></svg>LadiesGo!<span id="wbadge" data-a="wallet" role="button" aria-label="Saldo da carteira" style="display:none;align-items:center;gap:3px;margin-left:5px;background:#f3ecfb;color:#61188E;border-radius:999px;padding:2px 7px;font-size:11px;font-weight:800;letter-spacing:-.2px;white-space:nowrap">💳 —</span>`;setTimeout(()=>{$('splash').classList.add('off');try{if(window.__lgReadyNow)window.__lgReadyNow()}catch(e){}},1900);/* ---------- mapa real — Luanda, Angola ---------- */
 const LUANDA_FIXA=[-8.8390,13.2894];let LUANDA=[-8.8390,13.2894];
 const DESTS={'Casa':{a:'Rua da Maianga, 27',c:[-8.8572,13.2765]},'Trabalho':{a:'Marginal de Luanda, 102',c:[-8.8136,13.2889]},'Shopping':{a:'Shopping Talatona, Via Expressa',c:[-8.9225,13.1800]}};
 const map=L.map('map',{zoomControl:false}).setView(LUANDA,13);function orgPinLatLng(){try{var pn=document.getElementById('orgpin');var r=map.getContainer().getBoundingClientRect();var pr=pn.getBoundingClientRect();var pt=map.containerPointToLatLng([pr.left+pr.width/2-r.left,pr.top-r.top]);return [pt.lat,pt.lng];}catch(e){var c=map.getCenter();return [c.lat,c.lng];}}function orgCenterOn(ll){try{map.setView(ll,Math.max(map.getZoom(),15));var _t=orgPinLatLng();var c=map.getCenter();map.setView([c.lat-(_t.lat-ll[0]),c.lng-(_t.lng-ll[1])],map.getZoom(),{animate:false});}catch(e){try{map.setView(ll)}catch(_){}}}map.on('moveend',()=>{if(!orgPin||ph!=='org')return;try{orgDraft=orgPinLatLng();revOrg()}catch(e){}});
@@ -837,4 +837,246 @@ async function deleteSharedDep(id){ if(!confirm('Tem certeza que quer apagar est
 try{ var _u=me(); var _dmn=document.getElementById('dSharedMine'); if(_dmn){_dmn.style.display=(_u&&_u.role==='DRIVER')?'':'none';} var _dsh=document.getElementById('dShared'); if(_dsh){_dsh.style.display=(_u&&_u.role==='DRIVER')?'none':'';} }catch(e){}
 try{ if(typeof map!=='undefined'&&map&&!window._shMapBound){window._shMapBound=true;map.on('moveend',function(){if(_sharedPickField)sharedPickMove();});} }catch(e){}
 window.openShared=openShared; window.openEmergency=openEmergency; window.closeShared=closeShared; window.openSharedCreate=openSharedCreate; window.openSharedQueue=openSharedQueue; window.sharedApprove=sharedApprove; window.sharedAlertDep=sharedAlertDep; window.openSharedMine=openSharedMine; window.deleteSharedDep=deleteSharedDep; window.openSharedReserve=openSharedReserve; window.sharedConfirmPay=sharedConfirmPay; window.showSharedMap=showSharedMap; window.sharedCreateDep=sharedCreateDep; window.sharedSelCat=sharedSelCat; window.sharedDestInput=sharedDestInput; window.sharedPlaceInput=sharedPlaceInput; window.sharedRefLL=sharedRefLL; window.sharedPickPlace=sharedPickPlace; window.sharedRecalc=sharedRecalc; window.renderSharedQueue=renderSharedQueue; window.sharedViewRoute=sharedViewRoute; window.sharedConfirmReserve=sharedConfirmReserve; window.sharedOpenMyReservation=sharedOpenMyReservation; window.sharedCancelReserveFromList=sharedCancelReserveFromList; window.sharedEnlarge=sharedEnlarge; window.sharedPickOnMap=sharedPickOnMap; window.sharedPickSearch=sharedPickSearch; window.sharedPickSugPick=sharedPickSugPick; window.sharedPickConfirm=sharedPickConfirm; window.sharedCancelMap=sharedCancelMap;
+</script>
+<script>/* ── LADIESGO: PREMIUM / GOLD (só passageiras) ── */
+function prmEsc(x){return String(x==null?'':x).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function prmPost(path,body){return fetch('/api/v1'+path,{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body||{})});}
+function prmGet(path){return fetch('/api/v1'+path,{headers:ah()});}
+function prmWhen(s){if(!s)return '';var dt=new Date(s);if(isNaN(dt.getTime()))return '';function p(n){return (n<10?'0':'')+n;}return p(dt.getDate())+'/'+p(dt.getMonth()+1)+' '+p(dt.getHours())+':'+p(dt.getMinutes());}
+function prmDefaultTime(){var d=new Date(Date.now()+30*60000);function p(n){return (n<10?'0':'')+n;}return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());}
+function prmSheet(html){try{$('sheet').innerHTML=html;}catch(e){}}
+function prmSyncEntry(){try{var el=document.getElementById('dPremium');if(!el)return;var u=null;try{u=me();}catch(e){}el.style.display=(u&&u.role==='DRIVER')?'none':'';}catch(e){}}
+var _prm={ph:'list',cats:[],car:null,o:null,d:null,time:'',rid:null};
+var _prmField=null,_prmDraft=null,_prmDraftName='',_prmRevT=null;
+function prmClose(){try{sharedClearRoute();}catch(e){}try{prmPickEnd();}catch(e){}try{show('home');}catch(e){try{$('sheet').innerHTML='';}catch(_){}}}
+function openPremium(){try{shCloseDrawer();}catch(e){}_prm.ph='list';_prm.car=null;_prm.o=null;_prm.d=null;renderPremiumSheet();}
+function prmOpenMine(){renderPremiumMine();}
+async function renderPremiumSheet(){
+  try{
+    if(_prm.ph==='form'){renderPremiumForm();return;}
+    if(_prm.ph==='confirm'){renderPremiumConfirm();return;}
+    if(_prm.ph==='reserve'){await renderPremiumReserve();return;}
+    if(_prm.ph==='mine'){await renderPremiumMine();return;}
+    await renderPremiumList();
+  }catch(e){prmSheet('<div class="pwbox"><h2>Erro</h2><p class="mut">'+prmEsc(e.message||e)+'</p><button class="cta" data-prm="list">Tentar novamente</button></div>');}
+}
+function prmCarCard(car,cat){
+  var nome=[car.make,car.model].filter(Boolean).join(' ');
+  var linha=[car.color,car.year].filter(Boolean).join(' · ');
+  var photo=car.photo?'<div style="width:56px;height:56px;border-radius:10px;overflow:hidden;flex:none;background:#f3e8ff"><img src="'+String(car.photo).replace(/"/g,'&quot;')+'" style="width:100%;height:100%;object-fit:cover"></div>':'<div style="width:56px;height:56px;border-radius:10px;flex:none;background:#f3e8ff;display:grid;place-items:center;font-size:24px">🚘</div>';
+  return '<button type="button" data-prm="sel" data-id="'+prmEsc(car.id)+'" data-cat="'+prmEsc(cat)+'" style="display:flex;gap:10px;align-items:center;width:100%;text-align:left;background:#faf7ff;border:0;border-radius:12px;padding:8px;margin-top:6px;cursor:pointer">'+photo+'<div style="flex:1;min-width:0"><div style="font-weight:700">'+prmEsc(nome||'Carro premium')+'</div><div class="mut sm">'+prmEsc(linha)+(car.plate?' · '+prmEsc(car.plate):'')+'</div>'+(car.driverName?'<div class="mut sm">Motorista: '+prmEsc(car.driverName)+'</div>':'')+'</div><span style="font-size:18px;color:#61188E">›</span></button>';
+}
+async function renderPremiumList(){
+  var r=await prmGet('/premium/cars');
+  var j=await r.json().catch(function(){return null;});
+  if(!r.ok||!j){prmSheet('<div class="pwbox"><h2>Reserva Premium</h2><p class="mut">Não foi possível carregar. Tenta novamente.</p><button class="cta" data-prm="list">Recarregar</button></div>');return;}
+  var cats=j.categories||[];_prm.cats=cats;
+  var body='';
+  if(!cats.length||!cats.some(function(c){return c.available>0;})){
+    body='<p class="mut">Ainda não há carros premium disponíveis. A operação vai adicionar em breve.</p>';
+  }else{
+    cats.forEach(function(c){
+      if(!(c.available>0))return;
+      var price=Number(c.pricePerKm||0);
+      body+='<div style="border:1px solid var(--ln);border-radius:14px;padding:12px;margin-bottom:10px;background:#fff">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="font-size:15px">💎 '+prmEsc(c.category)+'</b><span class="mut sm">'+c.available+' de '+c.total+' disponíveis</span></div>'
+        +'<div class="mut sm" style="margin:4px 0 8px">≈ '+Number(c.pricePerKm||0).toLocaleString('pt-PT')+' Kz por km</div>'
+        +(c.cars||[]).map(function(car){return prmCarCard(car,c.category);}).join('')
+        +'</div>';
+    });
+  }
+  prmSheet('<div class="pwbox"><h2 style="font-size:18px">Reserva Premium / Gold</h2><p class="mut sm" style="margin:2px 0 10px">Escolhe um carro de alto padrão, marca o ponto de busca (X), o destino (Y) e o horário. O preço é calculado automaticamente.</p>'+body+'<div style="margin-top:6px"><button class="cta line" data-prm="mine">As minhas reservas</button></div><button class="cta line" style="margin-top:8px" data-prm="close">Fechar</button></div>');
+}
+function prmSelCar(id,cat){
+  var found=null;
+  (_prm.cats||[]).forEach(function(c){if(c.category===cat){(c.cars||[]).forEach(function(x){if(x.id===id)found=x;});}});
+  if(!found)return;
+  _prm.car=Object.assign({},found,{category:cat});_prm.o=null;_prm.d=null;_prm.ph='form';renderPremiumForm();
+}
+function prmEstimate(){
+  if(!(_prm.o&&_prm.d)||!_prm.car)return '<span class="mut">Marca X e Y para ver o preço.</span>';
+  try{var km=Math.max(1,havKm(_prm.o.lat,_prm.o.lng,_prm.d.lat,_prm.d.lng));var price=Math.round(km*Number(_prm.car.pricePerKm||0));return 'Distância ≈ '+km.toFixed(1)+' km · Preço ≈ '+Number(price).toLocaleString('pt-PT')+' Kz';}catch(e){return '';}
+}
+function renderPremiumForm(){
+  var car=_prm.car||{};
+  var inp='width:100%;padding:10px;border:1px solid var(--ln);border-radius:10px;background:#fff';
+  var oVal=_prm.o&&_prm.o.name?_prm.o.name:'';
+  var dVal=_prm.d&&_prm.d.name?_prm.d.name:'';
+  prmSheet('<div class="pwbox"><h2 style="font-size:18px">Reservar '+prmEsc(car.category||'Premium')+'</h2>'
+    +'<div class="mut sm" style="margin:2px 0 8px">'+prmEsc([car.make,car.model,car.plate].filter(Boolean).join(' · '))+' · ≈ '+Number(car.pricePerKm||0).toLocaleString('pt-PT')+' Kz/km</div>'
+    +'<div style="margin:6px 0"><label class="mut">Ponto de busca (X)</label><input type="text" id="prmOrigin" value="'+String(oVal).replace(/"/g,'&quot;')+'" readonly placeholder="Onde queres ser buscada?" data-prm="pick" data-f="o" style="'+inp+';cursor:pointer"></div>'
+    +'<div style="margin:10px 0"><label class="mut">Destino (Y)</label><input type="text" id="prmDest" value="'+String(dVal).replace(/"/g,'&quot;')+'" readonly placeholder="Para onde vais?" data-prm="pick" data-f="d" style="'+inp+';cursor:pointer"></div>'
+    +'<div style="margin:10px 0"><label class="mut">Data e hora</label><input type="datetime-local" id="prmTime" value="'+(prmEsc(_prm.time)||prmDefaultTime())+'" style="'+inp+'"></div>'
+    +'<div id="prmEst" style="font-size:13px;font-weight:700;color:var(--b);margin:8px 0">'+prmEstimate()+'</div>'
+    +'<button class="cta" data-prm="submit">Continuar</button>'
+    +'<button class="cta line" style="margin-top:8px" data-prm="list">Voltar</button></div>');
+  try{sharedDrawRoute(_prm.o,_prm.d,!(_prm.o&&_prm.d));}catch(e){}
+}
+function prmToConfirm(){
+  if(!_prm.o||!Number.isFinite(_prm.o.lat)){lte('Escolhe o ponto de busca (X).');return;}
+  if(!_prm.d||!Number.isFinite(_prm.d.lat)){lte('Escolhe o destino (Y).');return;}
+  var t=document.getElementById('prmTime');_prm.time=t?t.value:'';
+  _prm.ph='confirm';renderPremiumConfirm();
+}
+function renderPremiumConfirm(){
+  var car=_prm.car||{};
+  var t=_prm.time||'';
+  var km=0;try{km=Math.max(1,havKm(_prm.o.lat,_prm.o.lng,_prm.d.lat,_prm.d.lng));}catch(e){}
+  var price=Math.round(km*Number(car.pricePerKm||0));
+  prmSheet('<div class="pwbox"><h2 style="font-size:18px">Confirmar reserva</h2>'
+    +'<div style="border:1px solid var(--ln);border-radius:12px;padding:10px;background:#fff">'
+    +'<div style="font-weight:700">'+prmEsc([car.make,car.model].filter(Boolean).join(' ')||'Carro premium')+(car.plate?' · '+prmEsc(car.plate):'')+'</div>'
+    +'<div class="mut sm">Categoria: '+prmEsc(car.category||'Premium')+'</div>'
+    +'<div class="mut sm" style="margin-top:6px">Busca (X): '+prmEsc(_prm.o.name)+'<br>Destino (Y): '+prmEsc(_prm.d.name)+'</div>'
+    +(t?'<div class="mut sm">Quando: '+prmWhen(t)+'</div>':'')
+    +'<div style="margin-top:6px">Distância: <b>'+km.toFixed(1)+' km</b></div>'
+    +'<div>Preço total: <b style="color:#61188E">'+Number(price).toLocaleString('pt-PT')+' Kz</b></div>'
+    +'</div>'
+    +'<p class="mut sm" style="margin:8px 0">Tens 10 minutos para pagar. Se não pagares, a reserva expira e o carro volta a ficar disponível para a próxima da fila.</p>'
+    +'<button class="cta" data-prm="create">Reservar e pagar</button>'
+    +'<button class="cta line" style="margin-top:8px" data-prm="form">Voltar</button></div>');
+}
+async function prmCreate(){
+  var t=_prm.time||((document.getElementById('prmTime')||{}).value||'');
+  var body={carId:_prm.car.id,pickupLat:_prm.o.lat,pickupLng:_prm.o.lng,pickupName:_prm.o.name,destLat:_prm.d.lat,destLng:_prm.d.lng,destName:_prm.d.name,scheduledAt:t||new Date().toISOString()};
+  try{
+    var r=await prmPost('/premium/reservations',body);
+    var j=await r.json().catch(function(){return null;});
+    if(!r.ok||!j||!j.ok){lte((j&&j.message)||'Não foi possível reservar.');return;}
+    _prm.rid=j.reservation&&j.reservation.id;
+    _prm.ph='reserve';renderPremiumReserve();
+  }catch(e){lte('Falhou: '+String(e.message||e));}
+}
+function prmStartTimer(exp){
+  var end=exp?new Date(exp).getTime():Date.now()+600000;if(!isFinite(end)||end<=0)end=Date.now()+600000;
+  function tick(){var el=document.getElementById('prmTimer');if(!el)return;var rem=end-Date.now();if(rem<=0){el.textContent='Tempo esgotado — a reserva pode expirar.';return;}var m=Math.floor(rem/60000),s=Math.floor((rem%60000)/1000);el.textContent='Tempo restante: '+m+':'+(s<10?'0':'')+s;setTimeout(tick,1000);}tick();
+}
+async function renderPremiumReserve(){
+  var id=_prm.rid;if(!id){await renderPremiumMine();return;}
+  var j=null;try{var r=await prmGet('/premium/reservations/'+id);j=await r.json();}catch(e){}
+  var res=j&&j.reservation;
+  if(!res){prmSheet('<div class="pwbox"><h2>Reserva</h2><p class="mut">Reserva não encontrada.</p><button class="cta" data-prm="mine">As minhas reservas</button></div>');return;}
+  var car=res.car||{};var st=res.status;
+  var statusTxt={pending:'Aguarda pagamento',confirmed:'Confirmada ✓',expired:'Expirada',cancelled:'Cancelada',completed:'Concluída'}[st]||st;
+  var timer=(st==='pending')?'<div id="prmTimer" style="font-size:15px;font-weight:800;color:var(--b);margin:8px 0">Tempo restante: --:--</div>':'';
+  var acts='';
+  if(st==='pending'){acts='<button class="cta" data-prm="pay" data-id="'+res.id+'">Já paguei — confirmar reserva</button><button class="cta line" style="margin-top:8px" data-prm="cancel" data-id="'+res.id+'">Cancelar reserva</button>';}
+  else if(st==='confirmed'){acts=sharedCallBtn(car.driverPhone,'Ligar à motorista')+'<button class="cta line" style="margin-top:8px" data-prm="mine">As minhas reservas</button>';}
+  else{acts='<button class="cta" data-prm="mine">As minhas reservas</button>';}
+  prmSheet('<div class="pwbox"><h2 style="font-size:18px">A minha reserva '+prmEsc(car.category||'Premium')+'</h2>'
+    +'<div class="mut sm" style="margin:2px 0 8px">Estado: <b style="color:'+(st==='confirmed'?'#12a150':(st==='pending'?'#b45309':'#6c6680'))+'">'+prmEsc(statusTxt)+'</b></div>'
+    +'<div style="border:1px solid var(--ln);border-radius:12px;padding:10px;background:#fff">'
+    +'<div style="font-weight:700">'+prmEsc([car.make,car.model].filter(Boolean).join(' ')||'Carro premium')+(car.plate?' · '+prmEsc(car.plate):'')+'</div>'
+    +(car.driverName?'<div class="mut sm">Motorista: '+prmEsc(car.driverName)+(car.driverPhone?' · '+prmEsc(car.driverPhone):'')+'</div>':'')
+    +'<div class="mut sm" style="margin-top:6px">Busca: '+prmEsc((res.pickup&&res.pickup.name)||'—')+'<br>Destino: '+prmEsc((res.dest&&res.dest.name)||'—')+'</div>'
+    +(res.scheduledAt?'<div class="mut sm">Quando: '+prmWhen(res.scheduledAt)+'</div>':'')
+    +'<div style="margin-top:6px">Distância: <b>'+Number(res.distanceKm||0).toFixed(1)+' km</b></div>'
+    +'<div>Preço total: <b style="color:#61188E">'+Number(res.priceTotal||0).toLocaleString('pt-PT')+' Kz</b></div>'
+    +'</div>'+timer
+    +'<div style="margin-top:10px">'+acts+'</div></div>');
+  if(st==='pending'){prmStartTimer(res.expiresAt);}
+}
+async function prmPay(id){
+  try{var r=await prmPost('/premium/reservations/'+id+'/pay',{});var j=await r.json().catch(function(){return null;});
+    if(!r.ok||!j||!j.ok){lte((j&&j.message)||'Não foi possível confirmar.');_prm.rid=id;renderPremiumReserve();return;}
+    lte('Reserva confirmada ✓');_prm.rid=id;renderPremiumReserve();
+  }catch(e){lte('Falhou: '+String(e.message||e));}
+}
+async function prmCancel(id){
+  if(!confirm('Cancelar a tua reserva premium?'))return;
+  try{var r=await fetch('/api/v1/premium/reservations/'+id,{method:'DELETE',headers:ah()});var j=await r.json().catch(function(){return null;});if(!r.ok){lte((j&&j.message)||'Erro ao cancelar');return;}lte('Reserva cancelada');renderPremiumMine();}catch(e){lte('Falhou: '+String(e.message||e));}
+}
+async function renderPremiumMine(){
+  _prm.ph='mine';
+  var r=await prmGet('/premium/reservations/mine');var j=await r.json().catch(function(){return null;});
+  var list=(j&&j.reservations)||[];
+  var body=list.length?list.map(function(res){
+    var car=res.car||{};var st=res.status;
+    var stTxt={pending:'Aguarda pagamento',confirmed:'Confirmada',expired:'Expirada',cancelled:'Cancelada',completed:'Concluída'}[st]||st;
+    return '<button type="button" data-prm="open" data-id="'+res.id+'" style="width:100%;text-align:left;background:#fff;border:1px solid var(--ln);border-radius:12px;padding:10px;margin-bottom:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;gap:8px"><b>'+prmEsc(car.make?[car.make,car.model].filter(Boolean).join(' '):(res.category||'Premium'))+'</b><span class="mut sm">'+prmEsc(stTxt)+'</span></div><div class="mut sm">'+prmEsc((res.pickup&&res.pickup.name)||'')+' → '+prmEsc((res.dest&&res.dest.name)||'')+'</div><div class="mut sm">'+prmWhen(res.createdAt)+' · '+Number(res.priceTotal||0).toLocaleString('pt-PT')+' Kz</div></button>';
+  }).join(''):'<p class="mut">Ainda não tens reservas premium.</p>';
+  prmSheet('<div class="pwbox"><h2 style="font-size:18px">Minhas reservas premium</h2>'+body+'<button class="cta line" style="margin-top:8px" data-prm="list">Voltar</button></div>');
+}
+/* ── Seletor no mapa (X / Y) ── */
+function prmPickOnMap(field){
+  _prmField=field;
+  try{shCloseDrawer();}catch(e){}
+  try{$('sheet').innerHTML='';}catch(e){}
+  try{var pn=document.getElementById('orgpin');if(pn)pn.style.display='';}catch(e){}
+  prmPickBar();
+  var cur=(field==='o'&&_prm.o&&Number.isFinite(_prm.o.lat))?_prm.o:((field==='d'&&_prm.d&&Number.isFinite(_prm.d.lat))?_prm.d:null);
+  if(cur){try{orgCenterOn([cur.lat,cur.lng]);}catch(e){}setTimeout(prmPickMove,250);}
+  else{prmUseMyLocation();}
+}
+function prmPickBar(){
+  var bar=document.getElementById('prmPickBar');
+  if(!bar){bar=document.createElement('div');bar.id='prmPickBar';document.body.appendChild(bar);}
+  bar.style.cssText='position:fixed;left:12px;right:12px;bottom:12px;z-index:9999;background:#fff;border-radius:14px;box-shadow:0 -6px 24px rgba(0,0,0,.22);padding:12px;display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto';
+  bar.innerHTML='<div style="font-weight:700">'+(_prmField==='o'?'Escolher ponto de busca (X)':'Escolher destino (Y)')+'</div>'
+    +'<input type="text" id="prmPickSearch" placeholder="Pesquisar local" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--ln);border-radius:10px;background:#fff">'
+    +'<div id="prmPickSug"></div>'
+    +'<div id="prmPickCoord" style="font-size:12px;color:var(--mut)"></div>'
+    +'<div id="prmPickName" style="font-size:13px;color:var(--mut)">Mova o mapa até ao ponto pretendido</div>'
+    +'<button type="button" class="cta line" style="font-size:12px;padding:8px" data-prm="usemyloc">📍 Usar a minha localização</button>'
+    +'<div style="display:flex;gap:8px"><button type="button" class="cta" style="flex:1" data-prm="confirmpick">Confirmar local</button><button type="button" class="cta line" style="flex:1" data-prm="cancelpick">Cancelar</button></div>';
+}
+function prmUseMyLocation(){
+  var go=function(ll){try{orgCenterOn(ll);}catch(e){try{map.setView(ll,15);}catch(_){}}setTimeout(prmPickMove,300);};
+  try{if(navigator.geolocation){navigator.geolocation.getCurrentPosition(function(p){go([p.coords.latitude,p.coords.longitude]);},function(){go(LUANDA);},{enableHighAccuracy:true,timeout:8000});return;}}catch(e){}
+  go(LUANDA);
+}
+function prmPickMove(){
+  if(!_prmField)return;var ll=null;
+  try{ll=orgPinLatLng();}catch(e){try{var c=map.getCenter();ll=[c.lat,c.lng];}catch(_){return;}}
+  _prmDraft=ll;var coord=document.getElementById('prmPickCoord');if(coord)coord.textContent=ll[0].toFixed(4)+', '+ll[1].toFixed(4);
+  clearTimeout(_prmRevT);
+  _prmRevT=setTimeout(function(){
+    fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='+ll[0]+'&longitude='+ll[1]+'&localityLanguage=pt').then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!_prmField)return;var nm=[j.locality||j.city||j.principalSubdivision,j.countryName].filter(Boolean).join(', ')||'Local no mapa';_prmDraftName=nm;var e=document.getElementById('prmPickName');if(e)e.textContent=nm;}).catch(function(){});
+  },300);
+}
+function prmPickSearch(v){
+  var q=(v||'').trim();var box=document.getElementById('prmPickSug');if(!box)return;
+  if(q.length<3){box.innerHTML='';return;}
+  clearTimeout(window._prmPickT);
+  window._prmPickT=setTimeout(function(){var c=null;try{c=map.getCenter();}catch(e){c={lat:LUANDA[0],lng:LUANDA[1]};}fetch('/api/places/search?q='+encodeURIComponent(q)+'&lat='+c.lat+'&lng='+c.lng+'&v=3').then(function(r){return r.ok?r.json():null;}).then(function(j){var b=document.getElementById('prmPickSug');if(!b)return;var ps=(j&&j.places)||[];window._prmPickPlaces=ps.slice(0,5);if(!ps.length){b.innerHTML='<p class="mut" style="padding:4px 2px;font-size:12px">Sem resultados.</p>';return;}b.innerHTML=ps.slice(0,5).map(function(p,i){return '<button type="button" class="item" style="width:100%;text-align:left" data-prm="picksug" data-i="'+i+'">'+String(p.name||'').replace(/</g,'&lt;')+'</button>';}).join('');}).catch(function(){});},300);
+}
+function prmPickSugPick(i){var p=(window._prmPickPlaces||[])[i];if(!p)return;var ll=[Number(p.lat),Number(p.lng)];_prmDraft=ll;_prmDraftName=String(p.name||'Local');try{orgCenterOn(ll);}catch(e){}var b=document.getElementById('prmPickSug');if(b)b.innerHTML='';var e=document.getElementById('prmPickName');if(e)e.textContent=_prmDraftName;}
+function prmPickConfirm(){
+  if(!_prmField)return;var ll=_prmDraft;
+  if(!ll){try{ll=orgPinLatLng();}catch(e){ll=null;}}
+  if(!ll||!Number.isFinite(ll[0])){lte('Não foi possível obter a localização');return;}
+  var nm=_prmDraftName||'Local no mapa';
+  if(_prmField==='o')_prm.o={name:nm,lat:ll[0],lng:ll[1]};else _prm.d={name:nm,lat:ll[0],lng:ll[1]};
+  prmPickEnd();_prm.ph='form';renderPremiumForm();
+}
+function prmPickCancel(){prmPickEnd();_prm.ph='form';renderPremiumForm();}
+function prmPickEnd(){_prmField=null;try{var pn=document.getElementById('orgpin');if(pn)pn.style.display='none';}catch(e){}var bar=document.getElementById('prmPickBar');if(bar)bar.remove();}
+/* ── Handlers ── */
+document.addEventListener('click',function(e){
+  var t=e.target;if(!t||!t.closest)return;
+  var menu=t.closest('[data-a="menu"]');if(menu)prmSyncEntry();
+  var open=t.closest('[data-a="premium"]');if(open){e.preventDefault();openPremium();return;}
+  var sel=t.closest('[data-prm="sel"]');if(sel){e.preventDefault();prmSelCar(sel.getAttribute('data-id'),sel.getAttribute('data-cat'));return;}
+  var pick=t.closest('[data-prm="pick"]');if(pick){e.preventDefault();prmPickOnMap(pick.getAttribute('data-f'));return;}
+  var sug=t.closest('[data-prm="picksug"]');if(sug){e.preventDefault();prmPickSugPick(Number(sug.getAttribute('data-i')));return;}
+  var act=t.closest('[data-prm]');if(!act)return;var k=act.getAttribute('data-prm');
+  if(k==='submit'){e.preventDefault();prmToConfirm();return;}
+  if(k==='create'){e.preventDefault();prmCreate();return;}
+  if(k==='back'){e.preventDefault();_prm.ph='list';renderPremiumList();return;}
+  if(k==='form'){e.preventDefault();_prm.ph='form';renderPremiumForm();return;}
+  if(k==='pay'){e.preventDefault();prmPay(act.getAttribute('data-id'));return;}
+  if(k==='cancel'){e.preventDefault();prmCancel(act.getAttribute('data-id'));return;}
+  if(k==='open'){e.preventDefault();_prm.rid=act.getAttribute('data-id');_prm.ph='reserve';renderPremiumReserve();return;}
+  if(k==='mine'){e.preventDefault();renderPremiumMine();return;}
+  if(k==='list'){e.preventDefault();_prm.ph='list';renderPremiumList();return;}
+  if(k==='close'){e.preventDefault();prmClose();return;}
+  if(k==='confirmpick'){e.preventDefault();prmPickConfirm();return;}
+  if(k==='cancelpick'){e.preventDefault();prmPickCancel();return;}
+  if(k==='usemyloc'){e.preventDefault();prmUseMyLocation();return;}
+});
+document.addEventListener('input',function(e){if(e.target&&e.target.id==='prmPickSearch')prmPickSearch(e.target.value);});
+try{if(typeof map!=='undefined'&&map&&!window._prmMapBound){window._prmMapBound=true;map.on('moveend',function(){if(_prmField)prmPickMove();});}}catch(e){}
+try{setTimeout(prmSyncEntry,800);}catch(e){}
+try{document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')prmSyncEntry();});}catch(e){}
+window.openPremium=openPremium;window.prmClose=prmClose;window.prmSyncEntry=prmSyncEntry;
 </script>

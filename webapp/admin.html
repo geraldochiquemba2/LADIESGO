@@ -121,6 +121,7 @@ table{border:1px solid #f1edf9}
 <button data-t="drivers">🚕 <span>Motoristas</span></button>
 <button data-t="clients">👤 <span>Passageiras</span></button>
 <button data-t="cats">🏷 <span>Categorias</span></button>
+<button data-t="premium">💎 <span>Gold/Premium</span></button>
 <button data-t="wallet">💳 <span>Carteiras</span></button>
 <button data-t="finance">💸 <span>Finanças</span></button>
 <button data-t="new">➕ <span>Registar</span></button>
@@ -160,6 +161,28 @@ table{border:1px solid #f1edf9}
     <h2 style="margin-top:16px">Adicionar categoria</h2>
     <div class="filters"><input id="ncName" placeholder="Nome (ex: XL)" maxlength="30" autocomplete="off"><input type="color" id="ncColor" value="#61188E" style="width:52px;height:42px;border:1.5px solid var(--ln);border-radius:12px;padding:2px;background:#fff"><input id="ncMult" placeholder="Mult. (ex: 2)" inputmode="decimal" autocomplete="off" style="max-width:120px"><button class="chip" data-a="addcat" style="align-self:center">Adicionar</button></div>
     <div class="mut" id="catMsg" style="margin:8px 0"></div>
+  </section>
+  <section id="sec-premium" style="display:none">
+    <h2>Gold / Premium — frota</h2>
+    <p class="mut">Carros premium criados pela operação. <b>Só aparecem às passageiras</b> na app. Define a categoria, o preço por km e, se quiseres, associa uma motorista.</p>
+    <div class="filters">
+      <select id="pfCat"><option value="Gold">Gold</option><option value="Premium">Premium</option><option value="VIP">VIP</option></select>
+      <input id="pfMake" placeholder="Marca (ex: Mercedes)" autocomplete="off">
+      <input id="pfModel" placeholder="Modelo (ex: Classe S)" autocomplete="off">
+      <input id="pfColor" placeholder="Cor" autocomplete="off">
+      <input id="pfYear" placeholder="Ano" inputmode="numeric" autocomplete="off">
+    </div>
+    <div class="filters">
+      <input id="pfPlate" placeholder="Matrícula" autocomplete="off">
+      <input id="pfPrice" placeholder="Preço por km (Kz)" inputmode="numeric" autocomplete="off">
+      <select id="pfDriver"><option value="">Sem motorista associada</option></select>
+      <button class="chip" data-a="addfleet" style="align-self:center">➕ Adicionar carro</button>
+    </div>
+    <div class="mut" id="pfMsg" style="margin:8px 0"></div>
+    <h2>Frota</h2>
+    <table><thead><tr><th>Categoria</th><th>Viatura</th><th>Preço/km</th><th>Motorista</th><th>Estado</th><th>Reservas</th><th></th></tr></thead><tbody id="fleet"><tr><td colspan="7" class="mut">A carregar…</td></tr></tbody></table>
+    <h2 style="margin-top:16px">Reservas recentes</h2>
+    <table><thead><tr><th>Quando</th><th>Passageira</th><th>Viatura</th><th>De → Para</th><th>Preço</th><th>Estado</th><th>Pos.</th></tr></thead><tbody id="pres"><tr><td colspan="7" class="mut">A carregar…</td></tr></tbody></table>
   </section>
   <section id="sec-new" style="display:none">
     <h2>Registar motorista</h2>
@@ -587,7 +610,64 @@ function renderFinance(){
   }
 }
 async function creditWallet(phone){const m=$('wMsg');const ph=(phone||(($('wPhone')||{}).value||'')).trim();const amt=Number(((($('wAmount')||{}).value||'').replace(/[^\d.]/g,'')));if(!ph){if(m)m.textContent='Escreve o número da motorista.';return}if(!(amt>0)){if(m)m.textContent='Escreve o valor pago.';return}if(m)m.textContent='A carregar…';try{const r=await fetch('/api/v1/admin/wallet/credit',{method:'POST',headers:ah(),body:JSON.stringify({phone:ph,amount:amt})});const j=await r.json();if(!r.ok)throw new Error((j&&j.message)||'Falhou');if(m)m.textContent='Carregado ✓ '+(j.user&&j.user.name?j.user.name+' · ':'')+'novo saldo: '+fmt(j.after)+' Kz'+(j.blocked?' (ainda bloqueada)':'');toast('Carregamento feito ✓','ok');try{$('wPhone').value='';$('wAmount').value='';}catch(e){}renderWallet();}catch(e){if(m)m.textContent='Erro: '+((e&&e.message)||e);}}
-function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','wallet','finance','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}}
+let FLEET=[];
+function fleetPill(st){var m={available:['#dcfce7','#166534'],reserved:['#f3e8ff','#6b21a8'],unavailable:['#fee2e2','#991b1b']};var v=m[st]||m.unavailable;return '<span class="pill" style="background:'+v[0]+';color:'+v[1]+'">'+esc(st||'')+'</span>';}
+let _fleetSeq=0;
+async function renderPremium(){
+  const seq=++_fleetSeq;
+  const tb=$('fleet');if(tb)tb.innerHTML='<tr><td colspan="7" class="mut">A carregar…</td></tr>';
+  const drvSel=$('pfDriver');
+  try{if(drvSel)drvSel.innerHTML='<option value="">Sem motorista associada</option>'+(DRV||[]).map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name||x.phone||'')+'</option>').join('');}catch(e){}
+  try{const r=await fetch('/api/v1/admin/premium/fleet',{headers:ah(),cache:'no-store'});const j=await r.json();if(seq===_fleetSeq)FLEET=(j&&j.cars)||[];}catch(e){if(seq===_fleetSeq)FLEET=[];}
+  if(seq!==_fleetSeq)return;
+  if(tb)tb.innerHTML=FLEET.map(function(x){
+    var car=[x.make,x.model,x.year].filter(Boolean).join(' ')+(x.plate?(' · '+x.plate):'');
+    return '<tr><td><b>'+esc(x.category||'')+'</b></td><td>'+esc(car)+'<br><span class="mut">'+esc(x.color||'')+'</span></td>'
+      +'<td><input id="fp_'+esc(x.id)+'" value="'+Number(x.pricePerKm||0)+'" inputmode="numeric" style="border:1.5px solid var(--ln);border-radius:10px;padding:7px 9px;font:inherit;font-size:15px;width:88px"> Kz <button class="chip" data-a="savefleet" data-id="'+esc(x.id)+'">Guardar</button></td>'
+      +'<td>'+esc(x.driverName||'—')+(x.driverPhone?'<br><span class="mut">'+esc(x.driverPhone)+'</span>':'')+'</td>'
+      +'<td>'+fleetPill(x.status)+'</td>'
+      +'<td class="mono">'+Number(x.activeReservations||0)+'</td>'
+      +'<td><button class="chip" data-a="togglefleet" data-id="'+esc(x.id)+'" data-st="'+(x.status==='available'?'unavailable':'available')+'">'+(x.status==='available'?'Indisponível':'Disponível')+'</button> <button class="chip" data-a="releasefleet" data-id="'+esc(x.id)+'">Libertar</button> <button class="chip" data-a="delfleet" data-id="'+esc(x.id)+'">Apagar</button></td></tr>';
+  }).join('')||'<tr><td colspan="7" class="mut">Sem carros na frota.</td></tr>';
+  const pb=$('pres');if(pb)pb.innerHTML='<tr><td colspan="7" class="mut">A carregar…</td></tr>';
+  try{
+    const r=await fetch('/api/v1/admin/premium/reservations',{headers:ah(),cache:'no-store'});const j=await r.json();
+    if(seq!==_fleetSeq)return;
+    const list=(j&&j.reservations)||[];
+    if(pb)pb.innerHTML=list.length?list.map(function(x){
+      var car=[x.car&&x.car.make,x.car&&x.car.model].filter(Boolean).join(' ')+(x.car&&x.car.plate?(' · '+x.car.plate):'');
+      var rota=(x.pickup&&x.pickup.name?x.pickup.name:'')+' → '+(x.dest&&x.dest.name?x.dest.name:'');
+      return '<tr><td class="mut">'+dstr(x.createdAt)+'</td><td><b>'+esc(x.passengerName||'—')+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(car)+'</td><td>'+esc(rota)+'</td><td class="mono">'+fmt(x.priceTotal)+' Kz</td><td><span class="pill">'+esc(x.status||'')+'</span></td><td class="mono">'+Number(x.position||0)+'</td></tr>';
+    }).join(''):'<tr><td colspan="7" class="mut">Sem reservas.</td></tr>';
+  }catch(e){if(seq===_fleetSeq&&pb)pb.innerHTML='<tr><td colspan="7" class="mut">Falhou a carregar.</td></tr>';}
+}
+async function addFleet(){
+  const m=$('pfMsg');if(m)m.textContent='';
+  const gv=id=>((($(id)||{}).value||'').trim());
+  const price=Number(gv('pfPrice').replace(/[^\d.]/g,''));
+  const body={category:(($('pfCat')||{}).value||'Gold'),make:gv('pfMake'),model:gv('pfModel'),color:gv('pfColor'),plate:gv('pfPlate'),pricePerKm:price};
+  const y=gv('pfYear');if(y)body.year=parseInt(y,10);
+  const d=gv('pfDriver');if(d)body.driverId=d;
+  if(!body.plate&&!body.model){if(m)m.textContent='Indica o modelo ou a matrícula.';return;}
+  if(!(price>0)){if(m)m.textContent='Indica o preço por km.';return;}
+  try{
+    const r=await fetch('/api/v1/admin/premium/fleet',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
+    toast('Carro adicionado ✓','ok');
+    ['pfMake','pfModel','pfColor','pfYear','pfPlate','pfPrice'].forEach(id=>{try{$(id).value=''}catch(e){}});
+    renderPremium();
+  }catch(e){if(m)m.textContent='Erro: '+((e&&e.message)||e);toast('Falhou ao adicionar.',false);}
+}
+async function fleetPut(id,body){
+  try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body)});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Atualizado ✓','ok');renderPremium();}
+  catch(e){toast('Erro: '+((e&&e.message)||e),false);}
+}
+function saveFleet(id){const v=Number(((($('fp_'+id)||{}).value||'').replace(/[^\d.]/g,'')));if(!(v>0)){toast('Preço inválido.',false);return;}fleetPut(id,{pricePerKm:v});}
+function toggleFleet(id,status){fleetPut(id,{status:status});}
+async function releaseFleet(id){try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id)+'/release',{method:'POST',headers:ah()});if(!r.ok)throw 0;toast('Carro libertado ✓','ok');renderPremium();}catch(e){toast('Falhou.',false);}}
+async function delFleet(id){if(!confirm('Apagar este carro premium?'))return;try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id),{method:'DELETE',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Carro apagado ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
+function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}}
 document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}}catch(e){}});
 document.addEventListener('click',e=>{
   const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='revenue'){goTab('finance');}else if(k==='drivers'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');tPage=1;loadTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
@@ -606,6 +686,16 @@ document.addEventListener('click',e=>{
   if(sc){saveCat(sc.dataset.id);return}
   const ac=e.target.closest('[data-a="addcat"]');
   if(ac){addCat();return}
+  const af=e.target.closest('[data-a="addfleet"]');
+  if(af){addFleet();return}
+  const sf=e.target.closest('[data-a="savefleet"]');
+  if(sf){saveFleet(sf.dataset.id);return}
+  const tf=e.target.closest('[data-a="togglefleet"]');
+  if(tf){toggleFleet(tf.dataset.id,tf.dataset.st);return}
+  const rf=e.target.closest('[data-a="releasefleet"]');
+  if(rf){releaseFleet(rf.dataset.id);return}
+  const df=e.target.closest('[data-a="delfleet"]');
+  if(df){delFleet(df.dataset.id);return}
   const wc=e.target.closest('[data-a="credit"]');
   if(wc){creditWallet();return}
   const wr=e.target.closest('[data-a="wcredit"]');

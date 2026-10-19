@@ -3250,6 +3250,283 @@ app.delete('/api/v1/shared/departures/:id', requireAuth, async (c) => {
   return c.json({ ok: true, message: 'Partida apagada.' });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// RESERVA PREMIUM / GOLD  —  carros criados pelo ADMIN; usados pelas PASSAGEIRAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function premiumCarOut(r: any) {
+  return {
+    id: r.id, category: r.category, make: r.make, model: r.model, color: r.color,
+    year: r.year, plate: r.plate, pricePerKm: Number(r.price_per_km || 0),
+    driverId: r.driver_id || null, driverName: r.driver_name || null, driverPhone: r.driver_phone || null,
+    photo: r.photo || null, status: r.status, active: Number(r.active) === 1,
+    activeReservations: r.active_res != null ? Number(r.active_res) : undefined,
+    createdAt: r.created_at,
+  };
+}
+
+function premiumResOut(r: any) {
+  const make = r.make != null ? r.make : r.car_make;
+  const model = r.model != null ? r.model : r.car_model;
+  const color = r.color != null ? r.color : r.car_color;
+  const year = r.year != null ? r.year : r.car_year;
+  const plate = r.plate || r.car_plate;
+  const photo = r.photo || r.car_photo;
+  return {
+    id: r.id, carId: r.car_id, category: r.category,
+    status: r.status, position: Number(r.position || 1),
+    distanceKm: r.distance_km != null ? Number(r.distance_km) : null,
+    priceTotal: r.price_total != null ? Number(r.price_total) : null,
+    expiresAt: r.expires_at || null, scheduledAt: r.scheduled_at || null,
+    pickup: { lat: r.pickup_lat, lng: r.pickup_lng, name: r.pickup_name },
+    dest: { lat: r.dest_lat, lng: r.dest_lng, name: r.dest_name },
+    car: (r.make || r.car_make || r.plate || r.car_plate) ? {
+      make: r.make ?? r.car_make, model: r.model ?? r.car_model, color: r.color ?? r.car_color,
+      year: r.year ?? r.car_year, plate: r.plate ?? r.car_plate, photo: r.photo ?? r.car_photo,
+      pricePerKm: Number(r.price_per_km || 0), driverName: r.driver_name || null, driverPhone: r.driver_phone || null
+    } : null,
+    createdAt: r.created_at
+  };
+}
+
+// Expira reservas pendentes fora do prazo e promove a próxima da fila (+10 min).
+async function premiumExpire(sql: any) {
+  const now = new Date().toISOString();
+  const exp = await sql`UPDATE premium_reservations SET status = 'expired' WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} RETURNING car_id`;
+  const carIds: string[] = Array.from(new Set((exp || []).map((r: any) => r.car_id))).filter(Boolean) as string[];
+  for (const carId of carIds) {
+    const front = await sql`SELECT id FROM premium_reservations WHERE car_id = ${carId} AND status = 'pending' ORDER BY position ASC LIMIT 1`;
+    if (front.length) {
+      const newExp = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      await sql`UPDATE premium_reservations SET expires_at = ${newExp} WHERE id = ${front[0].id}`;
+    }
+  }
+  return exp || [];
+}
+
+// ── ADMIN: frota premium ──────────────────────────────────────────────────
+app.get('/api/v1/admin/premium/fleet', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const rows = await sql`
+    SELECT pf.*, u.name AS driver_name, u.phone AS driver_phone,
+      (SELECT COUNT(*) FROM premium_reservations pr WHERE pr.car_id = pf.id AND pr.status IN ('pending','confirmed')) AS active_res
+    FROM premium_fleet pf
+    LEFT JOIN drivers d ON d.id = pf.driver_id
+    LEFT JOIN users u ON u.id = d."userId"
+    ORDER BY pf.category, pf.sort, pf.created_at DESC`;
+  return c.json({ cars: (rows || []).map(premiumCarOut) });
+});
+
+app.post('/api/v1/admin/premium/fleet', adminMiddleware, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const b = await c.req.json().catch(() => ({}));
+  const category = (String(b.category || '').trim().slice(0, 24)) || 'Gold';
+  const make = String(b.make || '').trim().slice(0, 40);
+  const model = String(b.model || '').trim().slice(0, 40);
+  const color = String(b.color || '').trim().slice(0, 30);
+  const plate = String(b.plate || '').trim().slice(0, 20);
+  const year = Number(b.year) || null;
+  const pricePerKm = Math.round(Number(b.pricePerKm));
+  if (!plate && !model) return c.json({ message: 'Indica pelo menos o modelo ou a matrícula.' }, 400);
+  if (!(pricePerKm > 0) || pricePerKm > 100000) return c.json({ message: 'Preço por km inválido.' }, 400);
+  let driverId = b.driverId ? String(b.driverId) : null;
+  if (driverId) {
+    const dv = await sql`SELECT id FROM drivers WHERE id = ${driverId} LIMIT 1`;
+    if (!dv.length) driverId = null;
+  }
+  const photo = (typeof b.photo === 'string' && b.photo.startsWith('data:image')) ? b.photo.slice(0, 200000) : null;
+  const id = 'pc_' + crypto.randomUUID().slice(0, 12);
+  await sql`INSERT INTO premium_fleet (id, category, make, model, color, year, plate, price_per_km, driver_id, photo, status, active, sort, created_at)
+    VALUES (${id}, ${category}, ${make}, ${model}, ${color}, ${year}, ${plate}, ${pricePerKm}, ${driverId}, ${photo}, 'available', 1, 0, NOW())`;
+  const rows = await sql`SELECT pf.*, u.name AS driver_name, u.phone AS driver_phone FROM premium_fleet pf LEFT JOIN drivers d ON d.id = pf.driver_id LEFT JOIN users u ON u.id = d."userId" WHERE pf.id = ${id}`;
+  return c.json({ ok: true, car: premiumCarOut(rows[0]) });
+});
+
+app.put('/api/v1/admin/premium/fleet/:id', adminMiddleware, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  const b = await c.req.json().catch(() => ({}));
+  const cur = (await sql`SELECT * FROM premium_fleet WHERE id = ${id} LIMIT 1`)[0];
+  if (!cur) return c.json({ message: 'Carro premium não encontrado.' }, 404);
+  const category = b.category != null ? (String(b.category).trim().slice(0, 24) || cur.category) : cur.category;
+  const make = b.make != null ? String(b.make).trim().slice(0, 40) : cur.make;
+  const model = b.model != null ? String(b.model).trim().slice(0, 40) : cur.model;
+  const color = b.color != null ? String(b.color).trim().slice(0, 30) : cur.color;
+  const plate = b.plate != null ? String(b.plate).trim().slice(0, 20) : cur.plate;
+  const year = b.year != null ? (Number(b.year) || null) : cur.year;
+  const pricePerKm = b.pricePerKm != null ? Math.round(Number(b.pricePerKm)) : Number(cur.price_per_km);
+  if (!(pricePerKm > 0) || pricePerKm > 100000) return c.json({ message: 'Preço por km inválido.' }, 400);
+  let driverId = cur.driver_id;
+  if (b.driverId !== undefined) {
+    driverId = b.driverId ? String(b.driverId) : null;
+    if (driverId) { const dv = await sql`SELECT id FROM drivers WHERE id = ${driverId} LIMIT 1`; if (!dv.length) driverId = null; }
+  }
+  let status = cur.status;
+  if (b.status != null && ['available', 'unavailable', 'reserved'].includes(String(b.status))) status = String(b.status);
+  const active = b.active != null ? (b.active ? 1 : 0) : cur.active;
+  const photo = (typeof b.photo === 'string' && b.photo.startsWith('data:image')) ? b.photo.slice(0, 200000) : cur.photo;
+  await sql`UPDATE premium_fleet SET category = ${category}, make = ${make}, model = ${model}, color = ${color}, year = ${year}, plate = ${plate}, price_per_km = ${pricePerKm}, driver_id = ${driverId}, photo = ${photo}, status = ${status}, active = ${active} WHERE id = ${id}`;
+  const rows = await sql`SELECT pf.*, u.name AS driver_name, u.phone AS driver_phone FROM premium_fleet pf LEFT JOIN drivers d ON d.id = pf.driver_id LEFT JOIN users u ON u.id = d."userId" WHERE pf.id = ${id}`;
+  return c.json({ car: premiumCarOut(rows[0]) });
+});
+
+app.delete('/api/v1/admin/premium/fleet/:id', adminMiddleware, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  const active = await sql`SELECT id FROM premium_reservations WHERE car_id = ${id} AND status IN ('pending','confirmed') LIMIT 1`;
+  if (active.length) return c.json({ message: 'Este carro tem reservas activas. Libera-o primeiro.' }, 409);
+  await sql`DELETE FROM premium_fleet WHERE id = ${id}`;
+  return c.json({ ok: true });
+});
+
+app.post('/api/v1/admin/premium/fleet/:id/release', adminMiddleware, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  await sql`UPDATE premium_fleet SET status = 'available' WHERE id = ${id}`;
+  await sql`UPDATE premium_reservations SET status = 'completed' WHERE car_id = ${id} AND status = 'confirmed'`;
+  await sql`UPDATE premium_reservations SET status = 'expired' WHERE car_id = ${id} AND status = 'pending'`;
+  return c.json({ ok: true });
+});
+
+app.get('/api/v1/admin/premium/reservations', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const rows = await sql`
+    SELECT pr.*, pf.make, pf.model, pf.color, pf.year, pf.plate, pf.price_per_km, u.name AS passenger_name, u.phone AS passenger_phone
+    FROM premium_reservations pr
+    LEFT JOIN premium_fleet pf ON pf.id = pr.car_id
+    LEFT JOIN users u ON u.id = pr.passenger_id
+    ORDER BY pr.created_at DESC LIMIT 200`;
+  return c.json({ reservations: (rows || []).map((r: any) => ({ ...premiumResOut(r), passengerName: r.passenger_name || null, passengerPhone: r.passenger_phone || null })) });
+});
+
+// ── PASSAGEIRA: catálogo premium ──────────────────────────────────────────
+app.get('/api/v1/premium/cars', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const rows = await sql`
+    SELECT pf.*, u.name AS driver_name, u.phone AS driver_phone
+    FROM premium_fleet pf
+    LEFT JOIN drivers d ON d.id = pf.driver_id
+    LEFT JOIN users u ON u.id = d."userId"
+    WHERE pf.active = 1
+    ORDER BY pf.category, pf.sort, pf.created_at`;
+  const cats: any = {};
+  for (const r of rows) {
+    const cat = r.category || 'Gold';
+    if (!cats[cat]) cats[cat] = { category: cat, pricePerKm: 0, total: 0, available: 0, cars: [] };
+    const g = cats[cat];
+    g.total++;
+    const pk = Number(r.price_per_km || 0);
+    if (g.pricePerKm === 0 || (pk > 0 && pk < g.pricePerKm)) g.pricePerKm = pk;
+    if (r.status === 'available') {
+      g.available++;
+      g.cars.push({ id: r.id, make: r.make, model: r.model, color: r.color, year: r.year, plate: r.plate, photo: r.photo || null, driverName: r.driver_name || null, pricePerKm: pk });
+    }
+  }
+  return c.json({ categories: Object.values(cats) });
+});
+
+// POST /api/v1/premium/reservations — passageira reserva um carro premium
+app.post('/api/v1/premium/reservations', requireAuth, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const b = await c.req.json().catch(() => ({}));
+  const carId = String(b.carId || '');
+  const car = await sql`SELECT * FROM premium_fleet WHERE id = ${carId} AND active = 1 LIMIT 1`;
+  if (!car.length) return c.json({ message: 'Carro premium não encontrado.' }, 404);
+  const cr = car[0];
+  if (cr.status !== 'available') return c.json({ message: 'Este carro já não está disponível. Escolhe outro.' }, 409);
+  const plat = Number(b.pickupLat), plng = Number(b.pickupLng), dlat = Number(b.destLat), dlng = Number(b.destLng);
+  if (![plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) return c.json({ message: 'Indica o ponto de busca e o destino.' }, 400);
+  await premiumExpire(sql);
+  const km = Math.max(1, Math.round(havKm(plat, plng, dlat, dlng) * 10) / 10);
+  const price = Math.max(1, Math.round(km * Number(cr.price_per_km || 0)));
+  const posRow = await sql`SELECT COUNT(*)::int AS n FROM premium_reservations WHERE car_id = ${carId} AND status IN ('pending','confirmed')`;
+  const position = Number(posRow[0]?.n || 0) + 1;
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const id = 'pr_' + crypto.randomUUID().slice(0, 12);
+  await sql`INSERT INTO premium_reservations (id, car_id, category, passenger_id, pickup_lat, pickup_lng, pickup_name, dest_lat, dest_lng, dest_name, scheduled_at, distance_km, price_total, position, status, expires_at, created_at)
+    VALUES (${id}, ${carId}, ${cr.category}, ${user.sub}, ${plat}, ${plng}, ${String(b.pickupName || '').slice(0, 120)}, ${dlat}, ${dlng}, ${String(b.destName || '').slice(0, 120)}, ${b.scheduledAt ? String(b.scheduledAt).slice(0, 40) : null}, ${km}, ${price}, ${position}, 'pending', ${expiresAt}, NOW())`;
+  return c.json({ ok: true, reservation: { id, carId, category: cr.category, position, distanceKm: km, priceTotal: price, expiresAt, status: 'pending' } });
+});
+
+// GET /api/v1/premium/reservations/mine — minhas reservas premium
+app.get('/api/v1/premium/reservations/mine', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  await premiumExpire(sql);
+  const rows = await sql`
+    SELECT pr.*, pf.make, pf.model, pf.color, pf.year, pf.plate, pf.price_per_km, pf.photo, u.name AS driver_name, u.phone AS driver_phone
+    FROM premium_reservations pr
+    LEFT JOIN premium_fleet pf ON pf.id = pr.car_id
+    LEFT JOIN drivers d ON d.id = pf.driver_id
+    LEFT JOIN users u ON u.id = d."userId"
+    WHERE pr.passenger_id = ${user.sub}
+    ORDER BY pr.created_at DESC LIMIT 50`;
+  return c.json({ reservations: (rows || []).map(premiumResOut) });
+});
+
+// GET /api/v1/premium/reservations/:id — detalhe de uma reserva
+app.get('/api/v1/premium/reservations/:id', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  await premiumExpire(sql);
+  const id = c.req.param('id');
+  const rows = await sql`
+    SELECT pr.*, pf.make AS car_make, pf.model AS car_model, pf.color AS car_color, pf.year AS car_year, pf.plate AS car_plate, pf.photo AS car_photo, pf.price_per_km, u.name AS driver_name, u.phone AS driver_phone
+    FROM premium_reservations pr
+    LEFT JOIN premium_fleet pf ON pf.id = pr.car_id
+    LEFT JOIN drivers d ON d.id = pf.driver_id
+    LEFT JOIN users u ON u.id = d."userId"
+    WHERE pr.id = ${id} LIMIT 1`;
+  if (!rows.length) return c.json({ message: 'Reserva não encontrada.' }, 404);
+  const r = rows[0];
+  if (r.passenger_id !== user.sub && user.role !== 'ADMIN') return c.json({ message: 'Sem acesso a esta reserva.' }, 403);
+  return c.json({ reservation: premiumResOut(r) });
+});
+
+// POST /api/v1/premium/reservations/:id/pay — passageira confirma/paga (só a 1ª da fila)
+app.post('/api/v1/premium/reservations/:id/pay', requireAuth, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  await premiumExpire(sql);
+  const mine = await sql`SELECT id, car_id FROM premium_reservations WHERE id = ${id} AND passenger_id = ${user.sub} AND status = 'pending' LIMIT 1`;
+  if (!mine.length) return c.json({ message: 'Reserva expirada ou já processada.' }, 409);
+  const carId = mine[0].car_id;
+  const front = await sql`SELECT id FROM premium_reservations WHERE car_id = ${carId} AND status = 'pending' ORDER BY position ASC LIMIT 1`;
+  if (!front.length || front[0].id !== id) return c.json({ message: 'Aguarda a tua vez na fila.' }, 409);
+  const upd = await sql`UPDATE premium_reservations SET status = 'confirmed' WHERE id = ${id} AND status = 'pending' RETURNING id`;
+  if (!upd.length) return c.json({ message: 'Reserva expirada ou já processada.' }, 409);
+  await sql`UPDATE premium_fleet SET status = 'reserved' WHERE id = ${carId}`;
+  await sql`UPDATE premium_reservations SET status = 'expired' WHERE car_id = ${carId} AND status = 'pending'`;
+  try {
+    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+      VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${user.sub}, ${'Reserva Premium confirmada'}, ${'O teu carro premium está confirmado. Vê os detalhes no app.'}, 'premium', 0, ${id}, NOW())`;
+  } catch {}
+  return c.json({ ok: true, status: 'confirmed' });
+});
+
+// DELETE /api/v1/premium/reservations/:id — passageira cancela a sua reserva
+app.delete('/api/v1/premium/reservations/:id', requireAuth, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const r = await sql`SELECT id, car_id, status FROM premium_reservations WHERE id = ${id} AND passenger_id = ${user.sub} LIMIT 1`;
+  if (!r.length) return c.json({ message: 'Reserva não encontrada.' }, 404);
+  await sql`UPDATE premium_reservations SET status = 'cancelled' WHERE id = ${id}`;
+  if (r[0].status === 'confirmed') {
+    await sql`UPDATE premium_fleet SET status = 'available' WHERE id = ${r[0].car_id} AND status = 'reserved'`;
+  }
+  return c.json({ ok: true });
+});
+
 async function ringStart(env: any) {
   try {
     const stub = env.RINGER.get(env.RINGER.idFromName('global'));
