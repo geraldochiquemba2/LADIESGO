@@ -31,7 +31,7 @@ platform :ios do
       xcargs: "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')}",
       export_options: {
         provisioningProfiles: {
-          "com.ladiesgo.app" => lane_context[SharedValues::SIGH_PROFILE_NAME]
+          "com.ladiesgo.app" => lane_context[SharedValues::SIGH_NAME]
         }
       }
     )
