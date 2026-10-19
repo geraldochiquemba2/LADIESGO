@@ -66,6 +66,12 @@ jobs:
           echo "KEYCHAIN_PW=$KC_PW" >> "$GITHUB_ENV"
       - name: Prebuild (gera projecto nativo iOS)
         run: npx expo prebuild --platform ios --clean --no-install
+      - name: Definir build number (CFBundleVersion)
+        run: |
+          set -euo pipefail
+          PLIST=$(ls ios/LadiesGo/Info.plist 2>/dev/null || ls ios/*/Info.plist | head -n1)
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "$PLIST"
+          echo "CFBundleVersion=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST") no $PLIST"
       - name: CocoaPods
         run: pod install --project-directory=ios
       - name: Detetar workspace/scheme
