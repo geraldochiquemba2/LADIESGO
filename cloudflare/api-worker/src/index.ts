@@ -3043,6 +3043,15 @@ export class DriverGeo {
 // RESERVA COMPARTILHADA — Partida Anunciada
 // ════════════════════════════════════════════════════════════════════════════════
 
+// Uma partida deixa de ser válida 2h após o horário marcado.
+function sdExpired(status: any, expiresAt: any, nowMs = Date.now()) {
+  try {
+    if (status !== 'active' && status !== 'full') return false;
+    const e = Date.parse(String(expiresAt || ''));
+    return Number.isFinite(e) && e <= nowMs;
+  } catch (_) { return false; }
+}
+
 // POST /api/v1/shared/departures — Motorista anuncia uma partida compartilhada
 app.post('/api/v1/shared/departures', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
@@ -3066,7 +3075,8 @@ app.post('/api/v1/shared/departures', requireAuth, async (c) => {
   const totalPrice = Number(b.totalPrice || 0);
   const pricePerSeat = Number(b.pricePerSeat || Math.ceil(totalPrice / totalSeats));
   const scheduledAt = String(b.scheduledAt || new Date().toISOString());
-  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(); // 12h
+  const _schedMs = Date.parse(scheduledAt);
+  const expiresAt = new Date((Number.isFinite(_schedMs) ? _schedMs : Date.now()) + 2 * 60 * 60 * 1000).toISOString(); // +2h após a partida
   const id = 'sd_' + crypto.randomUUID().slice(0, 12);
   const d = await sql`SELECT d."userId", u.name, u.phone, u."profilePhoto" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${did} LIMIT 1`;
   if (!d.length) return c.json({ message: 'Motorista não encontrada.' }, 404);
@@ -3082,7 +3092,7 @@ app.get('/api/v1/shared/departures/nearby', requireAuth, async (c) => {
   const user = c.get('user');
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ message: 'Coordenadas inválidas.' }, 400);
   const now = new Date().toISOString();
-  // Não mostrar partidas expiradas (12h) nem lotadas (full) para passageiras comuns.
+  // Não mostrar partidas expiradas (2h após a partida) nem lotadas (full) para passageiras comuns.
   // A motorista vê suas próprias partidas (incluindo full) no painel dela.
   const rows = await sql`SELECT sd.*, d."userId", u.name AS driver_name, u.phone AS driver_phone, u."profilePhoto" AS driver_photo, (SELECT COUNT(*) FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.status IN ('pending','paid')) AS queue_count, (SELECT sr.position FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.passenger_id = ${user.sub} AND sr.status IN ('pending','paid') LIMIT 1) AS my_position, (SELECT sr.expires_at FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.passenger_id = ${user.sub} AND sr.status IN ('pending','paid') LIMIT 1) AS my_expires_at FROM shared_departures sd JOIN drivers d ON d.id = sd.driver_id JOIN users u ON u.id = d."userId" WHERE sd.status = 'active' AND sd.seats_taken < sd.total_seats AND sd.expires_at > ${now} ORDER BY sd.created_at DESC LIMIT 100`;
   const hav = (a1: number, a2: number, b1: number, b2: number) => {
@@ -3123,10 +3133,10 @@ app.post('/api/v1/shared/departures/:id/reserve', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const departureId = c.req.param('id');
-  const dep = await sql`SELECT * FROM shared_departures WHERE id = ${departureId} AND status = 'active' AND seats_taken < total_seats LIMIT 1`;
-  if (!dep.length) return c.json({ message: 'Partida não encontrada ou sem vagas.' }, 404);
+  const nowIso = new Date().toISOString();
+  const dep = await sql`SELECT * FROM shared_departures WHERE id = ${departureId} AND status = 'active' AND seats_taken < total_seats AND (expires_at IS NULL OR expires_at > ${nowIso}) LIMIT 1`;
+  if (!dep.length) return c.json({ message: 'Partida não encontrada, sem vagas ou já expirada.' }, 404);
   const d = dep[0];
-  // Verificar se passageira já tem reserva pendente nesta partida
   const existing = await sql`SELECT id FROM shared_reservations WHERE departure_id = ${departureId} AND passenger_id = ${user.sub} AND status IN ('pending','paid') LIMIT 1`;
   if (existing.length) return c.json({ message: 'Você já tem uma reserva nesta partida.' }, 400);
   // Calcular posição na fila (por ordem de criação) — atómico no INSERT
@@ -3250,7 +3260,7 @@ app.get('/api/v1/shared/departures/mine', requireAuth, async (c) => {
     id: r.id, originName: r.origin_name, destName: r.dest_name, category: r.category,
     totalPrice: r.total_price, pricePerSeat: r.price_per_seat, totalSeats: r.total_seats,
     seatsTaken: r.seats_taken, seatsAvailable: Number(r.total_seats) - Number(r.seats_taken),
-    status: r.status, scheduledAt: r.scheduled_at, expiresAt: r.expires_at,
+    status: sdExpired(r.status, r.expires_at) ? 'expired' : r.status, scheduledAt: r.scheduled_at, expiresAt: r.expires_at,
     approvedCount: Number(r.approved_count || 0),
     alertsUsed: Number(r.alert_count || 0),
     canDelete: Number(r.approved_count || 0) === 0 && r.status !== 'full'
