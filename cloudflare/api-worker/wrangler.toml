@@ -7,6 +7,16 @@ JWT_EXPIRES_IN = "7d"
 RATE_LIMIT_MAX = "100"
 RATE_LIMIT_WINDOW_MS = "60000"
 
+# Rate Limiting binding (GA, plano Free, sem custo extra) — camada global por localidade,
+# complementa o limitador em memoria por isolate. ~10 pedidos/s por sessao/IP por local CF.
+[[ratelimits]]
+name = "API_RL"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 600
+  period = 60
+
 # D1 (SQLite) — substitui o Neon Postgres. Sem cartão, sem migrações do Postgres.
 [[d1_databases]]
 binding = "DB"

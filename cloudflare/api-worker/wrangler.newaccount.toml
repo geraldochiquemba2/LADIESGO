@@ -22,6 +22,20 @@ compatibility_date = "2025-06-01"
 
 [vars]
 JWT_EXPIRES_IN = "7d"
+RATE_LIMIT_MAX = "100"
+RATE_LIMIT_WINDOW_MS = "60000"
+
+[[ratelimits]]
+name = "API_RL"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 600
+  period = 60
+
+# JWT_SECRET — DEFINIR VIA CLI (nunca commitar valor real):
+#   wrangler secret put JWT_SECRET --config wrangler.newaccount.toml
+# O .dev.vars tem um valor apenas para desenvolvimento local.
 
 [[d1_databases]]
 binding = "DB"

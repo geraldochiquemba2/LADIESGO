@@ -8,6 +8,8 @@
 // - colunas JSON conhecidas são re-parseadas (Postgres devolve JSONB já parseado)
 // - booleans/Date normalizados para o binding
 
+import { markWrite } from './budget';
+
 const JSON_COLS = new Set([
   'cats', 'offerQueue', 'offerSkipped', 'offerMissed',
   'stops', 'viewedBy', 'payload', 'data',
@@ -62,11 +64,14 @@ function labelOf(q: string): string {
   return m[1].split(/\s+/)[0].toUpperCase() + ' ' + m[2];
 }
 
+const WRITE_RE = /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i;
+
 export function makeSql(db: any) {
   return async function sql(strings: TemplateStringsArray, ...values: any[]): Promise<any[]> {
     let query = strings[0];
     for (let i = 0; i < values.length; i++) query += '?' + strings[i + 1];
     query = translate(query);
+    if (WRITE_RE.test(query)) markWrite();
     const stmt = values.length ? db.prepare(query).bind(...values.map(normalize)) : db.prepare(query);
     const res: any = await stmt.all();
     const meta = res && res.meta;

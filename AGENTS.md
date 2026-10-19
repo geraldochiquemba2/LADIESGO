@@ -67,3 +67,11 @@ em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).
 - Smoke test guest/register/toggle-online: 500→200/201 com reset.
 - Conta antiga (ladiesgo-ao): 429 Error 1027 (Workers req/dia) — manter inativa.
 - Webapp aponta para conta nova; Pages OK.
+
+## Fase 1 — Estabilização Imediata (concluída em código, pendente deploy)
+- **Rate limiting HTTP:** 100 req/min por IP em `/api/*` (sliding window, em memória por isolate). `/ping`, `/api/v1/health` e `/api/v1/auth/guest` estão isentos.
+- **Backdoor admin removido:** `999999999` / `1234567890` não entra mais como ADMIN. Qualquer admin deve existir na BD com `role='ADMIN'` e autenticar normalmente.
+- **JWT_SECRET:** definir novo segredo via `wrangler secret put JWT_SECRET --config wrangler.newaccount.toml`. Não usar o valor de `.dev.vars` em produção.
+- **Variáveis novas:** `RATE_LIMIT_MAX=100`, `RATE_LIMIT_WINDOW_MS=60000` em `wrangler.newaccount.toml`.
+- **Deploy:** `cd cloudflare/api-worker && wrangler deploy --config wrangler.newaccount.toml` (conta nova, NUNCA wrangler logout).
+- **Smoke test:** `GET /api/v1/health` deve retornar 200; `POST /api/v1/auth/login` com `999999999` deve retornar 401 (backdoor removido).

@@ -9,6 +9,7 @@ import {
   Modal,
   ActivityIndicator,
   Dimensions,
+  Image,
 } from 'react-native';
 import {
   Map as MapLibreMap,
@@ -28,6 +29,12 @@ import { driverGeoSocket } from '../../services/driverGeoSocket';
 
 const { height } = Dimensions.get('window');
 
+function paxInitials(name?: string): string {
+  const nm = (name || '').trim();
+  if (!nm) return 'P';
+  return nm.split(/\s+/).map((w) => w[0] || '').join('').slice(0, 2).toUpperCase() || 'P';
+}
+
 export default function DriverHomeScreen({ navigation }: any) {
   const { user } = useSelector((s: RootState) => s.auth);
   const [isOnline, setIsOnline] = useState(false);
@@ -36,6 +43,7 @@ export default function DriverHomeScreen({ navigation }: any) {
   const [earnings, setEarnings] = useState(0);
   const [tripRequest, setTripRequest] = useState<any>(null);
   const [accepting, setAccepting] = useState(false);
+  const [photoZoom, setPhotoZoom] = useState<string | null>(null);
   const [liveRequests, setLiveRequests] = useState<Map<string, { id: string; pickupLat: number; pickupLng: number; fareEstimate?: number }>>(new Map());
   const cameraRef = useRef<CameraRef>(null);
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
@@ -262,7 +270,10 @@ export default function DriverHomeScreen({ navigation }: any) {
         setLiveRequests((prev) => { const n = new Map(prev); n.delete(requestId); return n; });
         return;
       }
-      setTripRequest({ trip: t, passenger: t.passenger });
+      setTripRequest({
+        trip: t,
+        passenger: { name: t.passengerName || '', photo: t.passengerPhoto || '' },
+      });
     } catch {
       Alert.alert('Error', 'Could not load this booking. Try again.');
     }
@@ -403,7 +414,20 @@ export default function DriverHomeScreen({ navigation }: any) {
             )}
 
             <View style={styles.passengerRow}>
-              <Text style={styles.passengerAvatar}>👤</Text>
+              {tripRequest?.passenger?.photo ? (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setPhotoZoom(tripRequest.passenger.photo)}
+                >
+                  <Image source={{ uri: tripRequest.passenger.photo }} style={styles.passengerPhoto} />
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.passengerAvatarFallback}>
+                  <Text style={styles.passengerAvatarText}>
+                    {paxInitials(tripRequest?.passenger?.name)}
+                  </Text>
+                </View>
+              )}
               <Text style={styles.passengerName}>
                 {tripRequest?.passenger?.name || 'Passenger'}
               </Text>
@@ -492,6 +516,20 @@ export default function DriverHomeScreen({ navigation }: any) {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Foto da passageira em tamanho grande */}
+      <Modal visible={!!photoZoom} transparent animationType="fade" onRequestClose={() => setPhotoZoom(null)}>
+        <TouchableOpacity
+          style={styles.zoomOverlay}
+          activeOpacity={1}
+          onPress={() => setPhotoZoom(null)}
+        >
+          {photoZoom ? (
+            <Image source={{ uri: photoZoom }} style={styles.zoomPhoto} resizeMode="contain" />
+          ) : null}
+          <Text style={styles.zoomHint}>Toca para fechar</Text>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
@@ -612,6 +650,19 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   passengerAvatar: { fontSize: 28, marginRight: 12 },
+  passengerPhoto: {
+    width: 44, height: 44, borderRadius: 22, marginRight: 12, backgroundColor: '#e5e5e5',
+  },
+  passengerAvatarFallback: {
+    width: 44, height: 44, borderRadius: 22, marginRight: 12,
+    backgroundColor: '#61188E', justifyContent: 'center', alignItems: 'center',
+  },
+  passengerAvatarText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
+  zoomOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center',
+  },
+  zoomPhoto: { width: '90%', height: '80%' },
+  zoomHint: { color: '#aaa', fontSize: 13, marginTop: 16 },
   passengerName: { fontSize: 17, fontWeight: '600', color: '#1a1a2e' },
 
   addressBlock: {

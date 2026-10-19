@@ -5,8 +5,9 @@ import { cors } from 'hono/cors';
 import { makeSql as neon, d1metrics, resetD1Metrics } from './db';
 import { newBucket, tryConsume } from './ratelimit';
 import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
+import { bumpRequest, budgetState, writeGuard } from './budget';
 
-type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -32,19 +33,37 @@ function rateLimitCleanup() {
 let rateLimitLastCleanup = 0;
 
 app.use('/api/*', async (c, next) => {
+  bumpRequest(c.env);
   const path = c.req.path;
   // Health checks nunca são rate-limited (load balancer precisa deles).
   if (path === '/ping' || path === '/api/v1/health' || path === '/api/v1/auth/guest') return next();
   const now = Date.now();
+  const rlMax = Number(c.env.RATE_LIMIT_MAX) > 0 ? Math.floor(Number(c.env.RATE_LIMIT_MAX)) : RATE_LIMIT_MAX;
+  const rlWindowMs = Number(c.env.RATE_LIMIT_WINDOW_MS) > 0 ? Math.floor(Number(c.env.RATE_LIMIT_WINDOW_MS)) : RATE_LIMIT_WINDOW_MS;
+  const rlGlobal: any = (c.env as any).API_RL;
+  if (rlGlobal && typeof rlGlobal.limit === 'function') {
+    const auth = c.req.header('authorization') || '';
+    const gkey = auth ? ('t:' + auth.slice(-32)) : ('ip:' + clientIp(c));
+    try {
+      const g = await rlGlobal.limit({ key: gkey });
+      if (!g || g.success === false) {
+        return c.json(
+          { message: 'Demasiados pedidos. Tenta de novo dentro de momentos.', retryAfterSec: 60 },
+          429,
+          { 'Retry-After': '60' },
+        );
+      }
+    } catch {}
+  }
   if (now - rateLimitLastCleanup > 60_000) { rateLimitLastCleanup = now; rateLimitCleanup(); }
   const ip = clientIp(c);
   const entry = rateLimitHits.get(ip);
   if (!entry || now > entry.resetAt) {
-    rateLimitHits.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    rateLimitHits.set(ip, { count: 1, resetAt: now + rlWindowMs });
     return next();
   }
   entry.count++;
-  if (entry.count > RATE_LIMIT_MAX) {
+  if (entry.count > rlMax) {
     return c.json(
       { message: 'Demasiados pedidos. Tenta de novo dentro de momentos.', retryAfterSec: Math.ceil((entry.resetAt - now) / 1000) },
       429,
@@ -190,7 +209,7 @@ async function requireAuth(c: any, next: any) {
 
 // ─── health ───
 app.get('/ping', (c) => c.json({ ok: true, ts: Date.now(), worker: true }));
-app.get('/api/v1/health', (c) => c.json({ ok: true, ts: Date.now() }));
+app.get('/api/v1/health', (c) => c.json({ ok: true, ts: Date.now(), budget: budgetState() }));
 app.get('/api', (c) => c.json({ name: 'LadiesGo! API', status: 'online', runtime: 'cloudflare-workers' }));
 
 // ─── debug: métricas D1 (só ativo se DEBUG_KEY estiver definido) ───
@@ -551,6 +570,8 @@ app.get('/api/v1/ratings/mine', requireAuth, async (c) => {
 });
 // Presença da motorista (a home chama sem token: identifica pelo id do user).
 app.post('/api/v1/drivers/position', async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
   const sql = neon(c.env.DB);
   const b = await c.req.json().catch(() => ({}));
   const userId = String(b.id || '');
@@ -633,7 +654,8 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
       if (Array.isArray(dr[0].cats) && dr[0].cats.length) myCats = dr[0].cats.map((x: any) => String(x));
     } catch {}
     const rows = await sql`
-      SELECT t.*, u.name AS passenger_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
+      SELECT t.*, u.name AS passenger_name, u.phone AS passenger_phone, u."profilePhoto" AS passenger_photo
+      FROM trips t LEFT JOIN users u ON u.id = t."passengerId"
       WHERE t.status = 'REQUESTED' AND t."createdAt" > NOW() - INTERVAL '10 minutes'
       ORDER BY t."createdAt" ASC LIMIT 40`;
     const seen = new Set<string>();
@@ -648,7 +670,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
       // próxima primeiro). Viagens antigas sem fila contam como broadcast.
       const q = offerQueueOf(r);
       if (!q.length && !r.offeredDriverId) {
-        out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
+        out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', r.passenger_photo || ''));
         continue;
       }
       if (!r.offerBroadcast) {
@@ -656,12 +678,12 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
         r = await advanceOfferIfNeeded(c.env, sql, r);
         if (offerSkippedOf(r).indexOf(did) >= 0) continue;
         if (r.offerBroadcast) {
-          out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
+          out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', r.passenger_photo || ''));
           continue;
         }
         if (String(r.offeredDriverId || '') !== did) continue;
       }
-      out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico'));
+      out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', r.passenger_photo || ''));
     }
     return c.json({ trips: out });
   } catch (e) {
@@ -919,7 +941,13 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
     driver = { lat: dLat, lng: dLng, distanceKm: Math.round(dk * 10) / 10, etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)) };
   }
   const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
-  return c.json({ ...t, driver, ...(pin ? { pin } : {}) });
+  // Nome/foto/telefone da passageira para o modal da motorista (mobile).
+  let paxInfo: any = {};
+  try {
+    const pax = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+    if (pax.length) paxInfo = { passengerName: pax[0].name || '', passengerPhone: pax[0].phone || '', passengerPhoto: pax[0].profilePhoto || '' };
+  } catch {}
+  return c.json({ ...t, driver, ...paxInfo, ...(pin ? { pin } : {}) });
 });
 async function driverIdFor(sql: any, userId: string) {
   const r = await sql`SELECT id FROM drivers WHERE "userId" = ${userId} LIMIT 1`;
@@ -940,20 +968,11 @@ async function applyCommission(sql: any, driverRowId: string, fare: any, tripId:
     const du = await sql`SELECT "userId" FROM drivers WHERE id = ${driverRowId} LIMIT 1`;
     const userId = du[0]?.userId;
     if (!userId) return;
-    const u = await sql`SELECT "walletBalance", "negTrips" FROM users WHERE id = ${userId} LIMIT 1`;
-    if (!u.length) return;
-    const before = Number(u[0].walletBalance || 0);
     const commission = money(f * COMMISSION_RATE);
-    const after = money(before - commission);
-    let negTrips = Number(u[0].negTrips || 0);
-    let blocked = 0;
-    if (after < 0) {
-      negTrips = negTrips + 1;
-      if (negTrips >= NEG_TRIP_LIMIT) blocked = 1;
-    } else {
-      negTrips = 0;
-    }
-    await sql`UPDATE users SET "walletBalance" = ${after}, "negTrips" = ${negTrips}, "walletBlocked" = ${blocked}, "updatedAt" = NOW() WHERE id = ${userId}`;
+    const acc = await sql`UPDATE users SET "walletBalance" = ROUND("walletBalance" - ${commission}, 2), "negTrips" = CASE WHEN ROUND("walletBalance" - ${commission}, 2) < 0 THEN "negTrips" + 1 ELSE 0 END, "walletBlocked" = CASE WHEN ROUND("walletBalance" - ${commission}, 2) < 0 AND ("negTrips" + CASE WHEN ROUND("walletBalance" - ${commission}, 2) < 0 THEN 1 ELSE 0 END) >= ${NEG_TRIP_LIMIT} THEN 1 ELSE 0 END, "updatedAt" = NOW() WHERE id = ${userId} RETURNING "walletBalance", "negTrips", "walletBlocked"`;
+    if (!acc.length) return;
+    const after = money(acc[0].walletBalance);
+    const blocked = Number(acc[0].walletBlocked || 0);
     await sql`INSERT INTO wallet_tx (id, "userId", type, amount, "balanceAfter", "tripId", note, "createdAt") VALUES (gen_random_uuid()::text, ${userId}, 'COMMISSION', ${-commission}, ${after}, ${tripId}, ${'Comissao 14% da viagem'}, NOW())`;
     if (blocked) {
       await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
@@ -1061,10 +1080,17 @@ app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
   if (!cur.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   if (cur[0].status === 'COMPLETED') return c.json(cur[0]);
   if (cur[0].status !== 'IN_PROGRESS') return c.json({ message: 'Transição inválida.' }, 400);
-  const t = cur[0];
-  const rows = await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} RETURNING *`;
-  if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
-  await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id);
+  const rows = await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'IN_PROGRESS' RETURNING *`;
+  if (!rows.length) {
+    const again = await sql`SELECT * FROM trips WHERE id = ${id} LIMIT 1`;
+    if (again.length && again[0].status === 'COMPLETED') {
+      pushStatus(c, id, 'COMPLETED');
+      return c.json(again[0]);
+    }
+    return c.json({ message: 'Transição inválida.' }, 400);
+  }
+  if (rows[0].driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(rows[0].finalFare || rows[0].fareEstimate || 0) * 0.8} WHERE id = ${rows[0].driverId}`;
+  await applyCommission(sql, rows[0].driverId, rows[0].finalFare || rows[0].fareEstimate, id);
   pushStatus(c, id, 'COMPLETED');
   return c.json(rows[0]);
 });
@@ -1099,9 +1125,26 @@ app.post('/api/v1/ratings', requireAuth, async (c) => {
   } catch (e) { console.error('ratings insert error:', e); }
   return c.json({ success: true });
 });
-app.get('/api/v1/notifications', requireAuth, async (c) => c.json({ notifications: [] }));
-app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => c.json({ count: 0 }));
-app.put('/api/v1/notifications/read-all', requireAuth, async (c) => c.json({ success: true }));
+app.get('/api/v1/notifications', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const rows = await sql`SELECT id, title, body, type, "isRead", data, "createdAt" FROM notifications WHERE "userId" = ${user.sub} ORDER BY "createdAt" DESC LIMIT 50`;
+  return c.json({ notifications: (rows || []).map((r: any) => ({ id: r.id, title: r.title, body: r.body, type: r.type, read: !!Number(r.isRead || 0), data: r.data || null, createdAt: r.createdAt })) });
+});
+app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const rows = await sql`SELECT COUNT(*)::int AS n FROM notifications WHERE "userId" = ${user.sub} AND "isRead" = 0`;
+  return c.json({ count: Number((rows[0] as any)?.n || 0) });
+});
+app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  await sql`UPDATE notifications SET "isRead" = 1 WHERE "userId" = ${user.sub} AND "isRead" = 0`;
+  return c.json({ success: true });
+});
 app.post('/api/v1/payments/create-intent', requireAuth, async (c) => c.json({ clientSecret: null, cash: true }));
 app.post('/api/v1/payments/confirm', requireAuth, async (c) => c.json({ success: true }));
 
@@ -1151,6 +1194,8 @@ app.get('/api/v1/turn/quota', requireAuth, async (c) => {
   return c.json(await turnQuota(sql, c.env.METERED_FREE_MB));
 });
 app.post('/api/v1/turn/log', requireAuth, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const { tripId, durationSec } = await c.req.json().catch(() => ({}));
@@ -1208,6 +1253,8 @@ app.get('/api/v1/trips/:id/chat', requireAuth, async (c) => {
   });
 });
 app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
@@ -1819,11 +1866,12 @@ app.post('/api/v1/admin/wallet/credit', adminMiddleware, async (c) => {
   const u = rows[0];
   if (String(u.role) !== 'DRIVER') return c.json({ message: 'Esta conta não é de motorista.' }, 400);
   const before = money(u.walletBalance);
-  const after = money(before + amount);
-  const blocked = after < 0 ? 1 : 0;
-  const negTrips = after < 0 ? Number(u.negTrips || 0) : 0;
   const admin = c.get('user');
-  await sql`UPDATE users SET "walletBalance" = ${after}, "negTrips" = ${negTrips}, "walletBlocked" = ${blocked}, "updatedAt" = NOW() WHERE id = ${u.id}`;
+  const upd = await sql`UPDATE users SET "walletBalance" = ROUND("walletBalance" + ${amount}, 2), "negTrips" = CASE WHEN ROUND("walletBalance" + ${amount}, 2) < 0 THEN "negTrips" ELSE 0 END, "walletBlocked" = CASE WHEN ROUND("walletBalance" + ${amount}, 2) < 0 THEN 1 ELSE 0 END, "updatedAt" = NOW() WHERE id = ${u.id} RETURNING "walletBalance", "negTrips", "walletBlocked"`;
+  if (!upd.length) return c.json({ message: 'Conta não encontrada.' }, 404);
+  const after = money(upd[0].walletBalance);
+  const blocked = Number(upd[0].walletBlocked || 0);
+  const negTrips = Number(upd[0].negTrips || 0);
   await sql`INSERT INTO wallet_tx (id, "userId", type, amount, "balanceAfter", note, "createdAt") VALUES (gen_random_uuid()::text, ${u.id}, 'TOPUP', ${money(amount)}, ${after}, ${'Carregamento admin ' + String(admin?.sub || '')}, NOW())`;
   return c.json({ ok: true, user: { id: u.id, name: u.name, phone: u.phone }, before, after, blocked: !!blocked, negTrips });
 });
@@ -2321,14 +2369,21 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       const r = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'ACCEPTED'`;
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'IN_PROGRESS') {
+      // PIN da passageira obrigatório para iniciar (como na rota mobile /start).
+      if (String((b as any).pin || '') !== pinForTrip(id)) return c.json({ message: 'Código incorreto.' }, 400);
       const r = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "arrivedAt" = COALESCE("arrivedAt", NOW()), "updatedAt" = NOW() WHERE id = ${id} AND status IN ('ACCEPTED', 'DRIVER_ARRIVED')`;
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'COMPLETED') {
       const devTs = Number((b as any).ts);
       const doneAt = Number.isFinite(devTs) && Math.abs(devTs - Date.now()) <= 15 * 60 * 1000 ? new Date(devTs) : new Date();
-      await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = ${doneAt as any}, "updatedAt" = NOW() WHERE id = ${id}`;
-      if (t.driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(t.finalFare || t.fareEstimate || 0) * 0.8} WHERE id = ${t.driverId}`;
-      await applyCommission(sql, t.driverId, t.finalFare || t.fareEstimate, id, c.env);
+      const r = await sql`UPDATE trips SET status = 'COMPLETED', "finalFare" = COALESCE("finalFare", "fareEstimate"), "completedAt" = ${doneAt as any}, "updatedAt" = NOW() WHERE id = ${id} AND status = 'IN_PROGRESS' RETURNING "driverId", "finalFare", "fareEstimate"`;
+      if (r.length) {
+        if (r[0].driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(r[0].finalFare || r[0].fareEstimate || 0) * 0.8} WHERE id = ${r[0].driverId}`;
+        await applyCommission(sql, r[0].driverId, r[0].finalFare || r[0].fareEstimate, id, c.env);
+      } else {
+        const chk = await sql`SELECT status FROM trips WHERE id = ${id} LIMIT 1`;
+        if (!chk.length || chk[0].status !== 'COMPLETED') return c.json({ message: 'Transição inválida.' }, 400);
+      }
     } else if (neonSt === 'CANCELLED') {
       // QUOTA D1: guarda de transição — retry escreve 0 linhas.
       const r = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')`;
@@ -2959,6 +3014,241 @@ export class DriverGeo {
   }
   async webSocketError(ws: any, _err: any) { try { ws.close(1011, 'err'); } catch {} }
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+// RESERVA COMPARTILHADA — Partida Anunciada
+// ════════════════════════════════════════════════════════════════════════════════
+
+// POST /api/v1/shared/departures — Motorista anuncia uma partida compartilhada
+app.post('/api/v1/shared/departures', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const b = await c.req.json().catch(() => ({}));
+  const did = await driverIdFor(sql, user.sub);
+  if (!did) return c.json({ message: 'Sem registo de motorista.' }, 404);
+  // Verificar se motorista está bloqueada (saldo negativo) — permite apenas 1 exceção
+  const drv = await sql`SELECT "walletBalance", "walletBlocked", "negTrips" FROM users WHERE id = ${user.sub} LIMIT 1`;
+  if (drv.length && Number(drv[0].walletBlocked || 0) && Number(drv[0].negTrips || 0) > 0) {
+    return c.json({ message: 'Conta bloqueada. Carregue a carteira antes de anunciar.' }, 403);
+  }
+  const originLat = Number(b.originLat), originLng = Number(b.originLng);
+  const destLat = Number(b.destLat), destLng = Number(b.destLng);
+  if (!Number.isFinite(originLat) || !Number.isFinite(originLng) || !Number.isFinite(destLat) || !Number.isFinite(destLng)) {
+    return c.json({ message: 'Coordenadas inválidas.' }, 400);
+  }
+  const category = String(b.category || 'Económico').slice(0, 30);
+  const totalSeats = Number(b.totalSeats || 1);
+  if (!(totalSeats > 0)) return c.json({ message: 'Número de lugares inválido.' }, 400);
+  const totalPrice = Number(b.totalPrice || 0);
+  const pricePerSeat = Number(b.pricePerSeat || Math.ceil(totalPrice / totalSeats));
+  const scheduledAt = String(b.scheduledAt || new Date().toISOString());
+  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(); // 12h
+  const id = 'sd_' + crypto.randomUUID().slice(0, 12);
+  const d = await sql`SELECT d."userId", u.name, u.phone, u."profilePhoto" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${did} LIMIT 1`;
+  if (!d.length) return c.json({ message: 'Motorista não encontrada.' }, 404);
+  const driverRow = d[0];
+  await sql`INSERT INTO shared_departures (id, driver_id, origin_lat, origin_lng, origin_name, dest_lat, dest_lng, dest_name, category, total_price, price_per_seat, total_seats, iban, express_code, whatsapp_number, scheduled_at, expires_at, status, created_at) VALUES (${id}, ${did}, ${originLat}, ${originLng}, ${String(b.originName || '').slice(0, 80)}, ${destLat}, ${destLng}, ${String(b.destName || '').slice(0, 80)}, ${category}, ${totalPrice}, ${pricePerSeat}, ${totalSeats}, ${String(b.iban || '').slice(0, 60)}, ${String(b.expressCode || '').slice(0, 30)}, ${String(driverRow.phone || '')}, ${scheduledAt}, ${expiresAt}, 'active', NOW())`;
+  return c.json({ ok: true, id, driver: { id: did, name: driverRow.name, phone: driverRow.phone, photo: driverRow.profilePhoto }, category, totalSeats, pricePerSeat, totalPrice, status: 'active', expiresAt });
+});
+
+// GET /api/v1/shared/departures/nearby — Lista partidas próximas (passageira)
+app.get('/api/v1/shared/departures/nearby', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const lat = Number(c.req.query('lat')), lng = Number(c.req.query('lng'));
+  const user = c.get('user');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ message: 'Coordenadas inválidas.' }, 400);
+  const now = new Date().toISOString();
+  // Não mostrar partidas expiradas (12h) nem lotadas (full) para passageiras comuns.
+  // A motorista vê suas próprias partidas (incluindo full) no painel dela.
+  const rows = await sql`SELECT sd.*, d."userId", u.name AS driver_name, u.phone AS driver_phone, u."profilePhoto" AS driver_photo, (SELECT COUNT(*) FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.status IN ('pending','paid')) AS queue_count, (SELECT sr.position FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.passenger_id = ${user.sub} AND sr.status IN ('pending','paid') LIMIT 1) AS my_position, (SELECT sr.expires_at FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.passenger_id = ${user.sub} AND sr.status IN ('pending','paid') LIMIT 1) AS my_expires_at FROM shared_departures sd JOIN drivers d ON d.id = sd.driver_id JOIN users u ON u.id = d."userId" WHERE sd.status = 'active' AND sd.seats_taken < sd.total_seats AND sd.expires_at > ${now} ORDER BY sd.created_at DESC LIMIT 100`;
+  const hav = (a1: number, a2: number, b1: number, b2: number) => {
+    const R = 6371;
+    const dLat = (b1 - a1) * Math.PI / 180;
+    const dLng = (b2 - a2) * Math.PI / 180;
+    const la1 = a1 * Math.PI / 180, la2 = b1 * Math.PI / 180;
+    const x = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  };
+  const list = (rows || []).map((r: any) => {
+    const dist = hav(lat, lng, Number(r.origin_lat), Number(r.origin_lng));
+    return {
+      id: r.id,
+      driverId: r.driver_id,
+      driverName: r.driver_name,
+      driverPhone: r.driver_phone,
+      driverPhoto: r.driver_photo,
+      originLat: r.origin_lat, originLng: r.origin_lng, originName: r.origin_name,
+      destLat: r.dest_lat, destLng: r.dest_lng, destName: r.dest_name,
+      category: r.category,
+      totalPrice: r.total_price, pricePerSeat: r.price_per_seat,
+      totalSeats: r.total_seats, seatsTaken: r.seats_taken, seatsAvailable: Number(r.total_seats) - Number(r.seats_taken),
+      iban: r.iban, expressCode: r.express_code, whatsappNumber: r.whatsapp_number,
+      scheduledAt: r.scheduled_at, status: r.status,
+      distanceKm: Math.round(dist * 10) / 10,
+      queueCount: Number(r.queue_count || 0),
+      myPosition: (r.my_position == null) ? null : Number(r.my_position),
+      myExpiresAt: r.my_expires_at || null,
+      createdAt: r.created_at,
+    };
+  }).sort((a: any, b: any) => a.distanceKm - b.distanceKm);
+  return c.json({ departures: list });
+});
+
+// POST /api/v1/shared/departures/:id/reserve — Passageira entra na fila
+app.post('/api/v1/shared/departures/:id/reserve', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const departureId = c.req.param('id');
+  const dep = await sql`SELECT * FROM shared_departures WHERE id = ${departureId} AND status = 'active' AND seats_taken < total_seats LIMIT 1`;
+  if (!dep.length) return c.json({ message: 'Partida não encontrada ou sem vagas.' }, 404);
+  const d = dep[0];
+  // Verificar se passageira já tem reserva pendente nesta partida
+  const existing = await sql`SELECT id FROM shared_reservations WHERE departure_id = ${departureId} AND passenger_id = ${user.sub} AND status IN ('pending','paid') LIMIT 1`;
+  if (existing.length) return c.json({ message: 'Você já tem uma reserva nesta partida.' }, 400);
+  // Calcular posição na fila (por ordem de criação) — atómico no INSERT
+  const id = 'sr_' + crypto.randomUUID().slice(0, 12);
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const ins = await sql`INSERT INTO shared_reservations (id, departure_id, passenger_id, position, status, expires_at, created_at) VALUES (${id}, ${departureId}, ${user.sub}, (SELECT COUNT(*) + 1 FROM shared_reservations WHERE departure_id = ${departureId} AND status IN ('pending','paid')), 'pending', ${expiresAt}, NOW()) RETURNING position`;
+  const position = Number(ins[0]?.position || 0);
+  return c.json({ ok: true, id, departureId, position, pricePerSeat: d.price_per_seat, expiresAt, message: 'Reserva criada. Pague em 10 minutos e envie o comprovante no WhatsApp da motorista.' });
+});
+
+// GET /api/v1/shared/departures/:id/payment — Dados de pagamento da motorista
+app.get('/api/v1/shared/departures/:id/payment', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const departureId = c.req.param('id');
+  const user = c.get('user');
+  const dep = await sql`SELECT sd.iban, sd.express_code, sd.whatsapp_number, sd.driver_id, sd.price_per_seat, sd.expires_at AS dep_expires_at, sd.scheduled_at, u.name AS driver_name, u.phone AS driver_phone, u."profilePhoto" AS driver_photo FROM shared_departures sd JOIN drivers d ON d.id = sd.driver_id JOIN users u ON u.id = d."userId" WHERE sd.id = ${departureId} LIMIT 1`;
+  if (!dep.length) return c.json({ message: 'Partida não encontrada.' }, 404);
+  const r = dep[0];
+  // Verificar se o usuário tem reserva nesta partida
+  const res = await sql`SELECT id, status, position, expires_at FROM shared_reservations WHERE departure_id = ${departureId} AND passenger_id = ${user.sub} AND status IN ('pending','paid') ORDER BY created_at DESC LIMIT 1`;
+  if (!res.length) return c.json({ message: 'Você não tem reserva nesta partida.' }, 403);
+  const rr = res[0];
+  return c.json({ driver: { name: r.driver_name, phone: r.driver_phone, photo: r.driver_photo }, iban: r.iban, expressCode: r.express_code, whatsappNumber: r.whatsapp_number, pricePerSeat: r.price_per_seat || 0, expiresAt: rr.expires_at || r.dep_expires_at, myPosition: rr.position, myStatus: rr.status, scheduledAt: r.scheduled_at });
+});
+
+// POST /api/v1/shared/departures/:id/approve — Motorista aprova passageira
+app.post('/api/v1/shared/departures/:id/approve', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const departureId = c.req.param('id');
+  const b = await c.req.json().catch(() => ({}));
+  const passengerId = String(b.passengerId || '');
+  if (!passengerId) return c.json({ message: 'ID da passageira é obrigatório.' }, 400);
+  // Verificar se o usuário é o motorista da partida
+  const dep = await sql`SELECT driver_id FROM shared_departures WHERE id = ${departureId} LIMIT 1`;
+  if (!dep.length) return c.json({ message: 'Partida não encontrada.' }, 404);
+  const didApr = await driverIdFor(sql, user.sub);
+  if (dep[0].driver_id !== user.sub && dep[0].driver_id !== didApr) return c.json({ message: 'Apenas a motorista pode aprovar.' }, 403);
+  const res = await sql`SELECT id, status FROM shared_reservations WHERE id = ${passengerId} AND departure_id = ${departureId} AND status = 'pending' LIMIT 1`;
+  if (!res.length) return c.json({ message: 'Reserva não encontrada ou já processada.' }, 404);
+  const seat = await sql`UPDATE shared_departures SET seats_taken = seats_taken + 1, status = CASE WHEN seats_taken + 1 >= total_seats THEN 'full' ELSE status END WHERE id = ${departureId} AND seats_taken < total_seats RETURNING seats_taken, total_seats, status`;
+  if (!seat.length) return c.json({ message: 'Partida não encontrada ou sem vagas.' }, 404);
+  await sql`UPDATE shared_reservations SET status = 'approved', approved_at = NOW() WHERE id = ${passengerId}`;
+  const newTaken = Number(seat[0].seats_taken);
+  const newStatus = seat[0].status;
+  // Notificar próxima da fila (marcar próxima como ativa para pagar)
+  const next = await sql`SELECT id, passenger_id FROM shared_reservations WHERE departure_id = ${departureId} AND status = 'pending' ORDER BY position ASC LIMIT 1`;
+  return c.json({ ok: true, approved: passengerId, seatsTaken: newTaken, totalSeats: seat[0].total_seats, status: newStatus, nextInQueue: next.length ? next[0] : null });
+});
+
+// POST /api/v1/shared/departures/:id/alert — Motorista avisa quem reservou (máx. 2 vezes)
+app.post('/api/v1/shared/departures/:id/alert', requireAuth, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const departureId = c.req.param('id');
+  const b = await c.req.json().catch(() => ({}));
+  const dep = await sql`SELECT driver_id, dest_name, alert_count FROM shared_departures WHERE id = ${departureId} LIMIT 1`;
+  if (!dep.length) return c.json({ message: 'Partida não encontrada.' }, 404);
+  const d = dep[0] as any;
+  if (d.driver_id !== user.sub && d.driver_id !== (await driverIdFor(sql, user.sub))) return c.json({ message: 'Apenas a motorista pode alertar.' }, 403);
+  const inc = await sql`UPDATE shared_departures SET alert_count = alert_count + 1 WHERE id = ${departureId} AND alert_count < 2 RETURNING alert_count`;
+  if (!inc.length) return c.json({ message: 'Já enviou o alerta 2 vezes. Não é possível enviar mais.' }, 429);
+  const used = Number(inc[0].alert_count || 0);
+  const msg = String((b as any).message || '').slice(0, 200);
+  const title = 'A tua partida vai sair';
+  const body = msg || ('A partida para ' + (d.dest_name || 'o destino') + ' está completa. Prepara-te para embarcar.');
+  const rs = await sql`SELECT DISTINCT passenger_id FROM shared_reservations WHERE departure_id = ${departureId} AND status IN ('pending','paid','approved')`;
+  for (const r of (rs || [])) {
+    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt") VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${(r as any).passenger_id}, ${title}, ${body}, 'shared_alert', 0, ${departureId}, NOW())`;
+  }
+  return c.json({ ok: true, notified: (rs || []).length, alertsUsed: used, alertsLeft: 2 - used });
+});
+
+// GET /api/v1/shared/departures/:id/queue — Ver fila da partida
+app.get('/api/v1/shared/departures/:id/queue', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const departureId = c.req.param('id');
+  const rows = await sql`SELECT sr.id, sr.passenger_id, sr.position, sr.status, sr.created_at, u.name AS passenger_name, u.phone AS passenger_phone, u."profilePhoto" AS passenger_photo FROM shared_reservations sr JOIN users u ON u.id = sr.passenger_id WHERE sr.departure_id = ${departureId} ORDER BY sr.position ASC`;
+  return c.json({ queue: (rows || []).map((r: any) => ({ id: r.id, passengerId: r.passenger_id, passengerName: r.passenger_name, passengerPhone: r.passenger_phone, passengerPhoto: r.passenger_photo, position: r.position, status: r.status, createdAt: r.created_at })) });
+});
+
+// DELETE /api/v1/shared/departures/:id/reserve — Passageira cancela a sua reserva
+app.delete('/api/v1/shared/departures/:id/reserve', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const departureId = c.req.param('id');
+  const r = await sql`SELECT id, position FROM shared_reservations WHERE departure_id = ${departureId} AND passenger_id = ${user.sub} AND status IN ('pending','paid') ORDER BY created_at DESC LIMIT 1`;
+  if (!r.length) return c.json({ message: 'Sem reserva para cancelar.' }, 404);
+  await sql`UPDATE shared_reservations SET status = 'cancelled' WHERE id = ${r[0].id}`;
+  return c.json({ ok: true });
+});
+
+// GET /api/v1/shared/departures/:id/my-reservation — Estado da minha reserva nesta partida
+app.get('/api/v1/shared/departures/:id/my-reservation', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const departureId = c.req.param('id');
+  const r = await sql`SELECT sr.id, sr.status, sr.position, sr.expires_at, sd.price_per_seat, sd.scheduled_at FROM shared_reservations sr JOIN shared_departures sd ON sd.id = sr.departure_id WHERE sr.departure_id = ${departureId} AND sr.passenger_id = ${user.sub} AND sr.status IN ('pending','paid','approved') ORDER BY sr.created_at DESC LIMIT 1`;
+  return c.json({ reservation: r.length ? { id: r[0].id, status: r[0].status, position: r[0].position, expiresAt: r[0].expires_at, pricePerSeat: r[0].price_per_seat, scheduledAt: r[0].scheduled_at } : null });
+});
+
+// POST /api/v1/shared/departures/:id/expire — Marcar reservas expiradas (cron/webhook)
+app.post('/api/v1/shared/departures/:id/expire', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const departureId = c.req.param('id');
+  const now = new Date().toISOString();
+  const expired = await sql`UPDATE shared_reservations SET status = 'expired' WHERE departure_id = ${departureId} AND status = 'pending' AND expires_at < ${now} RETURNING id, passenger_id`;
+  return c.json({ ok: true, expired: (expired || []).length, ids: (expired || []).map((r: any) => r.id) });
+});
+
+// GET /api/v1/shared/departures/mine — Motorista lista suas próprias partidas (inclui full/expiradas)
+app.get('/api/v1/shared/departures/mine', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const did = await driverIdFor(sql, user.sub);
+  if (!did) return c.json({ message: 'Sem registo de motorista.' }, 404);
+  const rows = await sql`SELECT sd.*, (SELECT COUNT(*) FROM shared_reservations sr WHERE sr.departure_id = sd.id AND sr.status = 'approved') AS approved_count FROM shared_departures sd WHERE sd.driver_id = ${did} ORDER BY sd.created_at DESC LIMIT 100`;
+  return c.json({ departures: (rows || []).map((r: any) => ({
+    id: r.id, originName: r.origin_name, destName: r.dest_name, category: r.category,
+    totalPrice: r.total_price, pricePerSeat: r.price_per_seat, totalSeats: r.total_seats,
+    seatsTaken: r.seats_taken, seatsAvailable: Number(r.total_seats) - Number(r.seats_taken),
+    status: r.status, scheduledAt: r.scheduled_at, expiresAt: r.expires_at,
+    approvedCount: Number(r.approved_count || 0),
+    alertsUsed: Number(r.alert_count || 0),
+    canDelete: Number(r.approved_count || 0) === 0 && r.status !== 'full'
+  })) });
+});
+
+// DELETE /api/v1/shared/departures/:id — Motorista apaga sua partida (bloqueado se houver reservas aprovadas)
+app.delete('/api/v1/shared/departures/:id', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const departureId = c.req.param('id');
+  const dep = await sql`SELECT driver_id, status FROM shared_departures WHERE id = ${departureId} LIMIT 1`;
+  if (!dep.length) return c.json({ message: 'Partida não encontrada.' }, 404);
+  const didDel = await driverIdFor(sql, user.sub);
+  if (dep[0].driver_id !== user.sub && dep[0].driver_id !== didDel) return c.json({ message: 'Apenas a motorista pode apagar.' }, 403);
+  // Bloquear se já há reservas aprovadas (alguém pagou)
+  const approved = await sql`SELECT id FROM shared_reservations WHERE departure_id = ${departureId} AND status = 'approved' LIMIT 1`;
+  if (approved.length) return c.json({ message: 'Não é possível apagar: já há passageira com assento aprovado nesta partida.' }, 403);
+  await sql`DELETE FROM shared_departures WHERE id = ${departureId}`;
+  await sql`DELETE FROM shared_reservations WHERE departure_id = ${departureId}`;
+  return c.json({ ok: true, message: 'Partida apagada.' });
+});
 
 async function ringStart(env: any) {
   try {
