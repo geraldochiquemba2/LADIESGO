@@ -250,6 +250,15 @@ export default function App() {
     return true;
   };
 
+  // window.open(..., '_blank') não passa pelo onShouldStartLoad; tratamos aqui
+  // para os botões de WhatsApp e links externos abrirem na app respectiva.
+  const onOpenWindow = (e: { nativeEvent: { targetUrl: string } }) => {
+    const url = (e.nativeEvent && e.nativeEvent.targetUrl) || '';
+    if (url && onShouldStartLoad({ url })) {
+      webRef.current?.injectJavaScript('window.location.href=' + JSON.stringify(url) + ';true;');
+    }
+  };
+
   if (failed) {
     return (
       <SafeAreaProvider>
@@ -291,6 +300,7 @@ export default function App() {
           injectedJavaScript={AUTH_BRIDGE_JS}
           onMessage={onMessage}
           onShouldStartLoadWithRequest={onShouldStartLoad}
+          onOpenWindow={onOpenWindow}
           onLoadStart={beginLoading}
           onLoadEnd={() => {
             // Esconde com atraso: sem isto há um flash branco entre o
