@@ -3,14 +3,15 @@ default_platform(:ios)
 platform :ios do
   desc "Gera/reutiliza certificado, compila o IPA com Xcode e envia para o TestFlight (sem EAS)"
   lane :release do
+    mobile_dir = ENV.fetch("MOBILE_DIR")
+    keychain_path = File.expand_path("~/Library/Keychains/ladiesgo.keychain-db")
+
     api_key = app_store_connect_api_key(
       key_id: ENV.fetch("ASC_KEY_ID"),
       issuer_id: ENV.fetch("ASC_ISSUER_ID"),
       key_filepath: ENV.fetch("ASC_KEY_PATH"),
       duration: 1200
     )
-
-    keychain_path = File.expand_path("~/Library/Keychains/ladiesgo.keychain-db")
 
     if ENV["DIST_CERT_P12"].to_s.strip.empty?
       UI.message("Sem DIST_CERT_P12 -> a criar certificado de distribuicao novo")
@@ -20,7 +21,7 @@ platform :ios do
         keychain_path: keychain_path,
         keychain_password: ENV.fetch("KEYCHAIN_PW")
       )
-      sh("security export -k '#{keychain_path}' -t identities -f pkcs12 -P '#{ENV.fetch('DIST_CERT_PASSWORD')}' -o dist_cert.p12")
+      sh("security export -k '#{keychain_path}' -t identities -f pkcs12 -P '#{ENV.fetch('DIST_CERT_PASSWORD')}' -o '#{mobile_dir}/dist_cert.p12'")
     else
       UI.message("A reutilizar o certificado de DIST_CERT_P12")
     end
@@ -28,7 +29,8 @@ platform :ios do
     sigh(
       api_key: api_key,
       app_identifier: "com.ladiesgo.app",
-      force: true
+      force: true,
+      provisioning_name: "LadiesGoAppStore"
     )
 
     build_ios_app(
@@ -37,9 +39,9 @@ platform :ios do
       configuration: "Release",
       clean: true,
       export_method: "app-store",
-      output_directory: "build",
+      output_directory: "#{mobile_dir}/build",
       output_name: "ladiesgo.ipa",
-      xcargs: "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')}",
+      xcargs: "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')} CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=4ZQGZ9N775 CODE_SIGN_IDENTITY=\"Apple Distribution\" PROVISIONING_PROFILE_SPECIFIER=LadiesGoAppStore",
       export_options: {
         signingStyle: "manual",
         teamID: "4ZQGZ9N775",
