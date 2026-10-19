@@ -17,6 +17,8 @@ on:
 jobs:
   build-submit:
     runs-on: macos-latest
+    env:
+      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
     defaults:
       run:
         working-directory: mobile
@@ -30,9 +32,7 @@ jobs:
       - run: npm install -g eas-cli
       - run: npm ci
       - name: Chave ASC (para TestFlight)
-        if: ${{ secrets.ASC_API_KEY_P8 != '' }}
-        env:
-          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        if: ${{ env.ASC_API_KEY_P8 != '' }}
         run: printf '%s' "$ASC_API_KEY_P8" > asc-key.p8
       - name: EAS iOS production build (local)
         env:
@@ -45,7 +45,7 @@ jobs:
           name: ladiesgo-ipa
           path: mobile/ladiesgo.ipa
       - name: Submit to TestFlight
-        if: ${{ secrets.ASC_API_KEY_P8 != '' }}
+        if: ${{ env.ASC_API_KEY_P8 != '' }}
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas submit --platform ios --profile production --path ./ladiesgo.ipa --non-interactive
