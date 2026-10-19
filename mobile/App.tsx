@@ -229,7 +229,7 @@ export default function App() {
       // WhatsApp: abrir directamente a app (whatsapp://) em vez do wa.me web,
       // que dentro da WebView ficava preso no ecrã lilás.
       if (u.hostname === 'wa.me' || u.hostname === 'api.whatsapp.com') {
-        const ph = u.searchParams.get('phone') || '';
+        const ph = u.searchParams.get('phone') || (u.pathname || '').replace(/[^0-9]/g, '');
         const tx = u.searchParams.get('text') || '';
         let wa = 'whatsapp://send';
         if (ph) wa += '?phone=' + ph + (tx ? '&text=' + encodeURIComponent(tx) : '');
