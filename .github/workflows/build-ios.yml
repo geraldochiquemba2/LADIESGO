@@ -48,8 +48,13 @@ jobs:
         run: |
           cd ios
           WORKSPACE=$(ls -d *.xcworkspace | head -n1)
-          SCHEME=$(xcodebuild -list -workspace "$WORKSPACE" -json | python3 -c "import sys,json;print(json.load(sys.stdin)['workspace']['schemes'][0])")
-          echo "Workspace: $WORKSPACE / Scheme: $SCHEME"
+          APP=$(basename "$WORKSPACE" .xcworkspace)
+          SCHEMES=$(xcodebuild -list -workspace "$WORKSPACE" -json | python3 -c "import sys,json;print('\n'.join(json.load(sys.stdin)['workspace']['schemes']))")
+          SCHEME="$APP"
+          if ! echo "$SCHEMES" | grep -qx "$SCHEME"; then
+            SCHEME=$(echo "$SCHEMES" | grep -v -E 'Pods|Application' | head -n1)
+          fi
+          echo "Workspace: $WORKSPACE / App: $APP / Scheme: $SCHEME"
           echo "WORKSPACE=ios/$WORKSPACE" >> "$GITHUB_ENV"
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
       - name: Instalar fastlane
