@@ -1,16 +1,22 @@
-name: iOS TestFlight (EAS)
+name: iOS TestFlight (local macOS)
 
-# Manual: Actions -> "iOS TestFlight (EAS)" -> Run workflow.
-# Faz o build de produção iOS no EAS e submete o IPA ao TestFlight.
-# Requer o secret EXPO_TOKEN (token da conta Expo dona do projeto: geraldo3).
-# Credenciais Apple: via chave ASC configurada em mobile/eas.json
-# (submit.production.ios) — sem interação.
+# Build LOCAL em runner macOS (nao gasta a quota de builds na nuvem do EAS).
+# O repo e publico, por isso os minutos macOS sao gratuitos.
+# Manual: Actions -> "iOS TestFlight (local macOS)" -> Run workflow.
+# Secrets necessarios:
+#   EXPO_TOKEN        -> token da conta Expo dona do projeto (geraldo3).
+#   ASC_API_KEY_P8    -> (opcional) conteudo do ficheiro .p8 da chave ASC,
+#                        para submeter ao TestFlight automaticamente.
+#                        Sem ele, a build fica so como artefacto (.ipa).
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-ios.yml'
 
 jobs:
   build-submit:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     defaults:
       run:
         working-directory: mobile
@@ -23,11 +29,23 @@ jobs:
           cache-dependency-path: mobile/package-lock.json
       - run: npm install -g eas-cli
       - run: npm ci
-      - name: EAS iOS production build
+      - name: Chave ASC (para TestFlight)
+        if: ${{ secrets.ASC_API_KEY_P8 != '' }}
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: printf '%s' "$ASC_API_KEY_P8" > asc-key.p8
+      - name: EAS iOS production build (local)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform ios --profile production --non-interactive
+          EAS_SKIP_AUTO_FINGERPRINT: "1"
+        run: eas build --platform ios --profile production --local --non-interactive --output=./ladiesgo.ipa
+      - name: Guardar IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ladiesgo-ipa
+          path: mobile/ladiesgo.ipa
       - name: Submit to TestFlight
+        if: ${{ secrets.ASC_API_KEY_P8 != '' }}
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas submit --platform ios --profile production --latest --non-interactive
+        run: eas submit --platform ios --profile production --path ./ladiesgo.ipa --non-interactive
