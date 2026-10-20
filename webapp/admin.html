@@ -290,7 +290,7 @@ function boot(){
   injectAdminUI();
   $('login').style.display='none';$('panel').style.display='';
   if($('map')){map=L.map('map').setView([-8.839,13.2894],12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  try{L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map)}catch(e){}
   map.attributionControl.setPrefix('© OpenStreetMap');
   layerG=L.layerGroup().addTo(map);map.on('popupopen',e=>{try{openDrv=e.popup&&e.popup._drvId||null}catch(_){}try{openTrip=(e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId)||null}catch(_){}});map.on('popupclose',e=>{try{if(openDrv&&e.popup&&e.popup._drvId===openDrv)openDrv=null}catch(_){}try{if(openTrip&&e.popup&&e.popup._source&&e.popup._source.options&&e.popup._source.options.tripId===openTrip)openTrip=null}catch(_){}});}
   load();
