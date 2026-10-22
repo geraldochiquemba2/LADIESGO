@@ -845,7 +845,7 @@ function pushStatus(c: any, tripId: string, status: string) {
 // ou pelo WS global (live-geo). Nenhum dos dois toca no TripPush, que é quem
 // serve o WS da viagem — sem esta ponte o carro fica parado no mapa da
 // passageira enquanto a app está fechada.
-// Viagem ativa resolvida em cache no isolate (1 leitura Neon por ~20s e por
+// Viagem ativa resolvida em cache no isolate (1 leitura D1 por ~20s e por
 // motorista) para não multiplicar leituras a cada ping de 5-10s.
 const ACTIVE_TRIP_TTL_MS = 20_000;
 const activeTripCache = new Map<string, { tripId: string | null; ts: number }>();
