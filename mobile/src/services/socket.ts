@@ -39,6 +39,11 @@ class RealtimeService {
   private wsAttempts = 0;
   private reconnectT: ReturnType<typeof setTimeout> | null = null;
   private heartbeatT: ReturnType<typeof setInterval> | null = null;
+  // Watchdog: se o WS ficar calado (motorista em segundo plano, push perdido),
+  // vai buscar a posição viva da motorista por REST (1 pedido, não é polling
+  // constante) para o mapa nunca ficar congelado.
+  private tripWatchT: ReturnType<typeof setInterval> | null = null;
+  private lastDriverAt = 0;
 
   private lastLocation: { lat: number; lng: number } | null = null;
   private lastHeading = -1;
@@ -91,6 +96,41 @@ class RealtimeService {
     this.lastEtaMin = null;
     this.loadTripInfo(tripId).catch(() => {});
     this.connectWs();
+    this.startTripWatch();
+  }
+
+  // Rede de segurança: se não chega frame da motorista há >35s (app da
+  // motorista em segundo plano, push perdido), busca a posição viva por REST.
+  private startTripWatch(): void {
+    this.stopTripWatch();
+    this.tripWatchT = setInterval(() => {
+      const tripId = this.wsTripId;
+      if (!tripId) return;
+      if (Date.now() - this.lastDriverAt < 35000) return;
+      this.pollDriverPos(tripId);
+    }, 15000);
+  }
+
+  private stopTripWatch(): void {
+    if (this.tripWatchT) {
+      clearInterval(this.tripWatchT);
+      this.tripWatchT = null;
+    }
+  }
+
+  private async pollDriverPos(tripId: string): Promise<void> {
+    try {
+      const res = await fetch(`${API}/trips/${tripId}`, {
+        headers: this.token ? { Authorization: `Bearer ${this.token}` } : undefined,
+      });
+      if (!res.ok) return;
+      const t: any = await res.json();
+      const d = t?.driver;
+      if (!d) return;
+      const la = Number(d.lat), lo = Number(d.lng);
+      if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
+      this.emitDriverLocation(la, lo);
+    } catch {}
   }
 
   private closeTrip(): void {
@@ -98,6 +138,7 @@ class RealtimeService {
       clearTimeout(this.reconnectT);
       this.reconnectT = null;
     }
+    this.stopTripWatch();
     this.stopHeartbeat();
     const ws = this.ws;
     this.ws = null;
@@ -246,6 +287,7 @@ class RealtimeService {
   private emitDriverLocation(lat: number, lng: number): void {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     this.lastDriver = { lat, lng };
+    this.lastDriverAt = Date.now();
     let distanceKm: number | undefined;
     const target = this.targetCoord();
     if (target) distanceKm = Math.round(havKm(lat, lng, target.lat, target.lng) * 10) / 10;

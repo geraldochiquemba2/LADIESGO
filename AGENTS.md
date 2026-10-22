@@ -10,24 +10,37 @@ A conta original esgotou a quota diária do **Workers Free** (100.000 pedidos/di
 
 | Função | Conta | Email | Account ID |
 |---|---|---|---|
-| **API Worker** (novo) | nova | `isabelcanjamba62@gmail.com` | `2ebfcbf70c6ea8d2b84130041528e249` |
-| **Pages** (site estático) | antiga | `fddsfds45@gmail.com` | `5c66df87ffad64dbf294a55663baa0d4` |
+| **API Worker** (novo, em espera) | nova | `isabelcanjamba62@gmail.com` | `2ebfcbf70c6ea8d2b84130041528e249` |
+| **API Worker + Pages** (ATIVA) | antiga | `fddsfds45@gmail.com` | `5c66df87ffad64dbf294a55663baa0d4` |
 
-- API: `https://ladiesgo-api.ladiesgo-angola.workers.dev`
-- D1 `ladiesgo` (conta nova): id `ea61eb36-483c-484f-b364-f82c844c0b30`
+- **ESTADO ATUAL (2026-10-22): a produção está na conta ANTIGA.**
+  Todos os clientes (webapp + app nativa) apontam para `https://ladiesgo-api.ladiesgo-ao.workers.dev`
+  e o Worker lá publicado é o que tem o código mais recente (ver `/api/v1/health`, que devolve `budget`).
+  A conta nova (`ladiesgo-angola`) está em espera: o `wrangler.newaccount.toml` aponta para lá.
+  **Publicar na conta errada = o fix não chega aos utilizadores.**
+- API ativa: `https://ladiesgo-api.ladiesgo-ao.workers.dev` (D1 `ladiesgo` id `84893b8b-5661-4fbc-a6aa-810ffbc1ab38`)
+- API nova (em espera): `https://ladiesgo-api.ladiesgo-angola.workers.dev` (D1 id `ea61eb36-483c-484f-b364-f82c844c0b30`)
 - Pages: `https://ladiesgo.pages.dev`
-- Passos de rollback: ver `cloudflare/README.md` (secção 4).
+- Passos de rollback/migração: ver `cloudflare/README.md` (secção 4).
 
 ## Regras Cloudflare (importantes)
 - **Nunca** correr `wrangler logout` — revoga o token e obriga a novo login. Para alternar contas:
   `powershell -ExecutionPolicy Bypass -File cloudflare\use-account.ps1 old` (Pages) ou `new` (API).
 - **Nunca** correr testes de carga contra produção. Usar staging ou a 2ª conta.
-- Publicar **Worker/API**: `cd cloudflare/api-worker` e `wrangler deploy --config wrangler.newaccount.toml`.
+- Publicar **Worker/API (conta ativa = antiga)**: `cd cloudflare/api-worker` e `wrangler deploy --env=""`
+  (o `wrangler.toml` da raiz do api-worker é a conta antiga; `--config wrangler.newaccount.toml` é a conta nova, hoje em espera).
 - Publicar **Pages**: `cloudflare\use-account.ps1 old` e depois `wrangler pages deploy . --project-name=ladiesgo` a partir de `webapp/`.
 
 ## Verificações HTTPS
 - PowerShell 5.1 / `curl` têm TLS quebrado para `*.workers.dev` (schannel). Usar `node`, ex.:
-  `node -e "fetch('https://ladiesgo-api.ladiesgo-angola.workers.dev/api/v1/health').then(r=>r.text()).then(console.log)"`
+  `node -e "fetch('https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1/health').then(r=>r.text()).then(console.log)"`
+
+## Tempo real (quem manda a posição do carro)
+- `DriverGeo` (DO global) é a **fonte de toda a posição viva**: recebe o GPS por REST (`PUT /api/v1/drivers/location`, `POST /api/v1/drivers/position`) e por WebSocket global (`/api/v1/drivers/live-geo`).
+- `TripPush` (DO por viagem) é o que serve o WebSocket da viagem (`GET /api/v1/trips/:id/live`) → é o que a passageira vê.
+- **Ponte obrigatória:** o `DriverGeo` empurra cada fix para o `TripPush` da viagem ativa (rota interna `POST /gps`), senão o carro fica **parado no mapa** quando a app da motorista está em segundo plano (o GPS em background nunca passa pelo WS da viagem).
+  - Viagem ativa resolvida por `activeTripForDriver()` (cache de 20 s no isolate) → 1 leitura Neon por ~20 s e por motorista.
+  - O `TripPush` só difunde se a viagem estiver `ACCEPTED`/`DRIVER_ARRIVED`/`IN_PROGRESS`, com o mesmo throttle do WS (1 fix/10 s; redesenho se o carro andou ≥150 m ou a cada 30 s).
 
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).
