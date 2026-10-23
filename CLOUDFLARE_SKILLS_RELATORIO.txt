@@ -1,0 +1,139 @@
+================================================================================
+                    LADIESGO — TÁXI PARA MULHERES (LUANDA, ANGOLA)
+         RELATÓRIO: SKILLS OFICIAIS DA CLOUDFLARE INSTALADOS
+================================================================================
+
+Repositório local: C:\Users\Geraldo\LADIESGO
+Data: 21/10/2026
+
+--------------------------------------------------------------------------------
+1. O QUE FOI INSTALADO
+--------------------------------------------------------------------------------
+
+Foram instalados 18 skills oficiais da Cloudflare (repositório cloudflare/skills,
+3.1k estrelas no GitHub) na pasta:
+
+  C:\Users\Geraldo\LADIESGO\.claude\skills\cloudflare\
+
+Skills instalados:
+
+  1.  cloudflare       — Descobre quais produtos Cloudflare cabem na necessidade
+  2.  wrangler         — Deploy e gerenciamento de Workers, KV, R2, D1, Queues
+  3.  cf-cli           — Comandos da CLI cf e escolha entre cf vs wrangler
+  4.  durable-objects  — Coordenação stateful, WebSockets, SQLite, alarms
+  5.  agents-sdk       — Agentes de IA com estado, agendamento, RPC, MCP
+  6.  workers-best-practices — Workers prontos para produção
+  7.  workers-profiling      — Perfil de CPU e hotspots em Workers/DO
+  8.  web-perf               — Auditoria Core Web Vitals (FCP, LCP, TBT, CLS)
+  9.  turnstile-spin         — Verificação Turnstile (bot verification)
+ 10.  nextjs-on-cloudflare   — Next.js em Workers via vinext
+ 11.  sandbox-next / sandbox-stable / sandbox-migrate-to-next — Ambientes isolados
+ 12.  k2                     — K2 Streams duráveis
+ 13.  basin                  — Analytics workflows com Basin Pipelines
+ 14.  cloudflare-email-service — Email Sending, Email Routing, entrega
+ 15.  cloudflare-one / cloudflare-one-migrations — Access, Gateway, WARP, Tunnel
+ 16.  gateway-workers        — Workers invocados por Forward action do Gateway
+
+--------------------------------------------------------------------------------
+2. COMO INSTALAR (se precisar recriar em outro ambiente)
+--------------------------------------------------------------------------------
+
+OpenCode (recomendado para este projeto):
+  mkdir -p ~/.config/opencode/skills/
+  git clone https://github.com/cloudflare/skills ~/.config/opencode/skills/cloudflare-skills
+
+Ou copiar manualmente para o projeto (já feito neste repositório):
+  C:\Users\Geraldo\LADIESGO\.claude\skills\cloudflare\
+
+--------------------------------------------------------------------------------
+3. RELEVÂNCIA PARA O LADIESGO
+--------------------------------------------------------------------------------
+
+O LadiesGo já roda na Cloudflare:
+  • Frontend: Cloudflare Pages (ladiesgo.pages.dev) — app web estática, HTML+JS
+  • API: Cloudflare Workers (ladiesgo-api.ladiesgo-angola.workers.dev)
+  • Banco: Cloudflare D1
+  • Tempo real: WebSockets (viagem ao vivo, GPS da motorista, pedidos recebidos)
+
+Skills mais úteis para o LadiesGo agora:
+
+  • wrangler        → Deploy do Worker da API e gerenciamento de D1/KV/R2
+  • durable-objects → WebSockets para rastreamento ao vivo (viagem, GPS, pedidos)
+  • workers-best-practices → Escrever Workers otimizados dentro do free tier
+  • web-perf        → Auditoria de performance da landing page ladiesgo.html
+  • cloudflare      → Orientação sobre quais produtos usar e limites
+  • turnstile-spin  → Proteção contra bots no login/registro
+  • cloudflare-email-service → Emails transacionais (confirmação, recuperação de senha)
+
+--------------------------------------------------------------------------------
+4. LIMITES DO FREE TIER CLOUDFLARE (importante para o LadiesGo)
+--------------------------------------------------------------------------------
+
+O AGENTS.md do projeto já alerta sobre esses limites. Resumo:
+
+  Serviço   | Grátis                    | Limite crítico
+  ----------|---------------------------|-------------------------------------------
+  Workers   | 100.000 requests/dia      | Por conta; erro 1027/429 se estourar
+  D1        | 25 bancos, 5 GB storage   | 100.000 ESCRITAS/dia; erro 7500 se estourar
+  KV        | 10 GB storage             | 100.000 leituras/dia
+  R2        | 10 GB storage             | 1M operações Classe A/mês, zero egress
+  Pages     | Banda ilimitada           | 500 builds/mês
+
+Regras do AGENTS.md (não repetir erros de 2026-10-17):
+  • NUNCA rodar wrangler logout — revoga o token
+  • NUNCA rodar testes de carga (k6, firetest, ws-storm) contra produção
+  • NUNCA reimportar o D1 inteiro repetidamente; usar migrations incrementais
+  • Preferir WebSocket a polling (mensagens WS não contam como requests do Worker)
+  • Trocar conta com cloudflare\use-account.ps1 old / new
+
+--------------------------------------------------------------------------------
+5. RECOMENDAÇÕES PRÁTICAS PARA ESCALAR O LADIESGO COM POUCO RECURSO
+--------------------------------------------------------------------------------
+
+a) Monitore as escritas do D1 — é o maior gargalo hoje. Não reimportar o banco
+   inteiro. Usar wrangler d1 migrations apply (incremental).
+
+b) Use WebSocket primeiro, polling como fallback — já é o padrão do webapp,
+   manter assim para economizar requests do Worker.
+
+c) Considere Cloudflare R2 para fotos de perfil das motoristas/passageiras
+   (10 GB grátis, zero taxa de saída de dados).
+
+d) Considere Cloudflare KV para cache de sessões e dados pouco mutáveis
+   (100.000 leituras/dia grátis).
+
+d) Mantenha o frontend em Cloudflare Pages — banda ilimitada, 500 builds/mês.
+
+e) Não rode testes de carga contra produção. Use staging ou a 2ª conta.
+
+f) Ao trocar de conta Cloudflare, copiar default.toml antes e usar
+   use-account.ps1, nunca wrangler logout.
+
+--------------------------------------------------------------------------------
+6. ARQUIVOS RELACIONADES NO PROJETO
+--------------------------------------------------------------------------------
+
+  C:\Users\Geraldo\LADIESGO\.claude\skills\cloudflare\*          (18 skills oficiais)
+  C:\Users\Geraldo\LADIESGO\.claude\skills\*                      (15 skills founder-skills)
+  C:\Users\Geraldo\LADIESGO\FOUNDER_CONTEXT.md                    (contexto do fundador)
+  C:\Users\Geraldo\LADIESGO\RELATORIO_AGENTES.md                  (relatório founder skills)
+  C:\Users\Geraldo\LADIESGO\LADIESGO_AGENTES_RELATORIO.txt        (relatório consolidado)
+  C:\Users\Geraldo\LADIESGO\AGENTS.md                             (regras gerais do repositório)
+  C:\Users\Geraldo\LADIESGO\webapp\AGENTS.md                      (regras da app web)
+
+--------------------------------------------------------------------------------
+7. COMO USAR OS SKILLS NO OPENCODE / CLAUDE CODE
+--------------------------------------------------------------------------------
+
+Cada skill é invocado pelo nome. Exemplos práticos para o LadiesGo:
+
+  /wrangler           → Deploy da API Workers para produção
+  /durable-objects    → Configurar WebSockets para rastreamento ao vivo
+  /workers-best-practices → Otimizar Worker da API dentro do free tier
+  /web-perf           → Auditar performance da landing page
+  /turnstile-spin     → Adicionar proteção contra bots no login
+  /cloudflare         → Orientação sobre produtos e limites da Cloudflare
+
+--------------------------------------------------------------------------------
+FIM DO RELATÓRIO
+================================================================================

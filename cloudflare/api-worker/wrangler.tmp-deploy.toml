@@ -1,0 +1,93 @@
+﻿name = "ladiesgo-api"
+main = "dist-nobundle/index.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+JWT_EXPIRES_IN = "7d"
+
+# D1 (SQLite) â€” substitui o Neon Postgres. Sem cartÃ£o, sem migraÃ§Ãµes do Postgres.
+[[d1_databases]]
+binding = "DB"
+database_name = "ladiesgo"
+database_id = "84893b8b-5661-4fbc-a6aa-810ffbc1ab38"
+migrations_dir = "migrations"
+
+[durable_objects]
+bindings = [
+  { name = "RINGER", class_name = "TripRinger" },
+  { name = "TRIPPUSH", class_name = "TripPush" },
+  { name = "REQUESTSHUB", class_name = "RequestsHub" },
+  { name = "DRIVERGEO", class_name = "DriverGeo" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TripRinger"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TripPush"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["RequestsHub"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["DriverGeo"]
+
+# Segredos (nunca commitar):
+# wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require
+# wrangler secret put JWT_SECRET     -> string longa aleatoria 32+ chars
+# wrangler secret put TG_BOT_TOKEN   -> token do bot Telegram (BotFather) p/ fotos do admin
+# wrangler secret put TG_CHAT_ID     -> id do canal/grupo destino (ex: -1001234567890)
+# (em dev: pÃµe as mesmas chaves em .dev.vars, ficheiro ignorado pelo git)
+
+# ============================================================================
+# STAGING â€” ambiente isolado para os testes de fogo (Worker + D1 + DOs proprios)
+# ============================================================================
+# Deploy:      npx wrangler@4.151.1 deploy --env staging
+# D1 migrar:   npx wrangler@4.151.1 d1 migrations apply ladiesgo-staging --remote --env staging
+# Segredos:    npx wrangler@4.151.1 secret put JWT_SECRET --env staging
+#              npx wrangler@4.151.1 secret put DEBUG_KEY  --env staging   (ativa /debug/*)
+# Limpar dados: POST https://ladiesgo-api-staging.<sub>.workers.dev/api/v1/debug/d1/reset
+# URL:         https://ladiesgo-api-staging.<sub>.workers.dev  (a base REST e /api/v1)
+[env.staging]
+name = "ladiesgo-api-staging"
+main = "dist-nobundle/index.js"
+compatibility_date = "2025-06-01"
+
+[env.staging.vars]
+JWT_EXPIRES_IN = "7d"
+ENVIRONMENT = "staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "ladiesgo-staging"
+database_id = "e8138ecd-5fa4-4a81-afa1-5f23e6b07045"
+migrations_dir = "migrations"
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "RINGER", class_name = "TripRinger" },
+  { name = "TRIPPUSH", class_name = "TripPush" },
+  { name = "REQUESTSHUB", class_name = "RequestsHub" },
+  { name = "DRIVERGEO", class_name = "DriverGeo" },
+]
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["TripRinger"]
+
+[[env.staging.migrations]]
+tag = "v2"
+new_sqlite_classes = ["TripPush"]
+
+[[env.staging.migrations]]
+tag = "v3"
+new_sqlite_classes = ["RequestsHub"]
+
+[[env.staging.migrations]]
+tag = "v4"
+new_sqlite_classes = ["DriverGeo"]
+

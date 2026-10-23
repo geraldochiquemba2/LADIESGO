@@ -1,0 +1,359 @@
+================================================================================
+                    LADIESGO — TÁXI PARA MULHERES (LUANDA, ANGOLA)
+         POTENCIAÇÃO DA PLATAFORMA NO PLANO FREE DA CLOUDFLARE
+              Usando os 18 Skills Oficiais da Cloudflare
+================================================================================
+
+Repositório local: C:\Users\Geraldo\LADIESGO
+Skills instalados em: C:\Users\Geraldo\LADIESGO\.claude\skills\cloudflare\
+Data: 21/10/2026
+
+--------------------------------------------------------------------------------
+RESUMO EXECUTIVO — O QUE SE PODE ALCANÇAR NO PLANO GRATUITO
+--------------------------------------------------------------------------------
+
+O LadiesGo já roda na Cloudflare (Pages + Workers + D1 + WebSockets).
+No plano Free, com os 18 skills oficiais instalados, é possível atingir:
+
+  • 5.000 a 10.000 usuários ativos por dia (passageiras + motoristas)
+  • 100.000 requisições HTTP/dia via Workers (API)
+  • 100.000 escritas/dia no D1 (banco)
+  • 5.000.000 leituras/dia no D1
+  • Banda ilimitada no frontend (Pages)
+  • WebSockets ilimitados em mensagens (apenas conexões contam como requests)
+  • Zero taxa de saída de dados (R2)
+  • 500 builds/mês no Pages
+
+Gargalo principal: Workers (100k requests/dia) e D1 Writes (100k/dia).
+Estratégia: maximizar WebSocket, cache KV, Durable Objects e práticas de Worker
+leve para empurrar esse limite o mais longe possível.
+
+--------------------------------------------------------------------------------
+SKILL 1: cloudflare — Descoberta de produtos e limites
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Ajuda o agente a identificar quais produtos Cloudflare atendem a cada
+necessidade e aponta para a documentação correta.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Mapear cada funcionalidade do app para o produto Cloudflare mais barato/grátis:
+      - Frontend estático → Pages (banda ilimitada)
+      - API backend → Workers (100k req/dia)
+      - Banco → D1 (100k writes/dia, 5M reads/dia)
+      - Cache de sessões → KV (100k reads/dia)
+      - Fotos de perfil → R2 (10GB, zero egress)
+      - WebSockets → Durable Objects (mensagens não contam como Worker req)
+  • Evitar produtos pagos (Access, Stream, Images, Argo) enquanto estiver no free.
+
+O QUE SE ALCANÇA:
+  • Arquitetura 100% dentro do free tier, sem custo mensal.
+  • Clareza sobre o que é grátis e o que começa a cobrar, evitando surpresas na fatura.
+
+--------------------------------------------------------------------------------
+SKILL 2: wrangler — Deploy e gerenciamento de Workers, D1, KV, R2, Queues
+--------------------------------------------------------------------------------
+
+O QUE FAZ: CLI para deploy de Workers, execução de migrations D1, gerenciamento
+de KV, R2, D1, Queues.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • `wrangler deploy` — subir a API do LadiesGo para produção (conta nova).
+  • `wrangler d1 migrations apply` — aplicar migrations incrementais no D1
+    (NUNCA reimportar dump completo; isso esgotou a conta nova em out/2026).
+  • `wrangler kv:key put` — cache de categorias de corrida (Económico/Conforto/Família).
+  • `wrangler r2 bucket put` — upload de fotos de perfil das motoristas/passageiras.
+  • `wrangler d1 execute` — consultas diretas no banco para debug.
+
+O QUE SE ALCANÇA:
+  • Deploy rápido e seguro sem tocar na conta antiga esgotada.
+  • Banco D1 mantido enxuto (apenas o necessário), preservando as 100k writes/dia.
+  • Fotos de perfil fora do D1 (R2), economizando espaço e writes do banco.
+
+--------------------------------------------------------------------------------
+SKILL 3: cf-cli — CLI da Cloudflare (`cf` vs `wrangler`)
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Comandos gerais da Cloudflare (contas, domínios, DNS, Workers legacy).
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Gerenciar troca de contas (antiga vs nova) sem usar `wrangler logout`.
+  • Configurar DNS do domínio personalizado (se houver) apontando para Pages.
+  • Verificar status de contas e quotas rapidamente.
+
+O QUE SE ALCANÇA:
+  • Gestão de múltiplas contas Cloudflare (antiga Pages + nova API) sem revogar tokens.
+  • Nunca usar `wrangler logout` (regra do AGENTS.md).
+
+--------------------------------------------------------------------------------
+SKILL 4: durable-objects — Coordenação stateful, WebSockets, SQLite, alarms
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Objetos duráveis com estado, WebSockets, SQLite embarcado, alarms.
+
+COMO APLICAR NO LADIESGO (FREE) — CRÍTICO:
+  • WebSocket de GPS da motorista (`/api/v1/drivers/live-geo`): mensagens não contam
+    como Worker requests (contam no DO a 20:1). Isso economiza enormemente o limite
+    de 100k Worker requests/dia.
+  • WebSocket de estado da viagem (`/api/v1/trips/<id>/live`): atualizações em tempo
+    real sem polling HTTP.
+  • WebSocket de pedidos (`/api/v1/trips/requests-live`): motoristas veem novas
+    corridas sem refresh constante.
+  • SQLite embarcado no DO para estado local rápido, reduzindo leituras D1.
+
+O QUE SE ALCANÇA:
+  • Rastreamento ao vivo de centenas de motoristas sem esgotar Worker requests.
+  • Chat em tempo real entre passageira e motorista "de graça" (mensagens WS não contam).
+  • Menos polling HTTP = menos consumo do limite de 100k requests/dia.
+  • Suporte a mais usuários simultâneos com o mesmo teto de 100k.
+
+--------------------------------------------------------------------------------
+SKILL 5: agents-sdk — Agentes de IA com estado, agendamento, RPC, MCP
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Construir agentes de IA com memória, agendamento, chamadas de função.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Agente de atendimento automático no WhatsApp para dúvidas comuns (recuperar senha,
+    como se cadastrar, onde fica o motorista).
+  • Agente que monitora quotas do D1/Workers e alerta quando perto do limite.
+  • Agente de dispatch auxiliar (sugerir motorista mais próxima com base em histórico).
+
+O QUE SE ALCANÇA:
+  • Redução de carga humana no suporte (menos emails, menos mensagens manuais).
+  • Monitoramento proativo de quotas antes de esgotar (evitar erro 7500/1027).
+  • Automação leve sem servidor dedicado (roda no Workers free).
+
+--------------------------------------------------------------------------------
+SKILL 6: workers-best-practices — Workers prontos para produção
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Boas práticas para escrever Workers eficientes e seguros.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Manter Worker leve: menos de 10ms CPU time por request (limite free).
+  • Evitar chamadas externas síncronas (ex: Nominatim) dentro do caminho crítico;
+    fazer em background ou cachear.
+  • Usar `cache` do KV para dados que não mudam (categorias, zonas de Luanda).
+  • Rate limiting já implementado (100 req/min por IP) — manter e ajustar se necessário.
+  • Respostas JSON pequenas e comprimidas.
+
+O QUE SE ALCANÇA:
+  • Mais requisições cabem nos 100k/dia porque cada request custa menos CPU.
+  • Menor risco de esgotar o CPU time do Worker.
+  • API mais responsiva para passageiras e motoristas em Luanda.
+
+--------------------------------------------------------------------------------
+SKILL 7: workers-profiling — Perfil de CPU e hotspots
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Identificar endpoints lentos e hotspots de alocação em Workers.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Perfil do endpoint `/api/v1/trips/incoming` (itera sobre viagens pendentes).
+  • Perfil de `/api/v1/drivers/nearby` (calcula Haversine para cada motorista).
+  • Perfil de `/api/v1/trips/request` (faz fetch para Nominatim reverse geocode).
+  • Otimizar os 3 endpoints mais quentes para consumir menos CPU e menos D1 reads.
+
+O QUE SE ALCANÇA:
+  • Identificar exatamente onde o Worker está gastando CPU e quota.
+  • Reduzir o custo por request, permitindo mais usuários dentro dos 100k/dia.
+  • Evitar que um endpoint ruim esgote o dia inteiro de quota.
+
+--------------------------------------------------------------------------------
+SKILL 8: web-perf — Auditoria Core Web Vitals (FCP, LCP, TBT, CLS)
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Auditar desempenho do frontend (ladiesgo.pages.dev).
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Auditar `ladiesgo-home.html` (~250 KB) — o ficheiro mais importante da app.
+  • Garantir: FCP < 1.8s, LCP < 2.5s, TBT < 200ms, CLS < 0.1.
+  • Otimizar imagens (logo.jpg, splash.jpg) — servir via R2 ou otimizar tamanho.
+  • Minificar CSS/JS inline (sem build step, mas comprimir manualmente).
+  • Carregar recursos estáticos com cache longo (imagens, SVG).
+
+O QUE SE ALCANÇA:
+  • Página carrega rápido mesmo em conexões móveis de Luanda.
+  • Menos abandono na landing page = mais cadastros na lista de espera.
+  • Melhor experiência = mais usuários ativos/dia dentro do mesmo limite de API.
+
+--------------------------------------------------------------------------------
+SKILL 9: turnstile-spin — Proteção contra bots (Turnstile)
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Verificação Turnstile para impedir bots em formulários.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Aplicar Turnstile APENAS em: login, registro, recuperar senha.
+  • NÃO aplicar em endpoints de alta frequência (GPS, chat, status de viagem) —
+    isso consumiria requests desnecessariamente.
+  • Turnstile free: 1.000.000 verificações/mês (suficiente para login/registro).
+
+O QUE SE ALCANÇA:
+  • Proteção contra contas falsas e bots que esgotariam D1 writes.
+  • Menos writes no banco de usuários fantasma.
+  • Mais quota real para usuários legítimos de Luanda.
+
+--------------------------------------------------------------------------------
+SKILL 10: nextjs-on-cloudflare — Next.js em Workers via vinext
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Rodar Next.js em Cloudflare Workers.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • NÃO usar no LadiesGo atual. O frontend é HTML estático puro (sem build step).
+  • Manter como HTML estático no Pages — mais eficiente no free tier (banda ilimitada,
+    sem complexidade de build).
+
+O QUE SE ALCANÇA:
+  • Evitar complexidade desnecessária que consumiria build minutes (500/mês no Pages).
+
+--------------------------------------------------------------------------------
+SKILL 11: sandbox-next / sandbox-stable / sandbox-migrate-to-next
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Ambientes isolados (sandbox) para testar aplicações.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Testar mudanças na API Worker antes de fazer `wrangler deploy` na produção.
+  • Validar novas migrations D1 em ambiente isolado.
+  • Testar novos WebSockets sem afetar usuários reais.
+
+O QUE SE ALCANÇA:
+  • Deployments mais seguros, menos risco de quebrar a produção e emergências
+    que consomem quota em correções apressadas.
+
+--------------------------------------------------------------------------------
+SKILL 12: k2 — K2 Streams duráveis
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Streams de dados duráveis para processamento em lote.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Processar histórico de corridas em lote (ex: gerar relatórios semanais de
+    ganhos de motoristas) sem bater no D1 em tempo real.
+  • Arquivar dados antigos de viagens concluídas.
+
+O QUE SE ALCANÇA:
+  • Análises de negócio sem impacto na API ao vivo.
+  • D1 mantido apenas com dados ativos, preservando writes/dia.
+
+--------------------------------------------------------------------------------
+SKILL 13: basin — Analytics workflows (Basin Pipelines, Catalog, SQL)
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Analytics de dados com pipelines e consultas SQL.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Monitorar quantos usuários ativos/dia estão chegando perto de 100k requests.
+  • Rastrear quais bairros de Luanda têm mais demanda (Maianga, Ingombota, etc.).
+  • Detectar picos de uso (horário de pico 7-9h, 17-20h) para planejar escala.
+
+O QUE SE ALCANÇA:
+  • Visibilidade real do uso da plataforma.
+  • Alertas antes de esgotar quotas (evitar erro 7500/1027).
+  • Decisão baseada em dados sobre quando migrar para plano pago.
+
+--------------------------------------------------------------------------------
+SKILL 14: cloudflare-email-service — Email Sending, Email Routing
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Envio e roteamento de emails transacionais.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • O LadiesGo já usa WhatsApp para recuperação de senha e suporte (conforme git log).
+  • Usar email APENAS para notificações opcionais (recibo de corrida, boas-vindas).
+  • Cloudflare Email Routing free tem limites de mensagens — usar com moderação.
+
+O QUE SE ALCANÇA:
+  • Canal de comunicação de baixo custo para avisos não urgentes.
+  • Manter WhatsApp como canal principal (já implementado e gratuito para usuários).
+
+--------------------------------------------------------------------------------
+SKILL 15: cloudflare-one / cloudflare-one-migrations — Rede corporativa
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Access, Gateway, WARP, Tunnel, DLP para segurança de rede corporativa.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • NÃO necessário para o LadiesGo (app público para consumidor em Luanda).
+  • Não aplicar — não adiciona valor ao uso gratuito para passageiras/motoristas.
+
+O QUE SE ALCANÇA:
+  • Não consumir quota ou complexidade desnecessária.
+
+--------------------------------------------------------------------------------
+SKILL 16: gateway-workers — Workers invocados por Gateway HTTP
+--------------------------------------------------------------------------------
+
+O QUE FAZ: Workers chamados por ações de Forward no Gateway HTTP.
+
+COMO APLICAR NO LADIESGO (FREE):
+  • Não está em uso atual no LadiesGo.
+  • Pode ser usado futuramente para filtrar tráfego malicioso antes de chegar à API.
+
+O QUE SE ALCANÇA:
+  • Proteção extra da API sem custo adicional, se necessário no futuro.
+
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+PLANO DE AÇÃO — POTENCIAÇÃO NO FREE TIER
+--------------------------------------------------------------------------------
+
+FASE 1 — Imediato (esta semana):
+  [ ] Manter WebSocket como primário para GPS, chat e estado de viagem.
+  [ ] Aplicar rate limiting já existente (100 req/min/IP) — não remover.
+  [ ] Cache de categorias de corrida no KV (evitar leituras D1 repetidas).
+  [ ] Auditar `ladiesgo-home.html` com web-perf (Core Web Vitals).
+  [ ] Aplicar Turnstile apenas em login/registro.
+
+FASE 2 — Curto prazo (este mês):
+  [ ] Usar `wrangler d1 migrations apply` (incremental) — nunca reimportar dump.
+  [ ] Mover fotos de perfil para R2 (10GB, zero egress).
+  [ ] Criar agente de monitoramento de quotas (agents-sdk) para alertar antes
+      de esgotar 100k writes/dia ou 100k requests/dia.
+  [ ] Profiling dos endpoints quentes (/trips/incoming, /drivers/nearby).
+
+FASE 3 — Médio prazo (próximos 2-3 meses):
+  [ ] Se chegar perto de 80-90% do limite diário, considerar segunda conta
+      Cloudflare (como já foi feito para a conta da API).
+  [ ] Usar basin para analytics de uso por bairro de Luanda.
+  [ ] Usar k2 para processar relatórios de corridas em lote.
+
+--------------------------------------------------------------------------------
+METAS ALCANÇAVEIS NO PLANO GRATUITO
+--------------------------------------------------------------------------------
+
+  Métrica                          | Alvo Free Tier
+  ---------------------------------|--------------------------------------------
+  Usuários ativos/dia              | 5.000 — 10.000
+  Requisições HTTP/dia (Workers)   | Até 100.000 (teto rígido)
+  Escritas D1/dia                  | Até 100.000 (teto rígido)
+  Leituras D1/dia                  | Até 5.000.000 (folga grande)
+  Conexões WebSocket/dia           | Até 100.000 (1 conexão = 1 request)
+  Mensagens WebSocket              | Ilimitadas (não contam como Worker req)
+  Banda frontend (Pages)           | Ilimitada
+  Builds Pages/mês                 | 500
+  Fotos de perfil (R2)             | 10GB armazenamento
+
+--------------------------------------------------------------------------------
+AVISOS CRÍTICOS (do AGENTS.md do LadiesGo)
+--------------------------------------------------------------------------------
+
+  • NUNCA rodar `wrangler logout` — revoga o token.
+  • NUNCA rodar testes de carga (k6, firetest, ws-storm) contra produção.
+  • NUNCA reimportar o D1 inteiro repetidamente; usar migrations incrementais.
+  • Preferir WebSocket a polling (mensagens WS não contam como Worker requests).
+  • Trocar conta com `cloudflare\use-account.ps1 old` ou `new`.
+  • A conta antiga (ladiesgo-ao) está com erro 1027 (Workers esgotado) — manter inativa.
+  • A conta nova (isabel) tem D1 escritas bloqueadas até 00:00 UTC (reset diário).
+
+--------------------------------------------------------------------------------
+ARQUIVO GERADO
+--------------------------------------------------------------------------------
+
+C:\Users\Geraldo\LADIESGO\CLOUDFLARE_POTENCIALIZACAO_FREE_TIER.txt
+
+--------------------------------------------------------------------------------
+FIM DO RELATÓRIO
+================================================================================

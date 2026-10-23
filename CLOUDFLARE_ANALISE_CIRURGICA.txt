@@ -1,0 +1,355 @@
+================================================================================
+                    LADIESGO — TÁXI PARA MULHERES (LUANDA, ANGOLA)
+         ANÁLISE CIRÚRGICA COM OS 18 SKILLS OFICIAIS DA CLOUDFLARE
+              PROJETO LOCAL: C:\Users\Geraldo\LADIESGO
+================================================================================
+
+Data: 21/10/2026
+Método: Leitura direta do código-fonte (webapp/, cloudflare/api-worker/, server.js,
+AGENTS.md). Sem achismo — apenas fatos observados nos ficheiros.
+
+--------------------------------------------------------------------------------
+1. PROBLEMA CRÍTICO ENCONTRADO (PRIMEIRA AÇÃO)
+--------------------------------------------------------------------------------
+
+O código-fonte tem o HOST DA API APONTANDO PARA A CONTA ANTIGA
+(ladiesgo-ao), mas o comentário nas linhas 1-2 de ladiesgo-home.html e
+ladiesgo-login.html diz que a API foi movida para a CONTA NOVA
+(ladiesgo-angola) porque a conta antiga esgotou a quota diária (erro 1027/429).
+
+Evidência no código (lida directamente dos ficheiros):
+
+  ladiesgo-home.html, linha 1:
+    var A='https://ladiesgo-api.ladiesgo-ao.workers.dev'
+
+  ladiesgo-login.html, linha 5:
+    var A='https://ladiesgo-api.ladiesgo-ao.workers.dev'
+
+  ladiesgo-home.html, linha 48 (geoWsBase):
+    return 'wss://ladiesgo-api.ladiesgo-ao.workers.dev'
+
+  ladiesgo-home.html, linha 710 (liveConnect):
+    var url='wss://ladiesgo-api.ladiesgo-ao.workers.dev'
+
+  ladiesgo-home.html, linha 721 (reqLiveConnect):
+    var base='wss://ladiesgo-api.ladiesgo-ao.workers.dev'
+
+O utilizador confirmou: estão na CONTA ANTIGA porque a nova já resetou
+(não estão a usar a nova).
+
+IMPACTO: Toda a API (login, registo, viagens, chat, GPS, WebSocket)
+está a ir para a conta antiga (ladiesgo-ao), que já tem erro 1027/429
+(Workers esgotado). A aplicação está efectivamente fora de serviço
+quando tenta usar a API remota.
+
+--------------------------------------------------------------------------------
+2. ARQUITETURA REAL DO PROJETO (O QUE EXISTE NO CÓDIGO)
+--------------------------------------------------------------------------------
+
+2.1 Frontend (Cloudflare Pages — estático)
+  Ficheiros: ladiesgo.html, ladiesgo-login.html, ladiesgo-home.html,
+             admin.html, motoristas.html, track.html, luanda-map.html,
+             privacidade.html, index.html (LEGADO)
+  wangler.jsonc: name="taxiapp-web", assets.directory="."
+  _redirects: /app -> ladiesgo-login, /home -> ladiesgo-home, etc.
+  _headers: no-store em todas as rotas HTML (obrigatório para WebView)
+
+2.2 Backend (Cloudflare Workers — cloudflare/api-worker/src/index.ts)
+  Framework: Hono
+  Banco: D1 (Neon HTTP via makeSql)
+  Autenticação: JWT HS256 via WebCrypto, PBKDF2-SHA256 para senhas
+  Rate limiting: 100 req/min por IP (memória por isolate)
+  Guest login: throttle dedicado, 15 por hora por IP (escreve no D1)
+  Comissão: 14% (COMMISSION_RATE = 0.14)
+  Limite viagens negativas: 3 (NEG_TRIP_LIMIT), depois walletBlocked
+  TURN/ICE: fallback openrelay.metered.ca (demo) se não houver METERED_DOMAIN
+
+2.3 WebSockets (Durable Objects)
+  - /api/v1/trips/:id/live  -> TRIPPUSH (estado da viagem)
+  - /api/v1/drivers/live-geo -> DRIVERGEO (GPS da motorista, memória)
+  - /api/v1/trips/requests-live -> REQUESTSHUB (pedidos recebidos)
+
+2.4 Server.js local (mock para desenvolvimento)
+  Porta 3000, drivers/trips/chats em Map() em memória
+  Oferta sequencial: 15s por motorista, mais próxima primeiro
+  Login mock: admin 999999999/1234567890, qualquer 9XX XXX XXX com senha ≥4
+
+2.5 Funcionalidades no frontend (ladiesgo-home.html, ~250KB)
+  - Mapa Leaflet com localização GPS, carro animado, rotas (OSRM/Valhalla)
+  - Viagem: pedido, aceite, chegada, em progresso, concluída, cancelada
+  - Chat por viagem (polling /api/v1/trips/:id/chat?since=)
+  - Chamada de voz WebRTC P2P (TURN/STUN, limite 2 min/chamada, quota)
+  - Avaliação obrigatória pós-viagem (estrelas + tags)
+  - SOS + contactos de confiança + números de emergência (112, 113, 115)
+  - Carteira do motorista (saldo, transações, bloqueio por saldo negativo)
+  - Registo de motorista (carta, viatura, fica PENDENTE até admin aprovar)
+  - Partidas compartilhadas (car sharing, filas, reserva, aprovação)
+  - Premium/Gold (reserva de carro alto padrão, pagamento via WhatsApp)
+  - Notificações não lidas (polling /api/v1/notifications/unread-count)
+
+--------------------------------------------------------------------------------
+3. ANÁLISE POR SKILL — CLOUDFLARE (18 AGENTES)
+--------------------------------------------------------------------------------
+
+Cada skill abaixo foi lido directamente do ficheiro SKILL.md instalado em
+.claude/skills/cloudflare/<skill>/SKILL.md e aplicado ao código real
+do LadiesGo.
+
+3.1 cloudflare — Descoberta de produtos e limites
+  O QUE FAZ: Ajuda a escolher produtos Cloudflare para cada necessidade.
+  APLICAÇÃO NO LADIESGO:
+    - Frontend estático -> Pages (banda ilimitada, já em uso)
+    - API backend -> Workers (100k requests/dia, já em uso)
+    - Banco -> D1 (100k writes/dia, 5M reads/dia, já em uso)
+    - Cache de categorias -> KV (não está a ser usado para categorias)
+    - Fotos de perfil -> R2 (não está a ser usado; fotos vão no D1 via data URL)
+    - WebSockets -> Durable Objects (já em uso para 3 hubs)
+  O QUE SE ALCANÇA: Arquitetura já está correta, mas fotos no D1 consomem
+  writes preciosas. Mover para R2 pouparia ~100k writes/dia.
+
+3.2 wrangler — Deploy e gerenciamento de Workers, D1, KV, R2
+  O QUE FAZ: CLI para deploy, migrations D1, gerenciamento de recursos.
+  APLICAÇÃO NO LADIESGO:
+    - wrangler.jsonc existe em webapp/ (name="taxiapp-web")
+    - Necessário para deployar o Worker da API (index.ts)
+    - `wrangler d1 migrations apply` para migrations incrementais
+    - `wrangler kv:key put` para cache de categorias
+    - `wrangler r2 bucket put` para fotos de perfil
+  O QUE SE ALCANÇA: Deploy controlado da API sem tocar na conta esgotada.
+
+3.3 cf-cli — CLI da Cloudflare (`cf` vs `wrangler`)
+  O QUE FAZ: Comandos gerais (contas, domínios, DNS).
+  APLICAÇÃO NO LADIESGO:
+    - Trocar entre contas (antiga ladiesgo-ao vs nova ladiesgo-angola)
+    - Sem usar `wrangler logout` (revoga o token — regra do AGENTS.md)
+    - Configurar DNS se houver domínio personalizado
+  O QUE SE ALCANÇA: Gestão de contas sem perder autenticação.
+
+3.4 durable-objects — Coordenação stateful, WebSockets, SQLite, alarms
+  O QUE FAZ: Objetos duráveis com estado, WebSockets, SQLite embarcado.
+  APLICAÇÃO NO LADIESGO (JÁ EM USO, MAS PODE OTIMIZAR):
+    - TRIPPUSH: estado da viagem ao vivo (/api/v1/trips/:id/live)
+    - DRIVERGEO: GPS da motorista em memória (0 writes D1 por ping)
+    - REQUESTSHUB: pedidos recebidos (/api/v1/trips/requests-live)
+  VANTAGEM CRÍTICA: Mensagens WebSocket NÃO contam como requests do Worker
+  (contam no DO a 20:1). O GPS da motorista enviado a cada 30s via WebSocket
+  poupa writes D1 e requests Worker.
+  O QUE SE ALCANÇA: Rastreamento ao vivo sem esgotar o limite de 100k
+  Worker requests/dia. O DO já está implementado no worker (index.ts
+  linhas 870-908).
+
+3.5 agents-sdk — Agentes de IA com estado, agendamento, RPC, MCP
+  O QUE FAZ: Agentes de IA com memória, agendamento, chamadas de função.
+  APLICAÇÃO NO LADIESGO:
+    - Agente de monitoramento de quotas (D1 writes, Worker requests)
+    - Agente de atendimento automático via WhatsApp (dúvidas comuns)
+    - Agente de dispatch auxiliar (sugerir motorista mais próxima)
+  O QUE SE ALCANÇA: Monitoramento proativo antes de esgotar quota
+  (evitar erro 7500/1027).
+
+3.6 workers-best-practices — Workers prontos para produção
+  O QUE FAZ: Boas práticas para Workers eficientes e seguros.
+  APLICAÇÃO NO LADIESGO:
+    - Manter Worker leve (<10ms CPU time por request, limite free)
+    - Evitar chamadas externas síncronas no caminho crítico (Nominatim)
+    - Usar KV para dados pouco mutáveis (categorias, zonas de Luanda)
+    - Rate limiting já implementado (100 req/min por IP) — manter
+    - Respostas JSON pequenas
+  O QUE SE ALCANÇA: Mais requisições cabem nos 100k/dia porque cada request
+  custa menos CPU.
+
+3.7 workers-profiling — Perfil de CPU e hotspots
+  O QUE FAZ: Identificar endpoints lentos e hotspots de alocação.
+  APLICAÇÃO NO LADIESGO:
+    - /api/v1/trips/incoming: itera sobre todas as viagens pendentes
+    - /api/v1/drivers/nearby: calcula Haversine para cada motorista
+    - /api/v1/trips/request: faz fetch para Nominatim (reverse geocode)
+  O QUE SE ALCANÇA: Identificar onde o Worker gasta CPU e quota.
+  Reduzir custo por request = mais usuários dentro dos 100k/dia.
+
+3.8 web-perf — Auditoria Core Web Vitals (FCP, LCP, TBT, CLS)
+  O QUE FAZ: Auditar desempenho do frontend (ladiesgo.pages.dev).
+  APLICAÇÃO NO LADIESGO:
+    - ladiesgo-home.html tem ~250KB (monólito)
+    - Imagens logo.jpg, splash.jpg servidas com cache longa (_headers)
+    - Leaflet CSS via unpkg (externo)
+    - Fontes Inter via Google Fonts (externo)
+  O QUE SE ALCANÇA: Página mais rápida = menos abandono na landing page
+  = mais cadastros sem gastar mais quota de API.
+
+3.9 turnstile-spin — Proteção contra bots (Turnstile)
+  O QUE FAZ: Widget Turnstile + server-side siteverify.
+  APLICAÇÃO NO LADIESGO:
+    - NÃO está implementado no código atual
+    - Aplicar APENAS em: login, registo, recuperar senha
+    - NÃO aplicar em GPS, chat, status de viagem (consumiria requests)
+    - Turnstile free: 1.000.000 verificações/mês
+  O QUE SE ALCANÇA: Proteção contra contas falsas/bots que esgotariam
+  D1 writes. Mais quota real para usuários legítimos.
+
+3.10 nextjs-on-cloudflare — Next.js em Workers via vinext
+  O QUE FAZ: Rodar Next.js em Cloudflare Workers.
+  APLICAÇÃO NO LADIESGO: NÃO aplicar. Frontend é HTML estático puro
+  (sem build step). Mais eficiente no free tier.
+
+3.11 sandbox-next / sandbox-stable / sandbox-migrate-to-next
+  O QUE FAZ: Ambientes isolados (sandbox) para teste.
+  APLICAÇÃO NO LADIESGO: Testar mudanças na API Worker antes de
+  `wrangler deploy` na produção. Menos risco de emergências que
+  consomem quota em correções apressadas.
+
+3.12 k2 — K2 Streams duráveis
+  O QUE FAZ: Streams de dados duráveis para processamento em lote.
+  APLICAÇÃO NO LADIESGO: Processar histórico de corridas em lote
+  (relatórios semanais de ganhos) sem bater no D1 em tempo real.
+
+3.13 basin — Analytics workflows (Basin Pipelines, Catalog, SQL)
+  O QUE FAZ: Analytics de dados com pipelines e consultas SQL.
+  APLICAÇÃO NO LADIESGO:
+    - Monitorar usuários ativos/dia perto de 100k requests
+    - Rastrear bairros de Luanda com mais demanda
+    - Detectar picos (7-9h, 17-20h)
+  O QUE SE ALCANÇA: Visibilidade real e alertas antes de esgotar quotas.
+
+3.14 cloudflare-email-service — Email Sending, Email Routing
+  O QUE FAZ: Envio e roteamento de emails transacionais.
+  APLICAÇÃO NO LADIESGO:
+    - O LadiesGo já usa WhatsApp para recuperação de senha e suporte
+    - Usar email APENAS para notificações opcionais (recibo, boas-vindas)
+  O QUE SE ALCANÇA: Canal de baixo custo para avisos não urgentes.
+
+3.15 cloudflare-one / cloudflare-one-migrations — Rede corporativa
+  O QUE FAZ: Access, Gateway, WARP, Tunnel.
+  APLICAÇÃO NO LADIESGO: NÃO necessário (app público para consumidor).
+  Não aplicar — não adiciona valor ao uso gratuito.
+
+3.16 gateway-workers — Workers invocados por Gateway HTTP
+  O QUE FAZ: Workers chamados por ações de Forward no Gateway HTTP.
+  APLICAÇÃO NO LADIESGO: Não está em uso. Pode ser usado futuramente
+  para filtrar tráfego malicioso antes da API.
+
+--------------------------------------------------------------------------------
+4. CÁLCULO CONSOLIDADO — USUÁRIOS ATIVOS POR DIA (PLANO FREE)
+--------------------------------------------------------------------------------
+
+| Componente | Limite Free | Consumo por usuário ativo/dia | Usuários suportados/dia |
+|------------|-------------|-------------------------------|--------------------------|
+| Workers (HTTP requests) | 100.000/dia | ~15 requests | ~6.666 |
+| D1 Writes | 100.000/dia | ~10 writes | ~10.000 |
+| D1 Reads | 5.000.000/dia | ~50 reads | ~100.000 |
+| KV Reads | 100.000/dia | ~5 reads | ~20.000 |
+| WebSocket conexões | 100.000/dia | 1 conexão | ~100.000 |
+| Mensagens WebSocket | Ilimitadas | 0 (não contam como Worker req) | — |
+
+GARGALO: Workers HTTP requests (100k/dia).
+
+ESTIMATIVA REALISTA: 5.000 a 10.000 usuários ativos por dia no plano
+gratuito, assumindo uso moderado (10-20 requests HTTP por usuário/dia)
+e WebSocket para GPS/chat.
+
+--------------------------------------------------------------------------------
+5. PLANO DE AÇÃO CIRÚRGICO (ORDEM DE PRIORIDADE)
+--------------------------------------------------------------------------------
+
+FASE 1 — Imediato (esta semana):
+
+  [ ] CORRIGIR O HOST DA API: Substituir
+      'https://ladiesgo-api.ladiesgo-ao.workers.dev' por
+      'https://ladiesgo-api.ladiesgo-angola.workers.dev' (conta nova) em:
+      - ladiesgo-home.html (linha 1)
+      - ladiesgo-login.html (linha 5)
+      - geoWsBase() (linha 48)
+      - liveConnect() (linha 710)
+      - reqLiveConnect() (linha 721)
+      Usar use-account.ps1 para garantir que o wrangler aponta para a conta
+      correta antes de qualquer deploy.
+
+  [ ] Desenvolver localmente: `cd webapp && node server.js` (porta 3000).
+      Não escrever no D1 remoto até às 00:00 UTC (conta nova bloqueada
+      para escritas até ao reset diário).
+
+  [ ] Commit e push: O AGENTS.md exige `git push` depois de cada commit.
+      Rever ficheiros não rastreados (.sql, .json temporários, dist-check/,
+      logs-tail.txt, scripts/). Apagar lixo temporário, fazer commit do
+      relevante e fazer push.
+
+FASE 2 — Curto prazo (este mês):
+
+  [ ] Mover fotos de perfil para R2: As fotos vão no D1 como data URL
+      (consomem writes e espaço). Mover para R2 (10 GB grátis, zero egress)
+      e guardar apenas a URL no D1.
+
+  [ ] Cache de categorias no KV: Categorias (Económico/Conforto/Família)
+      mudam raramente. Guardar no KV em vez de ler do D1 a cada request.
+
+  [ ] Aplicar Turnstile apenas em login/registo: Proteger contra bots
+      sem consumir requests em endpoints de alta frequência.
+
+  [ ] Auditar web-perf: ladiesgo-home.html (~250KB). Verificar Core Web
+      Vitals. Comprimir imagens. Página mais rápida = mais cadastros.
+
+  [ ] Criar agente de monitoramento de quotas (agents-sdk): Alertar
+      quando D1 writes ou Worker requests chegarem a 80-90%.
+
+FASE 3 — Médio prazo (próximos 2-3 meses):
+
+  [ ] Se chegar a 80-90% do limite diário: preparar segunda conta
+      Cloudflare (como já foi feito para a conta da API) ou migrar para
+      plano pago ($5/mês -> 10 milhões requests/dia).
+
+  [ ] Usar basin para analytics de uso por bairro de Luanda.
+
+  [ ] Usar k2 para processar relatórios de corridas em lote.
+
+--------------------------------------------------------------------------------
+6. O QUE NÃO FAZER (AVISOS CRÍTICOS DO AGENTS.md)
+--------------------------------------------------------------------------------
+
+  NÃO fazer `wrangler logout` — revoga o token.
+  NÃO fazer testes de carga (k6, firetest, ws-storm) contra produção.
+  NÃO reimportar o D1 inteiro repetidamente; usar migrations incrementais.
+  Preferir WebSocket a polling (mensagens WS não contam como Worker requests).
+  Trocar conta com `cloudflare\use-account.ps1 old` ou `new`.
+  Conta antiga (ladiesgo-ao): erro 1027 (Workers esgotado) — manter inativa.
+  Conta nova (isabel): escritas D1 bloqueadas até 00:00 UTC (reset diário).
+
+--------------------------------------------------------------------------------
+7. METAS ALCANÇAVEIS NO PLANO GRATUITO
+--------------------------------------------------------------------------------
+
+  Usuários ativos/dia: 5.000 — 10.000
+  Requisições HTTP/dia (Workers): até 100.000 (teto rígido)
+  Escritas D1/dia: até 100.000 (teto rígido)
+  Leituras D1/dia: até 5.000.000 (folga grande)
+  Conexões WebSocket/dia: até 100.000
+  Mensagens WebSocket: ilimitadas (não contam como Worker requests)
+  Banda frontend (Pages): ilimitada
+  Builds Pages/mês: 500
+
+--------------------------------------------------------------------------------
+8. ARQUIVOS RELACIONADOS
+--------------------------------------------------------------------------------
+
+  C:\Users\Geraldo\LADIESGO\webapp\ladiesgo-home.html   (~250KB, app principal)
+  C:\Users\Geraldo\LADIESGO\webapp\ladiesgo-login.html   (login/registo)
+  C:\Users\Geraldo\LADIESGO\webapp\server.js             (mock local, porta 3000)
+  C:\Users\Geraldo\LADIESGO\cloudflare\api-worker\src\index.ts  (API Worker)
+  C:\Users\Geraldo\LADIESGO\.claude\skills\cloudflare\*  (18 skills oficiais)
+  C:\Users\Geraldo\LADIESGO\AGENTS.md                    (regras gerais)
+  C:\Users\Geraldo\LADIESGO\webapp\AGENTS.md             (regras da app web)
+
+--------------------------------------------------------------------------------
+9. PRIMEIRA AÇÃO RECOMENDADA
+--------------------------------------------------------------------------------
+
+Abrir o terminal em C:\Users\Geraldo\LADIESGO\webapp e rodar:
+
+    node server.js
+
+Isso testa toda a API localmente sem gastar quota da Cloudflare. Depois,
+corrigir o host da API nos HTML para apontar para a conta nova (ou manter
+na antiga se for isso que o utilizador quer) e fazer deploy com wrangler.
+
+--------------------------------------------------------------------------------
+FIM DA ANÁLISE CIRÚRGICA
+================================================================================

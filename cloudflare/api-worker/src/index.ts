@@ -1015,6 +1015,26 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   } catch {}
   return c.json({ ...t, driver, ...paxInfo, ...(pin ? { pin } : {}) });
 });
+// Histórico de posições da viagem (auditoria/disputas). Só participantes ou admin.
+app.get('/api/v1/trips/:id/points', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const rows = await sql`SELECT t."passengerId", d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${id} LIMIT 1`;
+  if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+  const t = rows[0];
+  if (user.sub !== t.passengerId && user.sub !== t.driverUserId && user.role !== 'ADMIN') return c.json({ message: 'Acesso negado.' }, 403);
+  const raw = Number.parseInt(c.req.query('limit') || '1000', 10);
+  const limit = Math.min(2000, Math.max(1, Number.isFinite(raw) ? raw : 1000));
+  const pts = await sql`SELECT lat, lng, accuracy, ts FROM trip_points WHERE "tripId" = ${id} ORDER BY ts ASC LIMIT ${limit}`;
+  let distanceKm = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const aLa = Number(a.lat), aLo = Number(a.lng), bLa = Number(b.lat), bLo = Number(b.lng);
+    if ([aLa, aLo, bLa, bLo].every(Number.isFinite)) distanceKm += havKm(aLa, aLo, bLa, bLo);
+  }
+  return c.json({ tripId: id, count: pts.length, distanceKm: Math.round(distanceKm * 100) / 100, points: pts });
+});
 async function driverIdFor(sql: any, userId: string) {
   const r = await sql`SELECT id FROM drivers WHERE "userId" = ${userId} LIMIT 1`;
   return r[0]?.id as string | undefined;
@@ -2509,10 +2529,30 @@ app.get('/api/v1/trips/public/:id', async (c) => {
 // POST /api/v1/trips/:id/position — Posição viva da passageira (web)
 app.post('/api/v1/trips/:id/position', requireAuth, async (c) => {
   const id = c.req.param('id');
+  const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
   const la = Number(b.lat), lo = Number(b.lng);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return c.json({ message: 'Posição inválida.' }, 400);
+  const sql = neon(c.env.DB);
+  const rows = await sql`SELECT t."passengerId", t.status, d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${id} LIMIT 1`;
+  if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+  const t = rows[0];
+  // Só a passageira da viagem move este marcador; a motorista já envia por
+  // /drivers/position e um utilizador alheio não pode falsificar a posição.
+  if (user.sub !== t.passengerId) return c.json({ ok: true, ignored: true });
+  const st = String(t.status || '').toUpperCase();
+  // Depois do arranque a posição da passageira deixa de ser partilhada.
+  if (st === 'IN_PROGRESS' || st === 'COMPLETED' || st === 'CANCELLED') return c.json({ ok: true, ignored: true });
   paxLive.set(id, { lat: la, lng: lo, ts: Date.now() });
+  // Espelha no DO da viagem: o WS da motorista vê a passageira mesmo quando o
+  // pedido cai noutro isolate (paxLive é memória local do Worker).
+  try {
+    const ns: any = (c.env as any).TRIPPUSH;
+    if (ns && ns.get) {
+      const stub = ns.get(ns.idFromName(`trip:${id}`));
+      await stub.fetch(new Request('https://trip-push/pax', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat: la, lng: lo }) }));
+    }
+  } catch {}
   return c.json({ ok: true });
 });
 
@@ -2650,10 +2690,10 @@ export class TripRinger {
 // ─── TripPush: 1 DO por viagem (id `trip:<tripId>`), WS em HIBERNAÇÃO ───
 // Classe NOVA de propósito (não estende o TripRinger: ele é singleton global
 // de alarmes/push Expo com lógica de oferta — misturar partia-o).
-// Memória do DO: posição viva + throttle + cache de estado. Nada de GPS no Neon.
-// Neon: só leituras esporádicas de estado (≤1/15s por viagem ativa) e via
-// POST /notify das transições (hook notifyTripPush); escritas Neon continuam
-// exclusivas do REST existente (accept/arrived/start/complete/cancel).
+// Memória do DO: posição viva + throttle + cache de estado.
+// Neon: leituras esporádicas de estado (≤1/15s por viagem ativa), POST /notify
+// das transições e o histórico mínimo de trip_points (1 ponto/30s, auditoria);
+// escritas Neon de estado continuam exclusivas do REST existente.
 const PUSH_GPS_MIN_MS = 10_000;
 const PUSH_STATUS_TTL_MS = 15_000;
 export class TripPush {
@@ -2672,6 +2712,10 @@ export class TripPush {
   pushLat = 0;
   pushLng = 0;
   pushAt = 0;
+  // Histórico de auditoria (trip_points): 1 ponto/30s, independente do push.
+  lastPointAt = 0;
+  pointsOff = false;
+  pointsErrAt = 0;
   constructor(state: any, env: any) {
     this.state = state;
     this.env = env;
@@ -2716,6 +2760,22 @@ export class TripPush {
             try { await this.state.storage.put('tripId', tId); } catch {}
           }
           await this.onGpsPush(la, lo, String(b?.uid || '')).catch(() => {});
+        }
+      } catch {}
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    if (req.method === 'POST' && u.pathname.endsWith('/pax')) {
+      // Ponte do REST /trips/:id/position (app em segundo plano): o mapa da
+      // motorista vê a passageira mesmo quando o WS dela está fechado.
+      try {
+        const b: any = await req.json().catch(() => ({}));
+        const la = Number(b?.lat), lo = Number(b?.lng);
+        if (Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180) {
+          await this.hydrate();
+          if (String(this.status || '') !== 'IN_PROGRESS') {
+            this.passenger = { lat: la, lng: lo, ts: Date.now() };
+            this.broadcast({ t: 'pax', lat: la, lng: lo, ts: Date.now() });
+          }
         }
       } catch {}
       return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
@@ -2817,6 +2877,7 @@ export class TripPush {
       // noTripPush: o fix já foi entregue por este WS — não volta ao TripPush.
       try { const _gp = geoSet(this.env, { userId: String(att.uid || ''), lat: la, lng: lo, noTripPush: true }); try { this.state.waitUntil(_gp); } catch { } } catch {}
       await this.refreshStatus(false);
+      try { this.state.waitUntil(this.persistPoint(la, lo, Number(m?.acc))); } catch { this.persistPoint(la, lo, Number(m?.acc)).catch(() => {}); }
       // A motorista é monitorizada do início ao fim da viagem, por isso a sua
       // posição é sempre transmitida à passageira. Para não spammar, só se
       // redesenha quando o carro anda (>=150m) ou a cada 30s.
@@ -2856,11 +2917,34 @@ export class TripPush {
     // Viagem terminada/cancelada: não vale a pena difunde posições.
     const st = String(this.status || '');
     if (st && st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return;
+    try { this.state.waitUntil(this.persistPoint(la, lo)); } catch { this.persistPoint(la, lo).catch(() => {}); }
     const movedKm = this.pushAt ? havKm(Number(this.pushLat), Number(this.pushLng), la, lo) : 1;
     if (movedKm >= 0.15 || now - Number(this.pushAt || 0) >= 30000) {
       this.pushLat = la; this.pushLng = lo; this.pushAt = now;
       this.broadcast({ t: 'driver', lat: la, lng: lo, ts: now });
       this.pushEta();
+    }
+  }
+  // Histórico de auditoria: 1 ponto/30s por viagem ativa. Não bloqueia o WS
+  // (waitUntil) e não substitui a posição viva, que continua só em memória.
+  async persistPoint(lat: number, lng: number, accuracy?: number) {
+    try {
+      const st = String(this.status || '');
+      if (st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return;
+      const now = Date.now();
+      if (now - this.lastPointAt < 30000) return;
+      if (this.pointsOff && now - this.pointsErrAt < 300000) return;
+      this.lastPointAt = now;
+      let tripId = this.tripId;
+      if (!tripId) { try { tripId = await this.state.storage.get('tripId'); } catch {} }
+      if (!tripId) { this.lastPointAt = 0; return; }
+      const sql = neon(this.env.DB);
+      const acc = Number(accuracy);
+      await sql`INSERT INTO trip_points (id, "tripId", lat, lng, accuracy, ts) VALUES (${crypto.randomUUID()}, ${String(tripId)}, ${lat}, ${lng}, ${Number.isFinite(acc) ? acc : null}, ${now})`;
+      this.pointsOff = false;
+    } catch {
+      this.pointsOff = true;
+      this.pointsErrAt = Date.now();
     }
   }
   async refreshStatus(force: boolean) {
@@ -3682,6 +3766,17 @@ async function ringStart(env: any) {
   } catch {}
 }
 
+// Retenção do histórico de posições (30 dias). Corre 1x/dia via Cron Trigger.
+async function purgeTripPoints(env: any) {
+  try {
+    const sql = neon(env.DB);
+    await sql`DELETE FROM trip_points WHERE ts < ${Date.now() - 30 * 24 * 60 * 60 * 1000}`;
+  } catch {}
+}
+
 export default {
   fetch: app.fetch,
+  async scheduled(_event: any, env: any, _ctx: any) {
+    await purgeTripPoints(env);
+  },
 };

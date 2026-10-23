@@ -58,7 +58,7 @@ try{ const saved = JSON.parse(fs.readFileSync(TRIPS_FILE, 'utf8')); if(saved && 
 const server = http.createServer(async (req, res) => {
   // CORS para testes locais
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
@@ -109,6 +109,62 @@ const server = http.createServer(async (req, res) => {
           const _cats = Array.isArray(d.cats) ? d.cats.filter(c => ['Económico', 'Conforto', 'Família'].indexOf(c) >= 0).slice(0, 3) : ['Económico', 'Conforto', 'Família'];drivers.set(id, { id, lat, lng, name: String(d.name || 'Motorista').slice(0, 40), cats: _cats.length ? _cats : ['Económico', 'Conforto', 'Família'], carMake: String(d.carMake || '').slice(0, 30), carPlate: String(d.carPlate || '').slice(0, 12), ts: Date.now() });
           res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: 'Posição inválida.' }));
+        }
+      });
+      return;
+    }
+    if (req.url === '/api/v1/drivers/location' && (req.method === 'POST' || req.method === 'PUT')) {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const b = Array.isArray(parsed) ? {} : (parsed || {});
+          let id = String(b.id || '').slice(0, 64);
+          if (!id) {
+            try {
+              const ah = req.headers.authorization || '';
+              const tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+              if (tok.startsWith('demo.')) id = String((JSON.parse(Buffer.from(tok.split('.')[1], 'base64').toString()).id) || '').slice(0, 64);
+            } catch (e) {}
+          }
+          if (!id) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ message: 'Motorista inválida.' })); return; }
+          if (b.offline) { drivers.delete(id); busy.delete(id); res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ok: true })); return; }
+          const prev = drivers.get(id);
+          const raw = Array.isArray(parsed) ? parsed : (Array.isArray(b.points) ? b.points : [b]);
+          const now = Date.now();
+          let accepted = 0, dropped = 0, last = null;
+          for (const p of raw.slice(0, 50)) {
+            const q = p || {};
+            const pl = q.pt && typeof q.pt === 'object' ? q.pt : null;
+            const lat = Number(pl ? pl.lat : (q.lat != null ? q.lat : q.latitude));
+            const lng = Number(pl ? (pl.lng != null ? pl.lng : pl.lon) : (q.lng != null ? q.lng : q.longitude));
+            const acc = Number(q.acc != null ? q.acc : q.accuracy);
+            let ts = Number(q.ts != null ? q.ts : q.timestamp);
+            if (q.ts == null && q.timestamp == null) ts = now;
+            else if (Number.isFinite(ts) && ts < 1e12) ts = ts * 1000;
+            if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (Number.isFinite(acc) && acc > 50) || !Number.isFinite(ts) || ts < now - 300000 || (prev && Number.isFinite(prev.ts) && ts < prev.ts)) { dropped++; continue; }
+            if (ts > now + 60000) ts = now;
+            accepted++;
+            if (!last || ts > last.ts) last = { lat, lng, ts, acc };
+          }
+          if (!last) {
+            if (prev) {
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+              res.end(JSON.stringify({ ok: true, accepted: 0, dropped, last: { lat: prev.lat, lng: prev.lng, ts: prev.ts, age: Math.round((now - prev.ts) / 1000) } }));
+            } else {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ message: 'Posição inválida.' }));
+            }
+            return;
+          }
+          const _cats = Array.isArray(b.cats) ? b.cats.filter(c => ['Económico', 'Conforto', 'Família'].indexOf(c) >= 0).slice(0, 3) : (prev && Array.isArray(prev.cats) ? prev.cats : ['Económico', 'Conforto', 'Família']);
+          drivers.set(id, { id, lat: last.lat, lng: last.lng, name: String(b.name || (prev && prev.name) || 'Motorista').slice(0, 40), cats: _cats.length ? _cats : ['Económico', 'Conforto', 'Família'], carMake: String(b.carMake || (prev && prev.carMake) || '').slice(0, 30), carPlate: String(b.carPlate || (prev && prev.carPlate) || '').slice(0, 12), ts: last.ts, acc: Number.isFinite(last.acc) ? last.acc : 0 });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify({ ok: true, accepted, dropped, last: { lat: last.lat, lng: last.lng, ts: last.ts, age: Math.round((now - last.ts) / 1000) } }));
         } catch (e) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ message: 'Posição inválida.' }));
@@ -281,8 +337,20 @@ const server = http.createServer(async (req, res) => {
       if (!t) { send(404, { message: 'Viagem não encontrada.' }); return; }
       if (!m[2] && req.method === 'GET') {
         const out = Object.assign({}, t, { views: (t.views || []).length });
-        if (t.driverId && drivers.has(t.driverId)) { const d = drivers.get(t.driverId); out.driver = { lat: d.lat, lng: d.lng, name: t.driverName, age: Math.round((Date.now() - d.ts) / 1000) }; }
+        if (t.driverId && drivers.has(t.driverId)) { const d = drivers.get(t.driverId); out.driver = { lat: d.lat, lng: d.lng, name: t.driverName, age: Math.round((Date.now() - d.ts) / 1000), lastUpdate: d.ts, stale: (Date.now() - d.ts > 60000) }; }
         send(200, out);
+        return;
+      }
+      if (m[2] && req.method === 'GET') {
+        const now = Date.now(), d = (t.driverId && drivers.has(t.driverId)) ? drivers.get(t.driverId) : null;
+        const lastUpdate = d ? d.ts : 0;
+        const stale = !t.driverId || !d || (now - d.ts > 60000);
+        let driver = null;
+        if (t.driverId) {
+          if (d) { const age = Math.round((now - d.ts) / 1000); driver = { lat: d.lat, lng: d.lng, name: t.driverName, lastUpdate: d.ts, age, stale: (now - d.ts > 60000) }; }
+          else driver = { lat: null, lng: null, name: t.driverName, lastUpdate: 0, age: null, stale: true, online: false };
+        }
+        send(200, { id: t.id, status: t.status, driverId: t.driverId, driverName: t.driverName, lastUpdate, stale, driver });
         return;
       }
       if (m[2] && req.method === 'POST') {

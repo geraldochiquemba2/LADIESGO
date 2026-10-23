@@ -25,6 +25,10 @@ JWT_EXPIRES_IN = "7d"
 RATE_LIMIT_MAX = "100"
 RATE_LIMIT_WINDOW_MS = "60000"
 
+# Limpeza diária de trip_points (retenção 30 dias). 03:17 UTC.
+[triggers]
+crons = ["17 3 * * *"]
+
 [[ratelimits]]
 name = "API_RL"
 namespace_id = "1001"
