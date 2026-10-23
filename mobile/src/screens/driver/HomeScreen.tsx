@@ -21,6 +21,7 @@ import { MAP_STYLE, MAP_STYLE_FALLBACK } from '../../components/appMap';
 import MapAttribution from '../../components/MapAttribution';
 import * as Location from 'expo-location';
 import { startDriverBgTracking, stopDriverBgTracking, ensureDriverBgTracking } from '../../services/driverBgLocation';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { driversApi, tripsApi } from '../../services/api';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';

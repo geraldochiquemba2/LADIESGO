@@ -6,11 +6,14 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { driversApi } from './api';
 
 export const DRIVER_BG_TASK = 'ladiesgo-driver-location';
 const ACTIVE_TRIP_KEY = 'lg_driver_active_trip';
 const LAST_SEND_KEY = 'lg_driver_last_send';
+
+// >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA; usar conta antiga em produção.
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
+const API_ORIGIN = API_URL.replace(/\/api\/v1\/?$/, '');
 
 export async function setDriverActiveTrip(active: boolean): Promise<void> {
   try {
@@ -64,7 +67,32 @@ TaskManager.defineTask(DRIVER_BG_TASK, async ({ data, error }: any) => {
         if (movedM < minDistanceM && dt < 60000) return;
       }
     } catch {}
-    await driversApi.updateLocation(lat, lng);
+    try {
+      const uid = (await AsyncStorage.getItem('lg_driver_user_id')) || '';
+      let cats: string[] | null = null;
+      try {
+        const c = await AsyncStorage.getItem('lg_driver_cats');
+        if (c) cats = JSON.parse(c);
+      } catch {}
+      if (uid) {
+        await fetch(API_ORIGIN + '/api/v1/drivers/position', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: uid, lat, lng, cats }),
+        });
+      } else {
+        // Fallback legado se não houver id guardado
+        try {
+          const { driversApi } = require('./api');
+          await driversApi.updateLocation(lat, lng);
+        } catch {}
+      }
+    } catch {
+      try {
+        const { driversApi } = require('./api');
+        await driversApi.updateLocation(lat, lng);
+      } catch {}
+    }
     try {
       await AsyncStorage.setItem(LAST_SEND_KEY, JSON.stringify({ ts: now, lat, lng }));
     } catch {}

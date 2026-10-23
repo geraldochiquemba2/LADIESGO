@@ -159,7 +159,7 @@ export default function App() {
       const token = typeof msg.token === 'string' && msg.token.length > 10 ? msg.token : null;
       if ((msg.t === 'auth' || msg.t === 'state') && (token || msg.t === 'state')) {
         const u = (msg.user || {}) as any;
-        const state = {
+        const state: any = {
           jwt: token,
           userId: u.id || null,
           role: u.role || null,
@@ -167,9 +167,13 @@ export default function App() {
           tripId: msg.tripId || null,
           online: !!msg.online,
         };
+        try { if (u.role === 'DRIVER' && u.id) AsyncStorage.setItem('lg_driver_user_id', u.id).catch(() => {}); } catch {}
+        try { const c = u.cats || u.driver?.cats; if (Array.isArray(c)) AsyncStorage.setItem('lg_driver_cats', JSON.stringify(c)).catch(() => {}); } catch {}
         jwtRef.current = token;
         AsyncStorage.setItem('lg_bg_state', JSON.stringify(state)).catch(() => {});
-        if (token && pushTokenRef.current) registerPushToken(token, pushTokenRef.current);
+        try { if (u.role === 'DRIVER' && u.id) AsyncStorage.setItem('lg_driver_user_id', u.id).catch(() => {}); } catch {}
+      try { const c = u.cats || (u.driver && u.driver.cats); if (Array.isArray(c)) AsyncStorage.setItem('lg_driver_cats', JSON.stringify(c)).catch(() => {}); } catch {}
+      if (token && pushTokenRef.current) registerPushToken(token, pushTokenRef.current);
         // Apple (background location): só liga o GPS em fundo quando faz
         // falta — motorista online ou viagem ativa. Passageira sem viagem
         // não precisa de fundo; poupa bateria e cumpre a guideline 5.1.1.
