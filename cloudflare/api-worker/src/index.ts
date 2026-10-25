@@ -617,7 +617,7 @@ app.post('/api/v1/drivers/position', async (c) => {
   const cats = Array.isArray(b.cats) ? b.cats.map((x: any) => String(x).slice(0, 30)).slice(0, 6) : null;
   // Posição em memória no DO (0 escritas D1/ping). Só toca na D1 na transição
   // offline→online (1 escrita por sessão, não por ping).
-  const wasOnline = await geoSet(c.env, { userId, lat: la, lng: lo, cats, online: true });
+  const wasOnline = await geoSet(c.env, { userId, lat: la, lng: lo, cats, online: true, h: normH(b.h) });
   if (!wasOnline) {
     const rows = await sql`
       UPDATE drivers SET "isOnline" = true, cats = COALESCE(${cats ? JSON.stringify(cats) : null}::jsonb, cats), "updatedAt" = NOW()
@@ -863,12 +863,12 @@ async function activeTripForDriver(env: any, userId: string): Promise<string | n
   try { activeTripCache.set(userId, { tripId, ts: now }); } catch {}
   return tripId;
 }
-async function notifyTripPushGps(env: any, tripId: string, lat: number, lng: number, uid: string) {
+async function notifyTripPushGps(env: any, tripId: string, lat: number, lng: number, uid: string, h?: number | null) {
   try {
     const ns: any = (env as any).TRIPPUSH;
     if (!ns || !ns.get) return;
     const stub = ns.get(ns.idFromName(`trip:${tripId}`));
-    await stub.fetch(new Request('https://trip-push/gps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tripId, lat, lng, uid, mirror: false }) }));
+    await stub.fetch(new Request('https://trip-push/gps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tripId, lat, lng, uid, h: h != null ? h : null, mirror: false }) }));
   } catch {}
 }
 // Empurra o fix para o DO da viagem ativa (best-effort, fora do caminho crítico).
@@ -876,12 +876,12 @@ async function notifyTripPushGps(env: any, tripId: string, lat: number, lng: num
 // isso é lá que se faz a ponte para o TripPush da viagem ativa: assim o carro
 // mexe-se no mapa da passageira com a app da motorista em segundo plano.
 // noTripPush=1 evita realimentação quando o espelho vem do próprio TripPush.
-async function geoPushToTrip(env: any, userId: string, lat: number, lng: number, noTripPush?: boolean) {
+async function geoPushToTrip(env: any, userId: string, lat: number, lng: number, noTripPush?: boolean, h?: number | null) {
   if (noTripPush) return;
   try {
     const tripId = await activeTripForDriver(env, userId);
     if (!tripId) return;
-    await notifyTripPushGps(env, tripId, lat, lng, userId);
+    await notifyTripPushGps(env, tripId, lat, lng, userId, h);
   } catch {}
 }
 async function pushPaxArrived(env: any, tripId: string) {
@@ -927,7 +927,7 @@ function geoFetch(env: any, path: string, init?: any): Promise<any> {
 }
 // Guarda posição; devolve se a motorista já estava online no DO (para só
 // escrever isOnline na D1 na transição offline→online).
-async function geoSet(env: any, data: { userId: string; driverId?: string; lat: number; lng: number; cats?: string[] | null; online?: boolean; noTripPush?: boolean }): Promise<boolean> {
+async function geoSet(env: any, data: { userId: string; driverId?: string; lat: number; lng: number; cats?: string[] | null; online?: boolean; noTripPush?: boolean; h?: number | null }): Promise<boolean> {
   geoMetrics.sets++;
   const r = await geoFetch(env, '/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
   if (!r) return false;
@@ -1004,7 +1004,7 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
     const targetLa = t.status === 'IN_PROGRESS' ? Number(t.dropoffLat) : Number(t.pickupLat);
     const targetLo = t.status === 'IN_PROGRESS' ? Number(t.dropoffLng) : Number(t.pickupLng);
     const dk = havKm(dLat, dLng, targetLa, targetLo);
-    driver = { lat: dLat, lng: dLng, distanceKm: Math.round(dk * 10) / 10, etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)) };
+    driver = { lat: dLat, lng: dLng, h: liveD ? normH(liveD.h) : null, distanceKm: Math.round(dk * 10) / 10, etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)) };
   }
   const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
   // Nome/foto/telefone da passageira para o modal da motorista (mobile).
@@ -2185,6 +2185,7 @@ async function webDriverInfo(env: any, sql: any, driverId: string | null) {
   const live = await geoGet(env, String(r.userId || ''));
   const lat = live && Number.isFinite(Number(live.lat)) ? Number(live.lat) : (r.currentLat != null ? Number(r.currentLat) : null);
   const lng = live && Number.isFinite(Number(live.lng)) ? Number(live.lng) : (r.currentLng != null ? Number(r.currentLng) : null);
+  const hh = live ? normH(live.h) : null;
   let avg = r.rating != null ? Number(r.rating) : 5;
   try {
     const ar = await sql`SELECT COALESCE(AVG(rt.score), 0)::float AS a, COUNT(*)::int AS n FROM ratings rt JOIN trips t ON t.id = rt."tripId" WHERE t."driverId" = ${driverId}`;
@@ -2193,6 +2194,7 @@ async function webDriverInfo(env: any, sql: any, driverId: string | null) {
   return {
     lat,
     lng,
+    h: hh,
     name: r.name || 'Motorista',
     phone: r.phone || '',
     photo: r.profilePhoto || '',
@@ -2696,10 +2698,19 @@ export class TripRinger {
 // escritas Neon de estado continuam exclusivas do REST existente.
 const PUSH_GPS_MIN_MS = 10_000;
 const PUSH_STATUS_TTL_MS = 15_000;
+function normH(v: any): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return ((n % 360) + 360) % 360;
+}
+function angDelta(a: number, b: number): number {
+  return Math.abs((((a - b) % 360) + 540) % 360 - 180);
+}
 export class TripPush {
   state: any;
   env: any;
-  driver: { lat: number; lng: number; ts: number } | null = null;
+  driver: { lat: number; lng: number; h?: number | null; ts: number } | null = null;
   passenger: { lat: number; lng: number; ts: number } | null = null;
   status: string | null = null;
   statusAt = 0;
@@ -2712,6 +2723,7 @@ export class TripPush {
   pushLat = 0;
   pushLng = 0;
   pushAt = 0;
+  pushH: number | null = null;
   // Histórico de auditoria (trip_points): 1 ponto/30s, independente do push.
   lastPointAt = 0;
   pointsOff = false;
@@ -2759,7 +2771,7 @@ export class TripPush {
             this.tripId = tId;
             try { await this.state.storage.put('tripId', tId); } catch {}
           }
-          await this.onGpsPush(la, lo, String(b?.uid || '')).catch(() => {});
+          await this.onGpsPush(la, lo, String(b?.uid || ''), normH(b?.h)).catch(() => {});
         }
       } catch {}
       return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
@@ -2841,6 +2853,7 @@ export class TripPush {
     try { m = JSON.parse(typeof raw === 'string' ? raw : String(raw)); } catch { return; }
     if (!m || typeof m !== 'object') return;
     if (m.t === 'gps') { await this.onGps(ws, m).catch(() => {}); return; }
+    if (m.t === 'heading') { await this.onHeading(ws, m).catch(() => {}); return; }
     if (m.t === 'chat') {
       const text = String((m as any).text || '').trim().slice(0, 300);
       if (!text) return;
@@ -2850,19 +2863,36 @@ export class TripPush {
     }
     if (m.t === 'state') {
       await this.refreshStatus(true).catch(() => null);
-      try { ws.send(JSON.stringify({ t: 'state', status: this.status, driver: this.driver ? { lat: this.driver.lat, lng: this.driver.lng } : null, pax: this.passenger ? { lat: this.passenger.lat, lng: this.passenger.lng } : null, etaMin: this.etaMin(), ts: Date.now() })); } catch {}
+      try { ws.send(JSON.stringify({ t: 'state', status: this.status, driver: this.driver ? { lat: this.driver.lat, lng: this.driver.lng, h: this.driver.h ?? null } : null, pax: this.passenger ? { lat: this.passenger.lat, lng: this.passenger.lng } : null, etaMin: this.etaMin(), ts: Date.now() })); } catch {}
       return;
     }
     // Resto ignora.
   }
   async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {}
   async webSocketError(ws: any, _err: any) { try { ws.close(1011, 'err'); } catch {} }
+  // Orientação em tempo real (bússola do telemóvel da motorista). Mensagens
+  // curtas e efémeras: não tocam na BD, só memória do DO e broadcast ao vivo.
+  async onHeading(ws: any, m: any) {
+    let tags: string[] = [];
+    try { tags = this.state.getTags(ws) || []; } catch {}
+    if (tags.indexOf('driver') < 0) return;
+    const h = normH(m?.h);
+    if (h == null) return;
+    const now = Date.now();
+    const att: any = (() => { try { return ws.deserializeAttachment() || {}; } catch { return {}; } })();
+    if (now - Number(att.lastHdgAt || 0) < 700) return;
+    att.lastHdgAt = now;
+    try { ws.serializeAttachment(att); } catch {}
+    if (this.driver) this.driver.h = h;
+    this.broadcastExcept(ws, { t: 'driverheading', h, ts: now });
+  }
   async onGps(ws: any, m: any) {
     // Motorista e passageira enviam GPS. A tag vem do upgrade (X-Is-Driver) e é reforçada pelo claim role.
     let tags: string[] = [];
     try { tags = this.state.getTags(ws) || []; } catch {}
     const claimed = String(m?.role || '').toLowerCase();
     const la = Number(m?.lat), lo = Number(m?.lng);
+    const hh = normH(m?.h);
     if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return;
     const now = Date.now();
     const att: any = (() => { try { return ws.deserializeAttachment() || {}; } catch { return {}; } })();
@@ -2870,21 +2900,24 @@ export class TripPush {
     if (tags.indexOf('driver') >= 0 && claimed === 'driver') {
       if (now - Number(att.lastFixAt || 0) < PUSH_GPS_MIN_MS) return;
       att.lastFixAt = now;
-      this.driver = { lat: la, lng: lo, ts: now };
-      // Espelha o fix na DriverGeo global: é o que alimenta o polling da
+      this.driver = { lat: la, lng: lo, h: hh != null ? hh : (this.driver?.h ?? null), ts: now };
+      // Espelha o fix na DriverGeo global: Ǹ o que alimenta o polling da
       // passageira (/trips/:id?view=web) e o link de partilha (/trips/public).
-      // Sem isto ficavam presos a posições antigas enquanto o WS ia fresco.
-      // noTripPush: o fix já foi entregue por este WS — não volta ao TripPush.
-      try { const _gp = geoSet(this.env, { userId: String(att.uid || ''), lat: la, lng: lo, noTripPush: true }); try { this.state.waitUntil(_gp); } catch { } } catch {}
+      // Sem isto ficavam presos a posi����es antigas enquanto o WS ia fresco.
+      // noTripPush: o fix jǭ foi entregue por este WS �?" nǜo volta ao TripPush.
+      try { const _gp = geoSet(this.env, { userId: String(att.uid || ''), lat: la, lng: lo, h: hh, noTripPush: true }); try { this.state.waitUntil(_gp); } catch { } } catch {}
       await this.refreshStatus(false);
       try { this.state.waitUntil(this.persistPoint(la, lo, Number(m?.acc))); } catch { this.persistPoint(la, lo, Number(m?.acc)).catch(() => {}); }
       // A motorista é monitorizada do início ao fim da viagem, por isso a sua
       // posição é sempre transmitida à passageira. Para não spammar, só se
       // redesenha quando o carro anda (>=150m) ou a cada 30s.
       const movedKm = att.pushAt ? havKm(Number(att.pushLat), Number(att.pushLng), la, lo) : 1;
-      if (movedKm >= 0.15 || now - Number(att.pushAt || 0) >= 30000) {
+      const lastH = normH(att.pushH);
+      const hChg = hh != null && lastH != null && angDelta(hh, lastH) >= 15;
+      if (movedKm >= 0.15 || now - Number(att.pushAt || 0) >= 30000 || hChg) {
         att.pushLat = la; att.pushLng = lo; att.pushAt = now;
-        this.broadcastExcept(ws, { t: 'driver', lat: la, lng: lo, ts: now });
+        if (hh != null) att.pushH = hh;
+        this.broadcastExcept(ws, { t: 'driver', lat: la, lng: lo, h: hh != null ? hh : null, ts: now });
         this.pushEta();
       }
       try { ws.serializeAttachment(att); } catch {}
@@ -2908,20 +2941,23 @@ export class TripPush {
   // throttle do caminho WS: 1 fix/10s e só redesenha quando o carro anda
   // (>=150m) ou a cada 30s — assim a passageira vê o carro mexer-se em
   // tempo real mesmo com a app da motorista fechada.
-  async onGpsPush(la: number, lo: number, uid: string) {
+  async onGpsPush(la: number, lo: number, uid: string, h?: number | null) {
     const now = Date.now();
     if (now - Number(this.lastFixAt || 0) < PUSH_GPS_MIN_MS) return;
     this.lastFixAt = now;
-    this.driver = { lat: la, lng: lo, ts: now };
+    const hh = normH(h);
+    this.driver = { lat: la, lng: lo, h: hh != null ? hh : (this.driver?.h ?? null), ts: now };
     await this.refreshStatus(false);
-    // Viagem terminada/cancelada: não vale a pena difunde posições.
+    // Viagem terminada/cancelada: nǜo vale a pena difunde posi����es.
     const st = String(this.status || '');
     if (st && st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return;
     try { this.state.waitUntil(this.persistPoint(la, lo)); } catch { this.persistPoint(la, lo).catch(() => {}); }
     const movedKm = this.pushAt ? havKm(Number(this.pushLat), Number(this.pushLng), la, lo) : 1;
-    if (movedKm >= 0.15 || now - Number(this.pushAt || 0) >= 30000) {
+    const hChg = hh != null && this.pushH != null && angDelta(hh, this.pushH) >= 15;
+    if (movedKm >= 0.15 || now - Number(this.pushAt || 0) >= 30000 || hChg) {
       this.pushLat = la; this.pushLng = lo; this.pushAt = now;
-      this.broadcast({ t: 'driver', lat: la, lng: lo, ts: now });
+      if (hh != null) this.pushH = hh;
+      this.broadcast({ t: 'driver', lat: la, lng: lo, h: hh != null ? hh : null, ts: now });
       this.pushEta();
     }
   }
@@ -3083,15 +3119,17 @@ export class DriverGeo {
     } catch {}
   }
   // Aplica uma atualização de posição vinda de HTTP (/set) ou de mensagem WS.
-  setPos(userId: string, lat: number, lng: number, cats: any, online: boolean | null): boolean {
+  setPos(userId: string, lat: number, lng: number, cats: any, online: boolean | null, h?: number | null): boolean {
     const prev = this.pos.get(userId) || null;
     const wasOnline = !!prev?.online;
     const now = Date.now();
+    const hh = normH(h);
     this.pos.set(userId, {
       userId,
       driverId: prev?.driverId || '',
       lat,
       lng,
+      h: hh != null ? hh : (prev?.h ?? null),
       // Categorias só podem mudar com a motorista offline (regra de negócio):
       // com a sessão online, mantém as categorias já em vigor.
       cats: prev && prev.online ? (prev.cats || null) : (cats != null ? cats : (prev?.cats || null)),
@@ -3154,11 +3192,11 @@ export class DriverGeo {
       const userId = String(b.userId || '');
       if (!userId) return this.json({ wasOnline: false });
       await this.load();
-      const wasOnline = this.setPos(userId, Number(b.lat), Number(b.lng), b.cats, b.online != null ? !!b.online : null);
+      const wasOnline = this.setPos(userId, Number(b.lat), Number(b.lng), b.cats, b.online != null ? !!b.online : null, normH(b.h));
       // Ponte para o WS da viagem: sem isto o carro fica parado no mapa da
-      // passageira enquanto a app da motorista está fechada (o WS global
+      // passageira enquanto a app da motorista estǭ fechada (o WS global
       // live-geo e o REST /position nunca tocavam no TripPush).
-      try { this.state.waitUntil(geoPushToTrip(this.env, userId, Number(b.lat), Number(b.lng), !!b.noTripPush)); } catch {}
+      try { this.state.waitUntil(geoPushToTrip(this.env, userId, Number(b.lat), Number(b.lng), !!b.noTripPush, normH(b.h))); } catch {}
       return this.json({ wasOnline });
     }
     if (req.method === 'POST' && path.endsWith('/del')) {
@@ -3207,11 +3245,12 @@ export class DriverGeo {
     const lat = Number(m.lat), lng = Number(m.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     const cats = Array.isArray(m.cats) ? m.cats.map((x: any) => String(x).slice(0, 30)).slice(0, 6) : null;
+    const hh = normH(m.h);
     await this.load();
-    const wasOnline = this.setPos(userId, lat, lng, cats, true);
+    const wasOnline = this.setPos(userId, lat, lng, cats, true, hh);
     if (!wasOnline) await this.d1Online(userId, true);
-    // GPS por WebSocket global → WS da viagem (mesma ponte do /set).
-    try { this.state.waitUntil(geoPushToTrip(this.env, userId, lat, lng)); } catch {}
+    // GPS por WebSocket global ��' WS da viagem (mesma ponte do /set).
+    try { this.state.waitUntil(geoPushToTrip(this.env, userId, lat, lng, false, hh)); } catch {}
   }
   async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {
     // Mantém a posição até expirar (TTL na leitura); nova ligação repõe.
