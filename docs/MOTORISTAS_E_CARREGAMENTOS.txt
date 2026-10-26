@@ -1,0 +1,107 @@
+================================================================================
+LADIESGO! — MOTORISTAS E CARREGAMENTOS DA CARTEIRA
+================================================================================
+Documento de apoio para a equipa. Nao e necessario fazer teste real de carga
+para validar este fluxo; abaixo esta descrito como o sistema funciona no codigo.
+
+--------------------------------------------------------------------------------
+1. COMO FUNCIONA A CARTEIRA DA MOTORISTA
+--------------------------------------------------------------------------------
+Cada motorista tem na base de dados (tabela `users`):
+  - walletBalance : saldo em Kz (pode ser positivo ou negativo)
+  - negTrips      : numero de viagens com saldo negativo
+  - walletBlocked : 0 = livre para trabalhar / 1 = bloqueada
+
+Regra principal:
+  Se o saldo ficar negativo (por exemplo, depois de descontar a comissao de
+  uma viagem quando nao havia saldo suficiente), a conta fica BLOQUEADA
+  (walletBlocked = 1). A motorista:
+    - nao consegue ficar online (toggle online e recusado)
+    - nao aparece no mapa de "A procurar motorista mais proxima"
+    - nao recebe pedidos de corrida
+
+Desbloqueio so acontece via CARREGAMENTO feito pelo admin (veja secao 3).
+
+--------------------------------------------------------------------------------
+2. COMISSAO E GANHOS
+--------------------------------------------------------------------------------
+  - LadiesGo fica com 14% do valor de cada viagem concluida.
+  - A motorista fica com 86% (registado em totalEarnings como fare * 0,8
+    no encerramento da viagem).
+  - Cada viagem concluida gera um registo em wallet_tx do tipo 'COMMISSION'
+    (valor negativo = desconto da comissao).
+
+Exemplo:
+  Viagem de 1.000 Kz:
+    - LadiesGo retem: 140 Kz
+    - Motorista recebe: 860 Kz (somado ao totalEarnings)
+
+--------------------------------------------------------------------------------
+3. CARREGAMENTOS (CARTEIRA / WALLET)
+--------------------------------------------------------------------------------
+Quem faz: apenas o ADMIN, na secao "Carteiras" do painel admin
+          (/admin.html, aba Carteiras) ou via botao "Carregar conta"
+          no detalhe da motorista.
+
+Como e feito:
+  1. Admin escolhe o numero de telefone da motorista (9XX XXX XXX).
+  2. Admin indica o valor pago pela motorista (em Kz).
+  3. Clicar em "Carregar conta".
+
+O que o sistema faz com esse valor:
+  - Soma o valor ao walletBalance da motorista.
+  - Se a motorista estava com saldo negativo, o carregamento PRIMEIRO paga
+    esse saldo negativo; o resto fica como saldo positivo.
+  - Se apos o carregamento o saldo for >= 0:
+      * walletBlocked passa para 0 (desbloqueada)
+      * negTrips passa para 0
+      * A motorista volta a poder ficar online e aparece no mapa.
+  - Se o carregamento nao for suficiente para zerar o negativo, ela continua
+    bloqueada ate um novo carregamento cobrir o restante.
+
+Registos:
+  Cada carregamento gera um registo em wallet_tx do tipo 'TOPUP' com o valor
+  positivo e o saldo depois do carregamento (balanceAfter).
+
+Pode carregar quantas vezes quiser?
+  SIM. NAO existe limite de "uma vez por dia". O admin pode carregar a conta
+  da motorista quantas vezes forem necessarias, a qualquer momento.
+
+--------------------------------------------------------------------------------
+4. EXEMPLO PRATICO (duas motoristas)
+--------------------------------------------------------------------------------
+Motorista A (Maria):
+  Saldo inicial: 0 Kz
+  Faz uma viagem de 1.000 Kz -> recebe 860 Kz (saldo = 860).
+  Faz outra viagem de 500 Kz -> recebe 430 Kz (saldo = 1.290).
+  Resultado: pode continuar online e a receber pedidos.
+
+Motorista B (Ana):
+  Saldo inicial: 100 Kz
+  Faz uma viagem de 1.000 Kz -> ganharia 860, mas o sistema desconta
+    primeiro a comissao de 140 Kz. Como so tem 100 Kz, o saldo fica negativo:
+    100 - 140 = -40 Kz (mais o que ja deveria de antes, se houver).
+  Resultado: conta BLOQUEADA. Ana nao pode ficar online nem aparece no mapa.
+  Para desbloquear, o admin deve fazer um carregamento de pelo menos 40 Kz
+  (ou mais, se quiser deixar saldo positivo para novas comissoes).
+
+--------------------------------------------------------------------------------
+5. RESUMO PARA A COLEGA (duvida: uma vez por dia ou varias vezes?)
+--------------------------------------------------------------------------------
+  - NAO e so uma vez por dia.
+  - O carregamento e feito pelo admin sempre que precisar.
+  - Pode carregar varias vezes no mesmo dia, em dias diferentes, ou so quando
+    a conta ficar bloqueada.
+  - O importante e manter o saldo >= 0 para a motorista poder trabalhar online.
+
+--------------------------------------------------------------------------------
+6. ONDE VER ESTA INFORMACAO
+--------------------------------------------------------------------------------
+  - Painel admin -> aba "Carteiras": lista todas as motoristas com saldo,
+    numero de viagens negativas e estado (Ativa / Bloqueada).
+  - Painel admin -> botao "Carregar" ao lado de cada motorista.
+  - App da motorista -> endpoint /api/v1/drivers/wallet mostra o saldo dela.
+
+================================================================================
+FIM DO DOCUMENTO
+================================================================================

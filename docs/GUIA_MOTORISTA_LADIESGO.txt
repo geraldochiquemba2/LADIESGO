@@ -1,0 +1,48 @@
+LADIESGO! — GUIA RÁPIDO PARA MOTORISTAS
+=====================================
+
+1) COMO FUNCIONA O MEU SALDO
+   - Cada corrida que você conclui gera ganhos: você fica com 86%, a LadiesGo fica com 14%.
+   - O saldo fica guardado na sua carteira no sistema.
+
+2) SE O SALDO FICAR NEGATIVO
+   - Sua conta fica BLOQUEADA.
+   - Enquanto bloqueada, você NÃO pode ficar online.
+   - Você NÃO aparece no mapa para as passageiras.
+   - Você NÃO recebe corridas.
+
+3) COMO DESBLOQUEAR (CARREGAR CARTEIRA)
+   - Só o administrador pode carregar sua carteira.
+   - Ele informa o seu número e o valor que você pagou.
+   - O sistema soma esse valor ao seu saldo.
+   - Assim que o saldo for zero ou positivo, você é desbloqueada e volta a trabalhar normalmente.
+
+4) EXEMPLO PRÁTICO
+
+   MARIA — Saldo positivo (pode trabalhar)
+   - Saldo inicial: 0 Kz
+   - Faz uma corrida de 1.000 Kz → ganha 860 Kz (saldo = 860 Kz)
+   - Faz outra de 500 Kz → ganha 430 Kz (saldo = 1.290 Kz)
+   - Resultado: Maria fica online e recebe corridas normalmente.
+
+   ANA — Saldo negativo (bloqueada)
+   - Saldo inicial: 100 Kz
+   - Faz uma corrida de 1.000 Kz → deveria ganhar 860 Kz, mas o sistema desconta primeiro a comissão de 140 Kz.
+   - Como ela só tinha 100 Kz, o saldo fica: 100 - 140 = -40 Kz
+   - Resultado: Ana fica BLOQUEADA. Não aparece no mapa nem recebe corridas.
+
+   COMO ANA VOLTA A TRABALHAR:
+   - O administrador carrega a carteira dela com 50 Kz.
+   - Saldo passa de -40 para +10 Kz.
+   - Conta desbloqueada. Ana volta a ficar online e receber corridas.
+
+5) POSSO CARREGAR VÁRIAS VEZES POR DIA?
+   - SIM. Não existe limite de uma vez por dia.
+   - Pode carregar quantas vezes precisar, mesmo no mesmo dia.
+
+6) RESUMO
+   - Saldo negativo → bloqueada (sem trabalho).
+   - Admin carrega carteira → desbloqueada (volta a trabalhar).
+   - Sem limite de carregamentos por dia.
+
+Dúvidas? Fale com o administrador.
