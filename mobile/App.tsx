@@ -15,7 +15,7 @@ import { BG_LOCATION_TASK } from './src/services/bgLocation';
 // localização, notificações com som, e upload de fotos/documentos.
 // ?v= rebenta a cache da WebView: sem isto o iOS servia o HTML antigo
 // e as melhorias do mapa não apareciam. Aumenta a cada deploy do site.
-const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261026';
+const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261027';
 // >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA (ladiesgo-angola); a conta antiga ladiesgo-ao esgotou a quota de Workers (erro 1027). VOLTAR AO NORMAL = trocar "ladiesgo-api.ladiesgo-ao.workers.dev" por "ladiesgo-api.ladiesgo-ao.workers.dev" e gerar novo build. Ver cloudflare/README.md
 const API_URL = 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
 const EAS_PROJECT_ID = 'ec5885e0-c677-4023-b65a-6642fe20f3fd';
@@ -129,6 +129,8 @@ export default function App() {
   const geoSubs = useRef<Record<string, Location.LocationSubscription>>({});
   const geoCancelled = useRef<Set<string>>(new Set());
   const geoGen = useRef(0);
+  const headingSub = useRef<Location.LocationSubscription | null>(null);
+  const headingAt = useRef(0);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
@@ -166,6 +168,30 @@ export default function App() {
     inject('try{window.__lgGeoDispatch(' + JSON.stringify(String(id)) + ',' + JSON.stringify(kind) + ',' + JSON.stringify(payload) + ')}catch(e){}');
   };
   const geoErrCode = (e: any) => /permission|denied|authorized|negad/i.test(String((e && e.message) || e || '')) ? 1 : 2;
+  // Bússola NATIVA -> WebView. O WKWebView/Android WebView não entrega
+  // deviceorientation de forma fiável, por isso a rota ficava sem rumo.
+  // Aqui injeta-se o heading real como um evento deviceorientation.
+  const startHeadingWatch = async () => {
+    if (headingSub.current) return;
+    try {
+      const perm = await Location.getForegroundPermissionsAsync();
+      if (!perm.granted) return;
+      headingSub.current = await Location.watchHeadingAsync((h) => {
+        const now = Date.now();
+        if (now - headingAt.current < 400) return;
+        headingAt.current = now;
+        let v = h && Number.isFinite(h.trueHeading) && h.trueHeading >= 0 ? h.trueHeading : h && h.magHeading;
+        if (!Number.isFinite(v)) return;
+        v = ((Math.round(v) % 360) + 360) % 360;
+        inject(
+          'try{var h=' + v + ';window.__nativeHeading=h;window.__nativeHeadingAt=Date.now();' +
+          "var e=new Event('deviceorientation');e.alpha=360-h;e.webkitCompassHeading=h;e.absolute=true;window.dispatchEvent(e)}catch(e){}"
+        );
+      });
+    } catch {
+      headingSub.current = null;
+    }
+  };
   const clearGeoSubs = () => {
     geoGen.current++;
     geoCancelled.current.clear();
@@ -271,7 +297,8 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        await Location.requestForegroundPermissionsAsync();
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (perm.granted) startHeadingWatch();
       } catch {}
       try {
         const perm = await Notifications.requestPermissionsAsync({
@@ -319,6 +346,7 @@ export default function App() {
       try {
         const perm = await Location.getForegroundPermissionsAsync();
         if (!perm.granted) return;
+        startHeadingWatch();
         inject("try{var h=document.getElementById('lochelp');if(h&&h.classList.contains('on')){window.__gpsAsked=false;h.classList.remove('on');locateMe()}}catch(e){}");
       } catch {}
     });
@@ -328,7 +356,11 @@ export default function App() {
   // As subscrições de GPS do site morrem com a página (reload/erro), senão
   // ficavam a gastar bateria sem ninguém a ler as posições.
   useEffect(() => {
-    return () => clearGeoSubs();
+    return () => {
+      clearGeoSubs();
+      try { headingSub.current?.remove(); } catch {}
+      headingSub.current = null;
+    };
   }, []);
 
   const onMessage = (e: WebViewMessageEvent) => {
