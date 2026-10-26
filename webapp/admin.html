@@ -267,6 +267,11 @@ table{border:1px solid #f1edf9}
         <div id="nSchedules"><p class="mut" style="font-size:13px">A carregar…</p></div>
       </div>
     </div>
+    <div style="margin-top:24px;border-top:1px solid var(--ln);padding-top:16px">
+      <h3 style="margin:0 0 4px;font-size:16px">Histórico de envios</h3>
+      <p class="mut" style="margin:0 0 10px;font-size:13px">Todas as notificações enviadas (manuais e programadas), das mais recentes para as mais antigas.</p>
+      <div id="nHistory"><p class="mut" style="font-size:13px">A carregar…</p></div>
+    </div>
   </section>
 </div>
 </main>
@@ -721,7 +726,7 @@ async function releaseFleet(id){try{const r=await fetch('/api/v1/admin/premium/f
 async function delFleet(id){if(!confirm('Apagar este carro premium?'))return;try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id),{method:'DELETE',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Carro apagado ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function confirmRes(id){try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/confirm',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva confirmada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function rejectRes(id){if(!confirm('Rejeitar esta reserva premium?'))return;try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/reject',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva rejeitada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
-function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new','notifs'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}if(k==='notifs')try{loadNotifSchedules();}catch(e){}}
+function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new','notifs'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}if(k==='notifs'){try{loadNotifSchedules();}catch(e){}try{loadNotifHistory();}catch(e){}}}
 document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}}catch(e){}});
 document.addEventListener('click',e=>{
   const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='revenue'){goTab('finance');}else if(k==='drivers'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');tPage=1;loadTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
@@ -809,6 +814,7 @@ async function sendNotif(){
     if(typeof toast==='function')toast('Notificação enviada ✓','ok');
     if($('nMsg')) $('nMsg').value='';
     if($('nTitle')) $('nTitle').value='';
+    try{await loadNotifHistory();}catch(_){}
   }catch(e){
     if(res){ res.textContent='Erro: '+((e&&e.message)||e); res.style.color='#d92d4b'; }
     if(typeof toast==='function')toast('Falhou ao enviar notificação',false);
@@ -836,6 +842,40 @@ async function loadNotifSchedules(){
         +(hasTitle?'<div style="font-weight:700;font-size:13px;margin-top:6px;overflow-wrap:anywhere">'+esc(s.title)+'</div>':'')
         +'<div style="font-size:13px;margin-top:'+(hasTitle?'2px':'6px')+';overflow-wrap:anywhere">'+esc(s.body||'')+'</div></div>'
         +'<button class="chip" data-a="delsch" data-id="'+esc(s.id)+'" style="height:36px;padding:0 12px;flex:none">Apagar</button>'
+        +'</div>';
+    }).join('');
+  }catch(e){
+    box.innerHTML='<p style="color:#d92d4b;font-size:13px">Erro: '+esc((e&&e.message)||e)+'</p>';
+  }
+}
+function notifWhen(v){
+  try{
+    if(!v)return '';
+    const d=new Date(v);
+    if(isNaN(d.getTime()))return String(v);
+    return d.toLocaleString('pt-PT',{timeZone:'Africa/Luanda',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  }catch(e){return String(v||'');}
+}
+async function loadNotifHistory(){
+  const box=$('nHistory');
+  if(!box)return;
+  try{
+    const r=await fetch('/api/v1/admin/notifications/history',{headers:ah()});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||'Falha ao carregar o histórico.');
+    const list=j.history||[];
+    if(!list.length){box.innerHTML='<p class="mut" style="font-size:13px">Ainda não há envios registados.</p>';return;}
+    box.innerHTML=list.map(function(h){
+      const src=h.source==='scheduled'?'Programada':'Manual';
+      const tgt=h.target?notifTargetName(h.target):'—';
+      const sched=h.source==='scheduled'&&h.time?' · '+esc(String(h.time)):'';
+      const when=notifWhen(h.createdAt);
+      const hasTitle=!!(h.title&&h.title!=='LadiesGo!');
+      return '<div style="border:1px solid var(--ln);border-radius:12px;padding:12px;margin-top:8px">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b style="font-size:13px">'+esc(when)+'</b>'
+        +'<span class="mut" style="font-size:12px">'+esc(src)+sched+' · '+esc(tgt)+' · '+Number(h.recipients||0)+' destinatário(s)</span></div>'
+        +(hasTitle?'<div style="font-weight:700;font-size:13px;margin-top:4px;overflow-wrap:anywhere">'+esc(h.title)+'</div>':'')
+        +'<div style="font-size:13px;margin-top:'+(hasTitle?'2px':'4px')+';overflow-wrap:anywhere">'+esc(h.body||'')+'</div>'
         +'</div>';
     }).join('');
   }catch(e){
@@ -889,6 +929,7 @@ async function scheduleNotif(){
     if(typeof toast==='function')toast('Notificações programadas ✓','ok');
     rows.forEach(function(row){const tt=row.querySelector('.nSchTitle');if(tt)tt.value='';const tm=row.querySelector('.nSchMsg');if(tm)tm.value='';});
     await loadNotifSchedules();
+    try{await loadNotifHistory();}catch(_){}
   }catch(e){
     if(res){res.textContent='Erro: '+((e&&e.message)||e)+(done.length?(' ('+done.join(', ')+' já programados)'):'');res.style.color='#d92d4b';}
     if(typeof toast==='function')toast('Falhou ao programar',false);

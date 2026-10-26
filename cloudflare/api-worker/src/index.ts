@@ -1699,7 +1699,7 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
       ? await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`
       : await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
     if (!recipients.length) return c.json({ ok: true, sent: 0, pushed: 0 });
-    const data = JSON.stringify({ type: 'admin' });
+    const data = JSON.stringify({ type: 'admin', target, source: 'manual' });
     if (role) {
       await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
         SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
@@ -1733,13 +1733,13 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
 });
 
 // Notificações semanais programadas. Horários em Africa/Luanda (UTC+1, sem DST).
-async function deliverScheduledNotification(env: any, sql: any, target: string, title: string, message: string) {
+async function deliverScheduledNotification(env: any, sql: any, target: string, title: string, message: string, meta?: { scheduleId?: string; time?: string }) {
   const role = target === 'PASSENGERS' ? 'PASSENGER' : target === 'DRIVERS' ? 'DRIVER' : null;
   const recipients = role
     ? await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`
     : await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
   if (!recipients.length) return { sent: 0, pushed: 0 };
-  const data = JSON.stringify({ type: 'admin' });
+  const data = JSON.stringify({ type: 'admin', target, source: 'scheduled', scheduleId: meta?.scheduleId || null, time: meta?.time || null });
   if (role) {
     await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
       SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
@@ -1794,7 +1794,7 @@ async function runNotificationSchedules(env: any) {
       if (!message) continue;
       const title = String(r.title || '').trim().slice(0, 80) || 'LadiesGo!';
       try {
-        await deliverScheduledNotification(env, sql, String(r.target || 'ALL'), title, message);
+        await deliverScheduledNotification(env, sql, String(r.target || 'ALL'), title, message, { scheduleId: String(r.scheduleId), time: String(r.time) });
         console.log('scheduled notification sent', String(r.slotId), runKey);
       } catch (e: any) {
         console.error('scheduled notification delivery error:', String(r.slotId), e);
@@ -1826,6 +1826,28 @@ app.get('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => {
     }
   }
   return c.json({ ok: true, schedules: out });
+});
+
+app.get('/api/v1/admin/notifications/history', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const rows = await sql`SELECT title, body, data, "createdAt", COUNT(*) AS recipients
+    FROM notifications WHERE type = 'admin'
+    GROUP BY title, body, data, "createdAt"
+    ORDER BY "createdAt" DESC LIMIT 200`;
+  const history = (rows || []).map((r: any) => {
+    const d = r.data && typeof r.data === 'object' ? r.data : {};
+    return {
+      title: String(r.title || ''),
+      body: String(r.body || ''),
+      createdAt: r.createdAt || null,
+      recipients: Number(r.recipients || 0),
+      target: String(d.target || ''),
+      source: String(d.source || 'manual'),
+      scheduleId: d.scheduleId ? String(d.scheduleId) : null,
+      time: d.time ? String(d.time) : null,
+    };
+  });
+  return c.json({ ok: true, history });
 });
 
 app.post('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => {
