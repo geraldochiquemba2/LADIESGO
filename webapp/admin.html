@@ -760,7 +760,8 @@ async function sendNotif(){
   if(btn){ btn.disabled=true; btn.textContent='A enviar...'; }
   if(res){ res.textContent='A enviar...'; res.style.color=''; }
   try{
-    const r = await fetch('/api/v1/admin/notifications/send',{
+    const apiBase = (location.hostname.endsWith('pages.dev') ? 'https://taxiapp-web.ladiesgo-ao.workers.dev' : '');
+    const r = await fetch(apiBase + '/api/v1/admin/notifications/send',{
       method:'POST',
       headers:Object.assign({'Content-Type':'application/json'},ah()),
       body:JSON.stringify({target,title,message:msg})
