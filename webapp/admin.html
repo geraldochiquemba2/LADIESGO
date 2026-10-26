@@ -220,8 +220,9 @@ table{border:1px solid #f1edf9}
     <div id="histWrap"><table><thead><tr><th>Cliente</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Gasto</th></tr></thead><tbody id="cliHist"></tbody></table></div>
   </section>
   <section id="sec-notifs" style="display:none">
-    <h2>Enviar notificação</h2>
-    <p class="mut">Escreve um aviso ou lembrete. Aparece como notificação push e no centro de notificações da app.</p>
+    <h2>Notificações</h2>
+    <p class="mut">Envia agora ou programa mensagens semanais. Na programação, cada horário tem o seu próprio título e mensagem.</p>
+    <h3 style="margin:18px 0 6px;font-size:16px">Enviar agora</h3>
     <div class="filters">
       <select id="nTarget">
         <option value="ALL">Para todos</option>
@@ -231,29 +232,40 @@ table{border:1px solid #f1edf9}
       <input id="nTitle" placeholder="Título (opcional)" autocomplete="off">
     </div>
     <textarea id="nMsg" placeholder="Escreve aqui o aviso ou recomendação..." style="width:100%;min-height:120px;border:1.5px solid var(--ln);border-radius:12px;padding:12px;font:inherit;font-size:16px;resize:vertical"></textarea>
-    <div class="filters" style="margin-top:12px;align-items:center">
-      <select id="nDay" aria-label="Dia da semana" style="flex:1;min-width:150px">
-        <option value="1">Segunda-feira</option>
-        <option value="2">Terça-feira</option>
-        <option value="3">Quarta-feira</option>
-        <option value="4">Quinta-feira</option>
-        <option value="5">Sexta-feira</option>
-        <option value="6">Sábado</option>
-        <option value="0">Domingo</option>
-      </select>
-      <input id="nT1" type="time" value="06:00" aria-label="Horário 1" style="flex:1;min-width:105px">
-      <input id="nT2" type="time" value="12:00" aria-label="Horário 2" style="flex:1;min-width:105px">
-      <input id="nT3" type="time" value="18:00" aria-label="Horário 3" style="flex:1;min-width:105px">
-    </div>
-    <div style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <button class="chip" data-a="sendnotif" style="height:42px;padding:0 18px">📣 Enviar notificação</button>
-      <button class="chip" data-a="schedulenotif" style="height:42px;padding:0 18px">Programar semanal</button>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="chip" data-a="sendnotif" style="height:42px;padding:0 18px">📣 Enviar agora</button>
       <span id="nMsgRes" class="mut"></span>
     </div>
     <div style="margin-top:24px;border-top:1px solid var(--ln);padding-top:16px">
-      <h3 style="margin:0 0 4px;font-size:16px">Notificações programadas</h3>
-      <p class="mut" style="margin:0 0 10px;font-size:13px">Repetem todas as semanas à hora de Luanda (até 3 horários por mensagem).</p>
-      <div id="nSchedules"><p class="mut" style="font-size:13px">A carregar…</p></div>
+      <h3 style="margin:0 0 4px;font-size:16px">Programar semanal</h3>
+      <p class="mut" style="margin:0 0 10px;font-size:13px">Repete todas as semanas à hora de Luanda. Cada horário tem o seu próprio título e mensagem.</p>
+      <div class="filters" style="align-items:center">
+        <select id="nSchTarget" aria-label="Destinatários">
+          <option value="ALL">Para todos</option>
+          <option value="PASSENGERS">Só para passageiras</option>
+          <option value="DRIVERS">Só para motoristas</option>
+        </select>
+        <select id="nDay" aria-label="Dia da semana">
+          <option value="1">Segunda-feira</option>
+          <option value="2">Terça-feira</option>
+          <option value="3">Quarta-feira</option>
+          <option value="4">Quinta-feira</option>
+          <option value="5">Sexta-feira</option>
+          <option value="6">Sábado</option>
+          <option value="0">Domingo</option>
+        </select>
+      </div>
+      <div id="nSchRows" style="display:flex;flex-direction:column;gap:10px"></div>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="chip" data-a="addschrow" style="height:40px;padding:0 14px">+ Horário</button>
+        <button class="chip" data-a="schedulenotif" style="height:42px;padding:0 18px">Programar semanal</button>
+        <span id="nSchMsgRes" class="mut"></span>
+      </div>
+      <div style="margin-top:24px;border-top:1px solid var(--ln);padding-top:16px">
+        <h3 style="margin:0 0 4px;font-size:16px">Notificações programadas</h3>
+        <p class="mut" style="margin:0 0 10px;font-size:13px">Repetem todas as semanas à hora de Luanda.</p>
+        <div id="nSchedules"><p class="mut" style="font-size:13px">A carregar…</p></div>
+      </div>
     </div>
   </section>
 </div>
@@ -754,6 +766,9 @@ document.addEventListener('click',e=>{
   if(cu){closeUser();return}
   if(e.target&&e.target.id==='umodal'){closeUser();return}
   if(e.target&&e.target.closest('[data-a="sendnotif"]')){if(typeof sendNotif==='function')sendNotif();return}
+  if(e.target&&e.target.closest('[data-a="addschrow"]')){if(typeof addSchRow==='function')addSchRow();return}
+  const _rmRow=e.target&&e.target.closest('[data-a="rmschrow"]');
+  if(_rmRow){const _row=_rmRow.closest('.nSchRow');const _box=$('nSchRows');if(_row&&_box){if(_box.children.length>1)_row.remove();else if(typeof toast==='function')toast('Mantém pelo menos um horário.',false);}return}
   if(e.target&&e.target.closest('[data-a="schedulenotif"]')){if(typeof scheduleNotif==='function')scheduleNotif();return}
   const _schDel=e.target&&e.target.closest('[data-a="delsch"]');if(_schDel){if(typeof deleteNotifSchedule==='function')deleteNotifSchedule(_schDel.dataset.id);return}
   const ap=e.target.closest('[data-a="appr"],[data-a="rej"]');
@@ -814,11 +829,12 @@ async function loadNotifSchedules(){
     if(!list.length){box.innerHTML='<p class="mut" style="font-size:13px">Ainda não há notificações programadas.</p>';return;}
     box.innerHTML=list.map(function(s){
       const times=(s.times||[]).join(' · ');
-      const title=s.title&&s.title!=='LadiesGo!'?' · '+esc(s.title):'';
+      const hasTitle=!!(s.title&&s.title!=='LadiesGo!');
       return '<div style="border:1px solid var(--ln);border-radius:12px;padding:12px;margin-top:8px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between">'
         +'<div style="min-width:0"><b style="font-size:14px">'+esc(notifDayName(s.dayOfWeek))+' · '+esc(times)+'</b>'
-        +'<div class="mut" style="font-size:12.5px;margin-top:2px">'+esc(notifTargetName(s.target))+title+'</div>'
-        +'<div style="font-size:13px;margin-top:6px;overflow-wrap:anywhere">'+esc(s.body||'')+'</div></div>'
+        +'<div class="mut" style="font-size:12.5px;margin-top:2px">'+esc(notifTargetName(s.target))+'</div>'
+        +(hasTitle?'<div style="font-weight:700;font-size:13px;margin-top:6px;overflow-wrap:anywhere">'+esc(s.title)+'</div>':'')
+        +'<div style="font-size:13px;margin-top:'+(hasTitle?'2px':'6px')+';overflow-wrap:anywhere">'+esc(s.body||'')+'</div></div>'
         +'<button class="chip" data-a="delsch" data-id="'+esc(s.id)+'" style="height:36px;padding:0 12px;flex:none">Apagar</button>'
         +'</div>';
     }).join('');
@@ -826,31 +842,57 @@ async function loadNotifSchedules(){
     box.innerHTML='<p style="color:#d92d4b;font-size:13px">Erro: '+esc((e&&e.message)||e)+'</p>';
   }
 }
+function addSchRow(time,title,msg){
+  const box=$('nSchRows');
+  if(!box)return null;
+  if(box.children.length>=6){if(typeof toast==='function')toast('Máximo de 6 horários.',false);return null;}
+  const row=document.createElement('div');
+  row.className='nSchRow';
+  row.style.cssText='border:1px solid var(--ln);border-radius:12px;padding:10px;background:#fff';
+  row.innerHTML='<div style="display:flex;gap:8px;align-items:center"><input type="time" class="nSchTime" aria-label="Horário" style="flex:0 0 105px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"><input type="text" class="nSchTitle" placeholder="Título (opcional)" maxlength="80" autocomplete="off" style="flex:1;min-width:110px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"><button type="button" class="chip" data-a="rmschrow" aria-label="Remover horário" style="height:38px;padding:0 10px;flex:none">✕</button></div><textarea class="nSchMsg" placeholder="Mensagem deste horário..." maxlength="500" style="width:100%;min-height:70px;margin-top:8px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;resize:vertical"></textarea>';
+  box.appendChild(row);
+  const ti=row.querySelector('.nSchTime');if(ti&&time)ti.value=time;
+  const tt=row.querySelector('.nSchTitle');if(tt&&title)tt.value=title;
+  const tm=row.querySelector('.nSchMsg');if(tm&&msg)tm.value=msg;
+  return row;
+}
 async function scheduleNotif(){
-  const target=($('nTarget')||{}).value||'ALL';
-  const title=($('nTitle')||{}).value||'';
-  const msg=($('nMsg')||{}).value||'';
+  const target=($('nSchTarget')||{}).value||'ALL';
   const day=Number((($('nDay')||{}).value));
-  const times=['nT1','nT2','nT3'].map(function(id){return String((($(id)||{}).value)||'')}).filter(Boolean);
-  const res=$('nMsgRes');
+  const res=$('nSchMsgRes');
   const btn=document.querySelector('[data-a="schedulenotif"]');
-  if(!msg.trim()){if(res){res.textContent='Escreve uma mensagem.';res.style.color='#d92d4b';}return;}
+  const rows=Array.from(document.querySelectorAll('#nSchRows .nSchRow'));
+  const items=[];const seen={};
+  for(const row of rows){
+    const time=String(((row.querySelector('.nSchTime')||{}).value)||'').slice(0,5);
+    const title=String(((row.querySelector('.nSchTitle')||{}).value)||'').trim();
+    const msg=String(((row.querySelector('.nSchMsg')||{}).value)||'').trim();
+    if(!time)continue;
+    if(!msg){if(res){res.textContent='Escreve a mensagem do horário '+time+'.';res.style.color='#d92d4b';}return;}
+    if(seen[time]){if(res){res.textContent='Horário repetido: '+time+'.';res.style.color='#d92d4b';}return;}
+    seen[time]=1;
+    items.push({time:time,title:title,message:msg});
+  }
+  if(!items.length){if(res){res.textContent='Adiciona pelo menos um horário com mensagem.';res.style.color='#d92d4b';}return;}
   if(!Number.isInteger(day)||day<0||day>6){if(res){res.textContent='Escolhe o dia da semana.';res.style.color='#d92d4b';}return;}
-  if(!times.length){if(res){res.textContent='Escolhe pelo menos um horário.';res.style.color='#d92d4b';}return;}
   if(btn){btn.disabled=true;btn.textContent='A programar...';}
   if(res){res.textContent='A programar...';res.style.color='';}
+  const done=[];
   try{
-    const r=await fetch('/api/v1/admin/notifications/schedules',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({target:target,title:title,message:msg,dayOfWeek:day,times:times})});
-    const j=await r.json().catch(()=>null);
-    if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||('Falha ao programar ('+r.status+').'));
-    if(res){res.textContent='✓ Programada para '+notifDayName(day)+' às '+times.join(', ')+'.';res.style.color='#12a150';}
-    if(typeof toast==='function')toast('Notificação programada ✓','ok');
-    if($('nMsg'))$('nMsg').value='';
-    if($('nTitle'))$('nTitle').value='';
+    for(const it of items){
+      const r=await fetch('/api/v1/admin/notifications/schedules',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({target:target,title:it.title,message:it.message,dayOfWeek:day,times:[it.time]})});
+      const j=await r.json().catch(()=>null);
+      if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||('Falha ao programar '+it.time+' ('+r.status+').'));
+      done.push(it.time);
+    }
+    if(res){res.textContent='✓ '+done.length+' horário(s) programado(s) para '+notifDayName(day)+'.';res.style.color='#12a150';}
+    if(typeof toast==='function')toast('Notificações programadas ✓','ok');
+    rows.forEach(function(row){const tt=row.querySelector('.nSchTitle');if(tt)tt.value='';const tm=row.querySelector('.nSchMsg');if(tm)tm.value='';});
     await loadNotifSchedules();
   }catch(e){
-    if(res){res.textContent='Erro: '+((e&&e.message)||e);res.style.color='#d92d4b';}
+    if(res){res.textContent='Erro: '+((e&&e.message)||e)+(done.length?(' ('+done.join(', ')+' já programados)'):'');res.style.color='#d92d4b';}
     if(typeof toast==='function')toast('Falhou ao programar',false);
+    if(done.length)try{await loadNotifSchedules();}catch(_){}
   }finally{
     if(btn){btn.disabled=false;btn.textContent='Programar semanal';}
   }
@@ -867,6 +909,7 @@ async function deleteNotifSchedule(id){
 }
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')try{load();}catch(e){}});
 window.addEventListener('focus',function(){try{load();}catch(e){}});
+try{if($('nSchRows')&&!$('nSchRows').children.length){addSchRow('06:00');addSchRow('12:00');addSchRow('18:00');}}catch(e){}
 try{
   const hasTok=(()=>{try{return !!localStorage.getItem('taxi_token');}catch(e){return false;}})();
   if(!hasTok){try{sessionStorage.removeItem('lg_admin');}catch(e){}}
