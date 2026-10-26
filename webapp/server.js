@@ -62,6 +62,16 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
+  if (req.url === '/diag' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      try { fs.appendFileSync(path.join(__dirname, 'diag.log'), new Date().toISOString() + ' ' + body.slice(0, 4000) + '\n'); } catch (e) {}
+      res.writeHead(204); res.end();
+    });
+    return;
+  }
+
   // Rota real pelas ruas (proxy OSRM — o browser nem sempre alcança o OSRM direto)
   if (req.url.startsWith('/api/route') && req.method === 'GET') {
     try {
@@ -430,6 +440,55 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Admin notifications - enviar notificacao
+  if (req.url.startsWith('/api/v1/admin/notifications') && req.method === 'POST') {
+    const apath = req.url.split('?')[0];
+    const sendJson = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
+    if (apath === '/api/v1/admin/notifications/send') {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        try {
+          const data = JSON.parse(body || '{}');
+          const title = String(data.title || data.titulo || 'LadiesGo').trim();
+          const msg = String(data.message || data.body || data.mensagem || data.text || '').trim();
+          const target = String(data.target || data.to || data.audience || 'all').trim().toLowerCase();
+          if (!msg) {
+            sendJson(400, { message: 'Mensagem obrigatoria.' });
+            return;
+          }
+          const notif = {
+            id: 'n_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6),
+            title,
+            body: msg,
+            message: msg,
+            target,
+            createdAt: Date.now(),
+            ts: Date.now(),
+            read: false
+          };
+          if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
+          global._ladiesgo_notifications.unshift(notif);
+          if (global._ladiesgo_notifications.length > 200) global._ladiesgo_notifications = global._ladiesgo_notifications.slice(0, 200);
+          try {
+            if (typeof broadcast === 'function') {
+              broadcast({ type: 'notification', notification: notif });
+            }
+          } catch(e) {}
+          sendJson(200, { ok: true, success: true, notification: notif });
+        } catch (e) {
+          sendJson(400, { message: 'Pedido inválido.' });
+        }
+      });
+      return;
+    }
+    if (apath === '/api/v1/admin/notifications/list') {
+      if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
+      sendJson(200, { notifications: global._ladiesgo_notifications });
+      return;
+    }
+  }
+
   // Mock API local — login LadiesGo sem backend
   if (req.url.startsWith('/api/')) {
     if (req.url === '/api/v1/auth/login' && req.method === 'POST') {
@@ -516,10 +575,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Ficheiros estaticos locais (logo.jpg, etc.)
-  if (req.method === 'GET' && /^\/[A-Za-z0-9_.-]+\.(jpg|jpeg|png|gif|svg|ico|webp)$/.test(req.url.split('?')[0])) {
+  if (req.method === 'GET' && /^\/[A-Za-z0-9_.-]+\.(jpg|jpeg|png|gif|svg|ico|webp|js)$/.test(req.url.split('?')[0])) {
     const fp = path.join(__dirname, path.basename(req.url.split('?')[0]));
     const ext = path.extname(fp).toLowerCase();
-    const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webp': 'image/webp' }[ext] || 'application/octet-stream';
+    const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webp': 'image/webp', '.js': 'application/javascript; charset=utf-8' }[ext] || 'application/octet-stream';
     fs.readFile(fp, (err, data) => {
       if (err) { res.writeHead(404); res.end(''); return; }
       res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
@@ -540,6 +599,7 @@ const server = http.createServer(async (req, res) => {
   else if (req.url === '/t' || req.url.startsWith('/t?')) page = 'track.html';
   else if (req.url === '/track' || req.url.startsWith('/track?')) page = 'track.html';
   else if (req.url === '/old') page = 'index.html';
+  else if (req.url === '/compass' || req.url.startsWith('/compass?')) page = 'compass-test.html';
   else if (req.url === '/site') page = '../website/index.html';
   const file = path.join(__dirname, page);
   fs.readFile(file, (err, data) => {
