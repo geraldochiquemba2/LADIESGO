@@ -123,9 +123,10 @@ table{border:1px solid #f1edf9}
 <button data-t="cats">🏷 <span>Categorias</span></button>
 <button data-t="premium">💎 <span>Gold/Premium</span></button>
 <button data-t="wallet">💳 <span>Carteiras</span></button>
-<button data-t="finance">💸 <span>Finanças</span></button>
-<button data-t="new">➕ <span>Registar</span></button>
-</nav>
+  <button data-t="finance">💸 <span>Finanças</span></button>
+  <button data-t="new">➕ <span>Registar</span></button>
+  <button data-t="notifs">🔔 <span>Notificações</span></button>
+  </nav>
 <div class="side-foot"><button id="admRefresh" title="Atualizar agora">⟳ Atualizar</button><button id="admOut">Sair</button></div>
 </aside>
 <main class="main">
@@ -217,6 +218,23 @@ table{border:1px solid #f1edf9}
     <table><thead><tr><th>Cliente</th><th>Desde</th><th>Papel</th><th>Senha</th></tr></thead><tbody id="users"><tr><td colspan="4" class="mut">A carregar…</td></tr></tbody></table>
     <h2 id="histT">Histórico por cliente</h2>
     <div id="histWrap"><table><thead><tr><th>Cliente</th><th>Viagens</th><th>Concluídas</th><th>Canceladas</th><th>Gasto</th></tr></thead><tbody id="cliHist"></tbody></table></div>
+  </section>
+  <section id="sec-notifs" style="display:none">
+    <h2>Enviar notificação</h2>
+    <p class="mut">Escreve um aviso ou lembrete. Aparece como notificação push e no centro de notificações da app.</p>
+    <div class="filters">
+      <select id="nTarget">
+        <option value="ALL">Para todos</option>
+        <option value="PASSENGERS">Só para passageiras</option>
+        <option value="DRIVERS">Só para motoristas</option>
+      </select>
+      <input id="nTitle" placeholder="Título (opcional)" autocomplete="off">
+    </div>
+    <textarea id="nMsg" placeholder="Escreve aqui o aviso ou recomendação..." style="width:100%;min-height:120px;border:1.5px solid var(--ln);border-radius:12px;padding:12px;font:inherit;font-size:16px;resize:vertical"></textarea>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="chip" data-a="sendnotif" style="height:42px;padding:0 18px">📣 Enviar notificação</button>
+      <span id="nMsgRes" class="mut"></span>
+    </div>
   </section>
 </div>
 </main>
@@ -671,7 +689,7 @@ async function releaseFleet(id){try{const r=await fetch('/api/v1/admin/premium/f
 async function delFleet(id){if(!confirm('Apagar este carro premium?'))return;try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id),{method:'DELETE',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Carro apagado ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function confirmRes(id){try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/confirm',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva confirmada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function rejectRes(id){if(!confirm('Rejeitar esta reserva premium?'))return;try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/reject',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva rejeitada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
-function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}}
+function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new','notifs'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}}
 document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}}catch(e){}});
 document.addEventListener('click',e=>{
   const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='revenue'){goTab('finance');}else if(k==='drivers'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');tPage=1;loadTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
@@ -715,6 +733,7 @@ document.addEventListener('click',e=>{
   const cu=e.target.closest('[data-a="clearuser"]');
   if(cu){closeUser();return}
   if(e.target&&e.target.id==='umodal'){closeUser();return}
+  if(e.target&&e.target.closest('[data-a="sendnotif"]')){if(typeof sendNotif==='function')sendNotif();return}
   const ap=e.target.closest('[data-a="appr"],[data-a="rej"]');
   if(ap){decide(ap.dataset.id,ap.dataset.a==='appr');return}
   const t=e.target.closest('[data-t]');
@@ -731,6 +750,34 @@ $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('admOut').addEventListener('click',logout);
 $('admRefresh').addEventListener('click',function(){var b=this;b.disabled=true;Promise.resolve(load()).finally(function(){setTimeout(function(){b.disabled=false;},400);});});
+async function sendNotif(){
+  const target = ($('nTarget')||{}).value || 'ALL';
+  const title  = ($('nTitle')||{}).value || '';
+  const msg    = ($('nMsg')||{}).value || '';
+  const res    = $('nMsgRes');
+  const btn    = document.querySelector('[data-a="sendnotif"]');
+  if(!msg.trim()){ if(res){res.textContent='Escreve uma mensagem.'; res.style.color='#d92d4b';} return; }
+  if(btn){ btn.disabled=true; btn.textContent='A enviar...'; }
+  if(res){ res.textContent='A enviar...'; res.style.color=''; }
+  try{
+    const r = await fetch('/api/v1/admin/notifications/send',{
+      method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},ah()),
+      body:JSON.stringify({target,title,message:msg})
+    });
+    const j = await r.json().catch(()=>null);
+    if(!r.ok) throw new Error((j&&j.message)||'Falhou ao enviar.');
+    if(res){ res.textContent='✓ Enviado para '+(j.sent||0)+' utilizador(es).'; res.style.color='#12a150'; }
+    if(typeof toast==='function')toast('Notificação enviada ✓','ok');
+    if($('nMsg')) $('nMsg').value='';
+    if($('nTitle')) $('nTitle').value='';
+  }catch(e){
+    if(res){ res.textContent='Erro: '+((e&&e.message)||e); res.style.color='#d92d4b'; }
+    if(typeof toast==='function')toast('Falhou ao enviar notificação',false);
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='📣 Enviar notificação'; }
+  }
+}
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')try{load();}catch(e){}});
 window.addEventListener('focus',function(){try{load();}catch(e){}});
 try{
@@ -746,3 +793,4 @@ document.addEventListener('click',function(e){try{var t=e.target;if(!t||t.tagNam
 }catch(_){}})();</script>
 </body>
 </html>
+
