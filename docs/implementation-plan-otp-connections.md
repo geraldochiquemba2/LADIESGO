@@ -1,5 +1,7 @@
 # Plano de Implementação — OTP de Viagem + Gestão Avançada de Ligações
 
+> **Nota (2026-10-26):** a conta Cloudflare oficial é `rererererererere670@gmail.com`. Referências a "conta nova" / `wrangler.newaccount.toml` / isabel neste documento são históricas; ver `AGENTS.md`.
+
 **Projeto:** LADIESGO · **Data:** 2026-10-17 · **Estado:** proposta para implementação
 **Âmbito:** `cloudflare/api-worker` (Worker de API em produção, conta nova `2ebfcbf70c6ea8d2b84130041528e249`) + cliente `mobile/src/services/socket.ts`
 

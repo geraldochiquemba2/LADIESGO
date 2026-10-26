@@ -4,9 +4,11 @@ param(
   [string]$Account
 )
 
+# CONTA OFICIAL (2026-10-26): rerererer...670@gmail.com (default.rerere670account.toml).
+# Este script old/new e LEGADO; nao usar para Pages nem para o Worker estatico.
 # Troca a conta Cloudflare ativa do wrangler SEM login/logout (o logout revoga o token).
-#   old = fddsfds45@gmail.com          (conta do Pages: ladiesgo.pages.dev)
-#   new = isabelcanjamba62@gmail.com   (conta da API Worker: ladiesgo-api.ladiesgo-angola.workers.dev)
+#   old = fddsfds45@gmail.com          (LEGADO: API ladiesgo-api.ladiesgo-ao.workers.dev)
+#   new = isabelcanjamba62@gmail.com   (LEGADO/em espera: ladiesgo-api.ladiesgo-angola.workers.dev)
 # Uso:  .\use-account.ps1 old   |   .\use-account.ps1 new
 #
 # ATENCAO (incidente 2026-10-17): este script copia .<conta> -> default.toml, mas o wrangler RENOVA

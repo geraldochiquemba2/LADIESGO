@@ -9,7 +9,7 @@ RATE_LIMIT_WINDOW_MS = "60000"
 
 # Limpeza diária de trip_points (retenção 30 dias). 03:17 UTC.
 [triggers]
-crons = ["17 3 * * *"]
+crons = ["17 3 * * *", "* * * * *"]
 
 # Rate Limiting binding (GA, plano Free, sem custo extra) — camada global por localidade,
 # complementa o limitador em memoria por isolate. ~10 pedidos/s por sessao/IP por local CF.

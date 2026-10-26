@@ -1,5 +1,7 @@
 # LADIESGO — Plano de Implementação: Redis GEO, Rate Limiting e Limites de Conexão
 
+> **Nota (2026-10-26):** a conta Cloudflare oficial é `rererererererere670@gmail.com`. Referências a "conta nova" / `wrangler.newaccount.toml` / isabel neste documento são históricas; ver `AGENTS.md`.
+
 **Data:** 2026-10-17
 **Escopo:** `cloudflare/api-worker` (Cloudflare Workers + Durable Objects + D1)
 **Estado:** Plano de produção (não implementado ainda)

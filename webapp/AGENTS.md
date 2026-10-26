@@ -27,7 +27,7 @@ O ficheiro mais importante é **`ladiesgo-home.html`** (~250 KB) — quase toda 
 
 ## Como fala com a API
 - No topo de **cada** HTML há um *fetch patch* que reescreve `/api/*` para o Worker:
-  `var A='https://ladiesgo-api.ladiesgo-angola.workers.dev'`.
+  `var A='https://ladiesgo-api.ladiesgo-ao.workers.dev'` (API legada na conta `fddsfds45`).
 - Em `localhost` (via `node server.js`) o `/api/*` é servido localmente.
 - **Se o host da API mudar de novo**, há que trocar essa constante em **todos** os HTML de `webapp/` **e** em `mobile/` (ver `cloudflare/README.md` §4).
 - Base das rotas da API: `/api/v1/...` (auth, users, drivers, trips, ratings, turn).
@@ -68,13 +68,15 @@ node server.js          # API + ficheiros em http://localhost:3000
 ```
 `server.js` implementa a API localmente (viagens, ofertas sequenciais 15 s, chat, geo) e serve os HTML.
 
-## Deploy (Cloudflare Pages — conta **antiga**)
+## Deploy (conta única: `rerere…`)
 ```
-powershell -ExecutionPolicy Bypass -File ..\cloudflare\use-account.ps1 old
+$env:CLOUDFLARE_ACCOUNT_ID='016a8f9ed58a5cd10e9be697944905f0'
 & ..\cloudflare\api-worker\node_modules\.bin\wrangler.cmd pages deploy . --project-name=ladiesgo --branch=main --commit-dirty=true
+& ..\cloudflare\api-worker\node_modules\.bin\wrangler.cmd deploy --name ladiesgo
 ```
+- **Conta oficial:** `rererererererere670@gmail.com` (`016a8f9ed58a5cd10e9be697944905f0`). Não usar `use-account.ps1 old/new` (legado).
 - O Pages **não** gasta a quota de Workers (é estático). Ver `AGENTS.md` da raiz.
-- **Nunca** correr `wrangler logout` (revoga o token) — usar `use-account.ps1`.
+- **Nunca** correr `wrangler logout` (revoga o token).
 
 ## Convenções / cuidados
 - **Sem comentários novos** salvo os de rollback.

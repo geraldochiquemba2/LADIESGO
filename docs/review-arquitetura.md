@@ -1,5 +1,7 @@
 # Revisão Arquitetural Profunda — LADIESGO vs Sistemas de Ride-Hailing de Produção
 
+> **Nota (2026-10-26):** a conta Cloudflare oficial é `rererererererere670@gmail.com`. Referências a "conta nova" / `ladiesgo-angola` / isabel neste documento são históricas; ver `AGENTS.md`.
+
 **Data:** 2026-10-17
 **Revisor:** Subagente de Análise Arquitetural
 **Âmbito:** `C:\Users\Geraldo\LADIESGO` — monorepo contendo `backend/` (NestJS), `cloudflare/api-worker/` (Cloudflare Worker + D1), `webapp/` (HTML estático + `server.js` Node), `mobile/` (Expo WebView), `docs/`, `selfhost/`.

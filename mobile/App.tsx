@@ -15,7 +15,7 @@ import { BG_LOCATION_TASK } from './src/services/bgLocation';
 // localização, notificações com som, e upload de fotos/documentos.
 // ?v= rebenta a cache da WebView: sem isto o iOS servia o HTML antigo
 // e as melhorias do mapa não apareciam. Aumenta a cada deploy do site.
-const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261015';
+const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261026';
 // >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA (ladiesgo-angola); a conta antiga ladiesgo-ao esgotou a quota de Workers (erro 1027). VOLTAR AO NORMAL = trocar "ladiesgo-api.ladiesgo-ao.workers.dev" por "ladiesgo-api.ladiesgo-ao.workers.dev" e gerar novo build. Ver cloudflare/README.md
 const API_URL = 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
 const EAS_PROJECT_ID = 'ec5885e0-c677-4023-b65a-6642fe20f3fd';
@@ -38,6 +38,74 @@ Notifications.setNotificationHandler({
 // escolhidos dentro do site).
 const AUTH_BRIDGE_JS = `(function(){var s='';setInterval(function(){try{var t=localStorage.getItem('taxi_token')||'';var u=null;try{u=JSON.parse(localStorage.getItem('taxi_user')||'null')}catch(e){}var tid=null;try{tid=localStorage.getItem('lg_trip')||localStorage.getItem('lg_mtrip')}catch(e){}var on=false;try{on=localStorage.getItem('lg_online')==='1'}catch(e){}var k=t+'|'+(u&&u.id||'')+'|'+(u&&u.role||'')+'|'+(tid||'')+'|'+(on?'1':'0');if(k!==s){s=k;window.ReactNativeWebView.postMessage(JSON.stringify({t:'state',token:t||null,user:u,tripId:tid,online:on}));}}catch(e){}},3000);})();`;
 
+// GPS NATIVO -> WebView: o WKWebView mostrava em inglês o aviso
+// "This website will use your precise location...". Aqui o site deixa de
+// pedir geolocalização ao WebView e passa a usar o GPS da app, cujo pedido
+// de permissão está em português em app.json.
+const GEO_BRIDGE_JS = `(function(){
+  if(window.__lgGeoBridge)return;
+  window.__lgGeoBridge=true;
+  var seq=0,cbs={};
+  function post(o){try{window.ReactNativeWebView.postMessage(JSON.stringify(o))}catch(e){}}
+  var geo={
+    getCurrentPosition:function(ok,bad,opts){
+      var id='g'+(++seq);
+      cbs[id]={ok:ok,bad:bad,watch:false};
+      post({t:'gps-get',id:id,options:opts||{}});
+    },
+    watchPosition:function(ok,bad,opts){
+      var id='w'+(++seq);
+      cbs[id]={ok:ok,bad:bad,watch:true};
+      post({t:'gps-watch',id:id,options:opts||{}});
+      return id;
+    },
+    clearWatch:function(id){
+      if(!id)return;
+      delete cbs[id];
+      post({t:'gps-clear',id:String(id)});
+    }
+  };
+  window.__lgGeoDispatch=function(id,kind,p){
+    var cb=cbs[id];
+    if(!cb)return;
+    try{
+      if(kind==='pos'){
+        var c=(p&&p.coords)||{};
+        cb.ok&&cb.ok({
+          coords:{
+            latitude:c.latitude,
+            longitude:c.longitude,
+            accuracy:c.accuracy,
+            altitude:c.altitude,
+            altitudeAccuracy:c.altitudeAccuracy,
+            heading:c.heading,
+            speed:c.speed
+          },
+          timestamp:(p&&p.timestamp)||Date.now()
+        });
+        if(!cb.watch)delete cbs[id];
+      }else{
+        var e={
+          code:(p&&p.code)||2,
+          message:(p&&p.message)||'Localização indisponível',
+          PERMISSION_DENIED:1,
+          POSITION_UNAVAILABLE:2,
+          TIMEOUT:3
+        };
+        cb.bad&&cb.bad(e);
+        if(!cb.watch)delete cbs[id];
+      }
+    }catch(e){}
+  };
+  try{
+    Object.defineProperty(navigator,'geolocation',{value:geo,configurable:true});
+  }catch(e){
+    try{
+      Object.defineProperty(Object.getPrototypeOf(navigator),'geolocation',{get:function(){return geo},configurable:true});
+    }catch(_){}
+  }
+})();`;
+
 async function registerPushToken(jwt: string, expoToken: string) {
   try {
     await fetch(API_URL + '/users/profile', {
@@ -58,6 +126,9 @@ export default function App() {
   const bgAtRef = useRef<number>(0);
   const pingTimer = useRef<any>(null);
   const loadRetry = useRef(0);
+  const geoSubs = useRef<Record<string, Location.LocationSubscription>>({});
+  const geoCancelled = useRef<Set<string>>(new Set());
+  const geoGen = useRef(0);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
@@ -86,6 +157,114 @@ export default function App() {
   const reloadWeb = () => {
     try { beginLoading(); } catch {}
     try { webRef.current?.reload(); } catch {}
+  };
+
+  const inject = (code: string) => {
+    try { webRef.current?.injectJavaScript(code + ';true;'); } catch {}
+  };
+  const geoReply = (id: string, kind: 'pos' | 'err', payload: any) => {
+    inject('try{window.__lgGeoDispatch(' + JSON.stringify(String(id)) + ',' + JSON.stringify(kind) + ',' + JSON.stringify(payload) + ')}catch(e){}');
+  };
+  const geoErrCode = (e: any) => /permission|denied|authorized|negad/i.test(String((e && e.message) || e || '')) ? 1 : 2;
+  const clearGeoSubs = () => {
+    geoGen.current++;
+    geoCancelled.current.clear();
+    Object.keys(geoSubs.current).forEach((key) => {
+      try { geoSubs.current[key].remove(); } catch {}
+      delete geoSubs.current[key];
+    });
+  };
+  const clearGeoWatch = (id: string) => {
+    const key = String(id);
+    geoCancelled.current.add(key);
+    const sub = geoSubs.current[key];
+    if (sub) {
+      try { sub.remove(); } catch {}
+      delete geoSubs.current[key];
+    }
+  };
+  const handleGeoGet = async (id: string, options: any) => {
+    const gen = geoGen.current;
+    try {
+      let perm = await Location.getForegroundPermissionsAsync();
+      if (!perm.granted) perm = await Location.requestForegroundPermissionsAsync();
+      if (!perm.granted) {
+        if (gen === geoGen.current) geoReply(id, 'err', { code: 1, message: 'Permissão de localização negada' });
+        return;
+      }
+      if (!(await Location.hasServicesEnabledAsync())) {
+        if (gen === geoGen.current) geoReply(id, 'err', { code: 2, message: 'Serviços de localização desligados' });
+        return;
+      }
+      const accuracy = options && options.enableHighAccuracy ? Location.Accuracy.High : Location.Accuracy.Balanced;
+      const timeoutMs = Math.max(4000, Math.min(30000, Number(options && options.timeout) || 12000));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject({ __lgTimeout: true }), timeoutMs);
+      });
+      let loc: Location.LocationObject;
+      try {
+        loc = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy, mayShowUserSettingsDialog: true }),
+          timeout,
+        ]);
+      } catch (e: any) {
+        if (gen === geoGen.current) {
+          if (e && e.__lgTimeout) geoReply(id, 'err', { code: 3, message: 'Tempo esgotado a obter GPS' });
+          else geoReply(id, 'err', { code: geoErrCode(e), message: String((e && e.message) || e || 'GPS indisponível') });
+        }
+        return;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      if (gen === geoGen.current) geoReply(id, 'pos', { coords: loc.coords, timestamp: loc.timestamp });
+    } catch (e: any) {
+      if (gen === geoGen.current) geoReply(id, 'err', { code: geoErrCode(e), message: String((e && e.message) || e || 'GPS indisponível') });
+    }
+  };
+  const handleGeoWatch = async (id: string, options: any) => {
+    const key = String(id);
+    const old = geoSubs.current[key];
+    if (old) {
+      try { old.remove(); } catch {}
+      delete geoSubs.current[key];
+    }
+    geoCancelled.current.delete(key);
+    const gen = geoGen.current;
+    try {
+      let perm = await Location.getForegroundPermissionsAsync();
+      if (!perm.granted) perm = await Location.requestForegroundPermissionsAsync();
+      if (!perm.granted) {
+        if (gen === geoGen.current) geoReply(key, 'err', { code: 1, message: 'Permissão de localização negada' });
+        return;
+      }
+      if (!(await Location.hasServicesEnabledAsync())) {
+        if (gen === geoGen.current) geoReply(key, 'err', { code: 2, message: 'Serviços de localização desligados' });
+        return;
+      }
+      const accuracy = options && options.enableHighAccuracy ? Location.Accuracy.High : Location.Accuracy.Balanced;
+      const sub = await Location.watchPositionAsync(
+        { accuracy, timeInterval: 4000, distanceInterval: 5, mayShowUserSettingsDialog: true },
+        (loc) => {
+          if (gen === geoGen.current) geoReply(key, 'pos', { coords: loc.coords, timestamp: loc.timestamp });
+        },
+        (message) => {
+          if (gen === geoGen.current) {
+            geoReply(key, 'err', {
+              code: /permission|denied|authorized|negad/i.test(String(message)) ? 1 : 2,
+              message: String(message),
+            });
+          }
+        },
+      );
+      if (gen !== geoGen.current || geoCancelled.current.has(key)) {
+        try { sub.remove(); } catch {}
+        return;
+      }
+      geoSubs.current[key] = sub;
+    } catch (e: any) {
+      if (gen === geoGen.current) geoReply(key, 'err', { code: geoErrCode(e), message: String((e && e.message) || e || 'GPS indisponível') });
+    }
   };
 
   // Permissões NATIVAS ao abrir (uma vez): localização + notificações com som.
@@ -132,12 +311,44 @@ export default function App() {
     return () => { try { sub.remove(); } catch {} };
   }, []);
 
+  // Se a pessoa ativou a localização nas Definições e voltou à app, o tutorial
+  // do site ainda estava aberto. Aqui fecha-se o tutorial e tenta-se de novo.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', async (st) => {
+      if (st !== 'active') return;
+      try {
+        const perm = await Location.getForegroundPermissionsAsync();
+        if (!perm.granted) return;
+        inject("try{var h=document.getElementById('lochelp');if(h&&h.classList.contains('on')){window.__gpsAsked=false;h.classList.remove('on');locateMe()}}catch(e){}");
+      } catch {}
+    });
+    return () => { try { sub.remove(); } catch {} };
+  }, []);
+
+  // As subscrições de GPS do site morrem com a página (reload/erro), senão
+  // ficavam a gastar bateria sem ninguém a ler as posições.
+  useEffect(() => {
+    return () => clearGeoSubs();
+  }, []);
+
   const onMessage = (e: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data || '{}');
       if (msg.t === 'pong') {
         try { if (pingTimer.current) clearTimeout(pingTimer.current); } catch {}
         pingTimer.current = null;
+        return;
+      }
+      if (msg.t === 'gps-get') {
+        handleGeoGet(msg.id, msg.options);
+        return;
+      }
+      if (msg.t === 'gps-watch') {
+        handleGeoWatch(msg.id, msg.options);
+        return;
+      }
+      if (msg.t === 'gps-clear') {
+        clearGeoWatch(msg.id);
         return;
       }
       if (msg.t === 'need-gps') {
@@ -295,17 +506,18 @@ export default function App() {
           style={styles.web}
           javaScriptEnabled
           domStorageEnabled
-          geolocationEnabled
+          geolocationEnabled={false}
           mediaPlaybackRequiresUserAction={false}
           allowsInlineMediaPlayback
           sharedCookiesEnabled
           thirdPartyCookiesEnabled
           allowsBackForwardNavigationGestures
+          injectedJavaScriptBeforeContentLoaded={GEO_BRIDGE_JS}
           injectedJavaScript={AUTH_BRIDGE_JS}
           onMessage={onMessage}
           onShouldStartLoadWithRequest={onShouldStartLoad}
           onOpenWindow={onOpenWindow}
-          onLoadStart={beginLoading}
+          onLoadStart={() => { clearGeoSubs(); beginLoading(); }}
           onLoadEnd={() => {
             // Esconde com atraso: sem isto há um flash branco entre o
             // fim do load e a primeira pintura da página (fundo roxo).

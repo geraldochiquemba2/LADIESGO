@@ -7,7 +7,8 @@
 - **Cidade:** Luanda, Angola
 - **Idioma da UI:** Português (pt-PT), tratamento informal ("tu")
 - **Site/App web:** https://ladiesgo.pages.dev
-- **API:** https://ladiesgo-api.ladiesgo-angola.workers.dev
+- **API:** https://ladiesgo-api.ladiesgo-ao.workers.dev (legado na conta `fddsfds45`)
+- **Conta Cloudflare oficial:** `rererererererere670@gmail.com` (Pages + Worker estático); não usar as contas antigas.
 
 ## Público-alvo (ICP)
 - Mulheres em Luanda que precisam de transporte seguro

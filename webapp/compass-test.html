@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bussola - teste</title>
+<style>
+:root{--b:#61188E;--p:#a855f7;--bg:#f6f3fb;--ln:#e6e0f0}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:#1d1230;padding:18px;padding-bottom:calc(18px + env(safe-area-inset-bottom))}
+h1{font-size:20px;margin:0 0 6px}
+p{margin:6px 0}
+.mut{color:#6b6280;font-size:13.5px}
+button{font:inherit;font-weight:700;width:100%;border:0;border-radius:16px;padding:16px;background:var(--b);color:#fff;margin:12px 0 6px;box-shadow:0 8px 20px rgba(97,24,142,.25)}
+button:disabled{opacity:.5}
+.rose{width:190px;height:190px;margin:16px auto;border-radius:50%;background:#fff;border:2px solid var(--ln);position:relative;box-shadow:0 6px 24px rgba(97,24,142,.10)}
+.rose b{position:absolute;left:50%;top:10px;transform:translateX(-50%);font-size:11px;color:#8a8496}
+.rose b.s{bottom:10px;top:auto}
+.rose b.e{right:10px;top:50%;left:auto;transform:translateY(-50%)}
+.rose b.w{left:10px;top:50%;transform:translateY(-50%)}
+#needle{position:absolute;left:50%;top:50%;width:6px;height:76px;margin:-76px 0 0 -3px;border-radius:3px;background:linear-gradient(#ff2d78,#61188E);transform-origin:50% 100%;transform:rotate(0deg);transition:transform .18s linear}
+#needle:after{content:"";position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:#fff;border:3px solid #61188E}
+.card{background:#fff;border-radius:16px;border:1px solid var(--ln);padding:12px 14px;margin-top:12px}
+.row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #f0ecf7;padding:6px 0;font-size:13.5px}
+.row:last-child{border:0}
+.row span:last-child{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:700}
+pre{white-space:pre-wrap;word-break:break-word;font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;background:#1d1230;color:#e9e4f5;border-radius:12px;padding:10px;max-height:180px;overflow:auto}
+</style>
+</head>
+<body>
+<h1>Teste da bussola</h1>
+<p class="mut">Abre esta pagina no <b>Safari</b> (nao no WhatsApp/Instagram). Toca no botao e aceita o pedido de movimento. Depois vira o telemovel devagar.</p>
+<button id="go">Ativar bussola</button>
+<div id="msg" class="mut"></div>
+<div class="rose"><b>N</b><b class="e">E</b><b class="s">S</b><b class="w">W</b><div id="needle"></div></div>
+<div class="card">
+  <div class="row"><span>Estado</span><span id="perm">-</span></div>
+  <div class="row"><span>Heading (webkitCompassHeading)</span><span id="hdg">-</span></div>
+  <div class="row"><span>Eventos orientation / absolute</span><span id="evn">0 / 0</span></div>
+  <div class="row"><span>Ultimo evento ha</span><span id="age">-</span></div>
+  <div class="row"><span>alpha / beta / gamma</span><span id="abg">-</span></div>
+  <div class="row"><span>absolute</span><span id="abs">-</span></div>
+</div>
+<div class="card">
+  <div class="row"><span>requestPermission</span><span id="hasreq">-</span></div>
+  <div class="row"><span>HTTPS</span><span id="secure">-</span></div>
+  <div class="row"><span>Visivel</span><span id="vis">-</span></div>
+</div>
+<pre id="log">a aguardar...</pre>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var st={perm:'-',h:null,a:null,b:null,g:null,abs:null,ev:0,evAbs:0,last:0,err:'',started:false};
+  $('hasreq').textContent=(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')?'sim':'nao';
+  $('secure').textContent=String(!!window.isSecureContext);
+  $('vis').textContent=document.visibilityState;
+  function show(){
+    $('perm').textContent=st.perm;
+    $('hdg').textContent=(st.h!=null)?Math.round(st.h)+' graus':'-';
+    $('evn').textContent=st.ev+' / '+st.evAbs;
+    $('age').textContent=st.last?Math.max(0,Math.round((Date.now()-st.last)/1000))+'s':'-';
+    $('abg').textContent=(st.a!=null?Math.round(st.a):'-')+' / '+(st.b!=null?Math.round(st.b):'-')+' / '+(st.g!=null?Math.round(st.g):'-');
+    $('abs').textContent=(st.abs===true?'true':st.abs===false?'false':'-');
+    if(st.h!=null)$('needle').style.transform='rotate('+st.h+'deg)';
+    $('log').textContent=JSON.stringify({perm:st.perm,h:st.h,ev:st.ev,evAbs:st.evAbs,alpha:st.a,beta:st.b,gamma:st.g,absolute:st.abs,ageMs:st.last?Date.now()-st.last:null,err:st.err||null,ua:navigator.userAgent,secure:!!window.isSecureContext,vis:document.visibilityState,ts:Date.now()});
+  }
+  function onO(e){
+    st.ev++;st.last=Date.now();
+    if(e.webkitCompassHeading!=null&&isFinite(e.webkitCompassHeading))st.h=Number(e.webkitCompassHeading);
+    else if(e.alpha!=null&&isFinite(e.alpha))st.h=360-Number(e.alpha);
+    st.a=e.alpha!=null?Number(e.alpha):null;
+    st.b=e.beta!=null?Number(e.beta):null;
+    st.g=e.gamma!=null?Number(e.gamma):null;
+    st.abs=(typeof e.absolute==='boolean')?e.absolute:null;
+    show();
+  }
+  function onA(e){
+    st.evAbs++;st.last=Date.now();
+    if(e.alpha!=null&&isFinite(e.alpha))st.h=360-Number(e.alpha);
+    st.a=e.alpha!=null?Number(e.alpha):null;
+    st.b=e.beta!=null?Number(e.beta):null;
+    st.g=e.gamma!=null?Number(e.gamma):null;
+    st.abs=true;
+    show();
+  }
+  function listen(){
+    if(st.started)return;st.started=true;
+    window.addEventListener('deviceorientation',onO,true);
+    window.addEventListener('deviceorientationabsolute',onA,true);
+  }
+  function post(){
+    try{
+      if(!st.started)return;
+      fetch('/diag',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p:'compass',perm:st.perm,h:st.h,ev:st.ev,evAbs:st.evAbs,alpha:st.a,beta:st.b,gamma:st.g,absolute:st.abs,ageMs:st.last?Date.now()-st.last:null,err:st.err||null,ua:navigator.userAgent,secure:!!window.isSecureContext,vis:document.visibilityState,ts:Date.now()})}).catch(function(){});
+    }catch(e){}
+  }
+  $('go').addEventListener('click',function(){
+    $('go').disabled=true;$('msg').textContent='A pedir permissao...';
+    try{
+      if(typeof DeviceOrientationEvent==='undefined'){st.perm='sem DeviceOrientationEvent';st.err='no DOE';show();$('msg').textContent='Este browser nao expoe DeviceOrientationEvent. Usa o Safari.';return;}
+      if(typeof DeviceOrientationEvent.requestPermission==='function'){
+        DeviceOrientationEvent.requestPermission().then(function(r){
+          st.perm=String(r);$('msg').textContent=(r==='granted')?'Permissao concedida. Vira o telemovel.':'Permissao recusada. Limpa os dados do site e tenta de novo.';
+          if(r==='granted')listen();
+          show();post();
+        }).catch(function(e){
+          st.perm='erro';st.err=String(e&&e.message||e);$('msg').textContent='Erro a pedir permissao: '+(e&&e.message||e);
+          show();post();
+        });
+      }else{
+        st.perm='sem pedido (browser)';listen();$('msg').textContent='A ler sensores sem pedido de permissao.';show();post();
+      }
+    }catch(e){st.perm='excecao';st.err=String(e&&e.message||e);show();$('msg').textContent='Erro: '+(e&&e.message||e);post();}
+    setTimeout(function(){try{$('go').disabled=false}catch(e){}},1500);
+  });
+  document.addEventListener('visibilitychange',function(){try{$('vis').textContent=document.visibilityState}catch(e){}});
+  setInterval(show,1000);
+  setInterval(post,1000);
+  show();
+})();
+</script>
+</body>
+</html>

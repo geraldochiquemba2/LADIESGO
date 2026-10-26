@@ -231,9 +231,29 @@ table{border:1px solid #f1edf9}
       <input id="nTitle" placeholder="Título (opcional)" autocomplete="off">
     </div>
     <textarea id="nMsg" placeholder="Escreve aqui o aviso ou recomendação..." style="width:100%;min-height:120px;border:1.5px solid var(--ln);border-radius:12px;padding:12px;font:inherit;font-size:16px;resize:vertical"></textarea>
+    <div class="filters" style="margin-top:12px;align-items:center">
+      <select id="nDay" aria-label="Dia da semana" style="flex:1;min-width:150px">
+        <option value="1">Segunda-feira</option>
+        <option value="2">Terça-feira</option>
+        <option value="3">Quarta-feira</option>
+        <option value="4">Quinta-feira</option>
+        <option value="5">Sexta-feira</option>
+        <option value="6">Sábado</option>
+        <option value="0">Domingo</option>
+      </select>
+      <input id="nT1" type="time" value="06:00" aria-label="Horário 1" style="flex:1;min-width:105px">
+      <input id="nT2" type="time" value="12:00" aria-label="Horário 2" style="flex:1;min-width:105px">
+      <input id="nT3" type="time" value="18:00" aria-label="Horário 3" style="flex:1;min-width:105px">
+    </div>
     <div style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <button class="chip" data-a="sendnotif" style="height:42px;padding:0 18px">📣 Enviar notificação</button>
+      <button class="chip" data-a="schedulenotif" style="height:42px;padding:0 18px">Programar semanal</button>
       <span id="nMsgRes" class="mut"></span>
+    </div>
+    <div style="margin-top:24px;border-top:1px solid var(--ln);padding-top:16px">
+      <h3 style="margin:0 0 4px;font-size:16px">Notificações programadas</h3>
+      <p class="mut" style="margin:0 0 10px;font-size:13px">Repetem todas as semanas à hora de Luanda (até 3 horários por mensagem).</p>
+      <div id="nSchedules"><p class="mut" style="font-size:13px">A carregar…</p></div>
     </div>
   </section>
 </div>
@@ -689,7 +709,7 @@ async function releaseFleet(id){try{const r=await fetch('/api/v1/admin/premium/f
 async function delFleet(id){if(!confirm('Apagar este carro premium?'))return;try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id),{method:'DELETE',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Carro apagado ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function confirmRes(id){try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/confirm',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva confirmada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function rejectRes(id){if(!confirm('Rejeitar esta reserva premium?'))return;try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/reject',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva rejeitada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
-function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new','notifs'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}}
+function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new','notifs'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}if(k==='notifs')try{loadNotifSchedules();}catch(e){}}
 document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}}catch(e){}});
 document.addEventListener('click',e=>{
   const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='revenue'){goTab('finance');}else if(k==='drivers'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');tPage=1;loadTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
@@ -734,6 +754,8 @@ document.addEventListener('click',e=>{
   if(cu){closeUser();return}
   if(e.target&&e.target.id==='umodal'){closeUser();return}
   if(e.target&&e.target.closest('[data-a="sendnotif"]')){if(typeof sendNotif==='function')sendNotif();return}
+  if(e.target&&e.target.closest('[data-a="schedulenotif"]')){if(typeof scheduleNotif==='function')scheduleNotif();return}
+  const _schDel=e.target&&e.target.closest('[data-a="delsch"]');if(_schDel){if(typeof deleteNotifSchedule==='function')deleteNotifSchedule(_schDel.dataset.id);return}
   const ap=e.target.closest('[data-a="appr"],[data-a="rej"]');
   if(ap){decide(ap.dataset.id,ap.dataset.a==='appr');return}
   const t=e.target.closest('[data-t]');
@@ -760,15 +782,15 @@ async function sendNotif(){
   if(btn){ btn.disabled=true; btn.textContent='A enviar...'; }
   if(res){ res.textContent='A enviar...'; res.style.color=''; }
   try{
-    const apiBase = (location.hostname.endsWith('pages.dev') ? 'https://taxiapp-web.ladiesgo-ao.workers.dev' : '');
-    const r = await fetch(apiBase + '/api/v1/admin/notifications/send',{
-      method:'POST',
-      headers:Object.assign({'Content-Type':'application/json'},ah()),
-      body:JSON.stringify({target,title,message:msg})
-    });
+    const payload = JSON.stringify({target,title,message:msg, body:msg, text:msg});
+    const opts = {method:'POST', headers:Object.assign({'Content-Type':'application/json'},ah()), body:payload};
+    const r = await fetch('/api/v1/admin/notifications/send', opts);
     const j = await r.json().catch(()=>null);
-    if(!r.ok) throw new Error((j&&j.message)||'Falhou ao enviar.');
-    if(res){ res.textContent='✓ Enviado para '+(j.sent||0)+' utilizador(es).'; res.style.color='#12a150'; }
+    if(!r.ok || !j || j.ok===false){
+      const why = (j&&j.message) || (r.status===401?'Sessão expirada. Entra outra vez.':('Falha ao enviar ('+r.status+').'));
+      throw new Error(why);
+    }
+    if(res){ res.textContent='✓ Enviado a '+(j.sent!=null?j.sent:0)+' pessoa(s)'+(j.pushed?(' · push: '+j.pushed):'')+'.'; res.style.color='#12a150'; }
     if(typeof toast==='function')toast('Notificação enviada ✓','ok');
     if($('nMsg')) $('nMsg').value='';
     if($('nTitle')) $('nTitle').value='';
@@ -778,6 +800,70 @@ async function sendNotif(){
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='📣 Enviar notificação'; }
   }
+}
+function notifDayName(d){return ({0:'Domingo',1:'Segunda-feira',2:'Terça-feira',3:'Quarta-feira',4:'Quinta-feira',5:'Sexta-feira',6:'Sábado'})[Number(d)]||''}
+function notifTargetName(t){return t==='PASSENGERS'?'Passageiras':(t==='DRIVERS'?'Motoristas':'Todos')}
+async function loadNotifSchedules(){
+  const box=$('nSchedules');
+  if(!box)return;
+  try{
+    const r=await fetch('/api/v1/admin/notifications/schedules',{headers:ah()});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||'Falha ao carregar.');
+    const list=j.schedules||[];
+    if(!list.length){box.innerHTML='<p class="mut" style="font-size:13px">Ainda não há notificações programadas.</p>';return;}
+    box.innerHTML=list.map(function(s){
+      const times=(s.times||[]).join(' · ');
+      const title=s.title&&s.title!=='LadiesGo!'?' · '+esc(s.title):'';
+      return '<div style="border:1px solid var(--ln);border-radius:12px;padding:12px;margin-top:8px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between">'
+        +'<div style="min-width:0"><b style="font-size:14px">'+esc(notifDayName(s.dayOfWeek))+' · '+esc(times)+'</b>'
+        +'<div class="mut" style="font-size:12.5px;margin-top:2px">'+esc(notifTargetName(s.target))+title+'</div>'
+        +'<div style="font-size:13px;margin-top:6px;overflow-wrap:anywhere">'+esc(s.body||'')+'</div></div>'
+        +'<button class="chip" data-a="delsch" data-id="'+esc(s.id)+'" style="height:36px;padding:0 12px;flex:none">Apagar</button>'
+        +'</div>';
+    }).join('');
+  }catch(e){
+    box.innerHTML='<p style="color:#d92d4b;font-size:13px">Erro: '+esc((e&&e.message)||e)+'</p>';
+  }
+}
+async function scheduleNotif(){
+  const target=($('nTarget')||{}).value||'ALL';
+  const title=($('nTitle')||{}).value||'';
+  const msg=($('nMsg')||{}).value||'';
+  const day=Number((($('nDay')||{}).value));
+  const times=['nT1','nT2','nT3'].map(function(id){return String((($(id)||{}).value)||'')}).filter(Boolean);
+  const res=$('nMsgRes');
+  const btn=document.querySelector('[data-a="schedulenotif"]');
+  if(!msg.trim()){if(res){res.textContent='Escreve uma mensagem.';res.style.color='#d92d4b';}return;}
+  if(!Number.isInteger(day)||day<0||day>6){if(res){res.textContent='Escolhe o dia da semana.';res.style.color='#d92d4b';}return;}
+  if(!times.length){if(res){res.textContent='Escolhe pelo menos um horário.';res.style.color='#d92d4b';}return;}
+  if(btn){btn.disabled=true;btn.textContent='A programar...';}
+  if(res){res.textContent='A programar...';res.style.color='';}
+  try{
+    const r=await fetch('/api/v1/admin/notifications/schedules',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({target:target,title:title,message:msg,dayOfWeek:day,times:times})});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||('Falha ao programar ('+r.status+').'));
+    if(res){res.textContent='✓ Programada para '+notifDayName(day)+' às '+times.join(', ')+'.';res.style.color='#12a150';}
+    if(typeof toast==='function')toast('Notificação programada ✓','ok');
+    if($('nMsg'))$('nMsg').value='';
+    if($('nTitle'))$('nTitle').value='';
+    await loadNotifSchedules();
+  }catch(e){
+    if(res){res.textContent='Erro: '+((e&&e.message)||e);res.style.color='#d92d4b';}
+    if(typeof toast==='function')toast('Falhou ao programar',false);
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Programar semanal';}
+  }
+}
+async function deleteNotifSchedule(id){
+  if(!id||!confirm('Apagar esta notificação programada?'))return;
+  try{
+    const r=await fetch('/api/v1/admin/notifications/schedules/'+encodeURIComponent(id),{method:'DELETE',headers:ah()});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||'Falha ao apagar.');
+    if(typeof toast==='function')toast('Notificação programada apagada','ok');
+    await loadNotifSchedules();
+  }catch(e){if(typeof toast==='function')toast('Erro: '+((e&&e.message)||e),false);}
 }
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')try{load();}catch(e){}});
 window.addEventListener('focus',function(){try{load();}catch(e){}});

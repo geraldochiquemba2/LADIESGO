@@ -27,7 +27,7 @@ RATE_LIMIT_WINDOW_MS = "60000"
 
 # Limpeza diária de trip_points (retenção 30 dias). 03:17 UTC.
 [triggers]
-crons = ["17 3 * * *"]
+crons = ["17 3 * * *", "* * * * *"]
 
 [[ratelimits]]
 name = "API_RL"

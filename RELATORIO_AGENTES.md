@@ -245,7 +245,7 @@ Cada agente está disponível em `.claude/skills/<nome>/SKILL.md`. Para usar, in
 1. **Executar um agente** — Escolha qual skill quer rodar primeiro (ex: `/go-to-market-plan` para estratégia de crescimento do LadiesGo).
 2. **Customizar o FOUNDER_CONTEXT.md** — Adicione mais detalhes sobre métricas atuais, número de motoristas/passageiras, metas de receita.
 3. **Commit e push** — O repositório está em `main` atualizado com `origin/main`. Lembre-se da regra do AGENTS.md: fazer `git push` depois de cada commit.
-4. **Cuidado com quotas Cloudflare** — Não rode testes de carga contra produção. A conta nova (isabel) teve escritas D1 bloqueadas até 00:00 UTC.
+4. **Cuidado com quotas Cloudflare** — Não rode testes de carga contra produção. A conta oficial é `rererererererere670@gmail.com`; a conta nova (isabel) está desativada. Ver `AGENTS.md`.
 
 ---
 

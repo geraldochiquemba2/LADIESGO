@@ -440,51 +440,81 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Admin notifications - enviar notificacao
-  if (req.url.startsWith('/api/v1/admin/notifications') && req.method === 'POST') {
+  // Admin notifications - enviar notificacao (qualquer variação)
+  if ((req.url.indexOf('/notifications')>=0) && (req.method === 'POST' || req.method === 'GET' || req.method === 'PUT')) {
     const apath = req.url.split('?')[0];
     const sendJson = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
-    if (apath === '/api/v1/admin/notifications/send') {
-      let body = '';
-      req.on('data', c => { body += c; });
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body || '{}');
-          const title = String(data.title || data.titulo || 'LadiesGo').trim();
-          const msg = String(data.message || data.body || data.mensagem || data.text || '').trim();
-          const target = String(data.target || data.to || data.audience || 'all').trim().toLowerCase();
-          if (!msg) {
-            sendJson(400, { message: 'Mensagem obrigatoria.' });
-            return;
-          }
-          const notif = {
-            id: 'n_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6),
-            title,
-            body: msg,
-            message: msg,
-            target,
-            createdAt: Date.now(),
-            ts: Date.now(),
-            read: false
-          };
-          if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
-          global._ladiesgo_notifications.unshift(notif);
-          if (global._ladiesgo_notifications.length > 200) global._ladiesgo_notifications = global._ladiesgo_notifications.slice(0, 200);
+    if (req.method === 'GET') {
+      if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
+      if (apath.endsWith('/list') || apath.endsWith('/notifications')) {
+        sendJson(200, { notifications: global._ladiesgo_notifications });
+        return;
+      }
+    }
+    if (req.method === 'POST') {
+      if (apath.endsWith('/send') || apath === '/api/v1/admin/notifications' || apath.endsWith('/notifications')) {
+        let body = '';
+        req.on('data', c => { body += c; });
+        req.on('end', () => {
           try {
-            if (typeof broadcast === 'function') {
-              broadcast({ type: 'notification', notification: notif });
+            const data = JSON.parse(body || '{}');
+            const title = String(data.title || data.titulo || 'LadiesGo').trim();
+            const msg = String(data.message || data.body || data.mensagem || data.text || '').trim();
+            const target = String(data.target || data.to || data.audience || 'all').trim().toLowerCase();
+            if (!msg) {
+              sendJson(400, { message: 'Mensagem obrigatoria.' });
+              return;
             }
-          } catch(e) {}
-          sendJson(200, { ok: true, success: true, notification: notif });
-        } catch (e) {
-          sendJson(400, { message: 'Pedido inválido.' });
-        }
-      });
+            const notif = {
+              id: 'n_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6),
+              title,
+              body: msg,
+              message: msg,
+              text: msg,
+              target,
+              createdAt: Date.now(),
+              ts: Date.now(),
+              read: false
+            };
+            if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
+            global._ladiesgo_notifications.unshift(notif);
+            if (global._ladiesgo_notifications.length > 500) global._ladiesgo_notifications = global._ladiesgo_notifications.slice(0, 500);
+            try {
+              if (typeof broadcast === 'function') {
+                broadcast({ type: 'notification', notification: notif });
+              }
+            } catch(e) {}
+            sendJson(200, { ok: true, success: true, notification: notif, sent: 1 });
+          } catch (e) {
+            sendJson(400, { message: 'Pedido inválido.' });
+          }
+        });
+        return;
+      }
+      if (apath === '/api/v1/admin/notifications/list') {
+        if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
+        sendJson(200, { notifications: global._ladiesgo_notifications });
+        return;
+      }
+    }
+  }
+
+  // User notifications endpoints
+  if (req.url.startsWith('/api/v1/notifications') && (req.method === 'GET' || req.method === 'PUT')) {
+    const apath = req.url.split('?')[0];
+    const sendJson = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
+    if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
+    if (apath.endsWith('/unread-count')) {
+      sendJson(200, { count: global._ladiesgo_notifications.filter(n=>!n.read).length });
       return;
     }
-    if (apath === '/api/v1/admin/notifications/list') {
-      if (!Array.isArray(global._ladiesgo_notifications)) global._ladiesgo_notifications = [];
+    if (apath === '/api/v1/notifications' || apath.endsWith('/notifications')) {
       sendJson(200, { notifications: global._ladiesgo_notifications });
+      return;
+    }
+    if (apath.endsWith('/read-all') && req.method === 'PUT') {
+      for (let i=0;i<global._ladiesgo_notifications.length;i++) global._ladiesgo_notifications[i].read = true;
+      sendJson(200, { ok: true });
       return;
     }
   }

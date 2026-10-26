@@ -1683,6 +1683,196 @@ function adminMiddleware(c: any, next: any) {
   return requireAuth(c, () => requireAdmin(c, next));
 }
 
+// POST /api/v1/admin/notifications/send — aviso no centro de notificações + push Expo
+app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const body: any = await c.req.json().catch(() => ({}));
+  const title = (String(body?.title || '').trim() || 'LadiesGo!').slice(0, 80);
+  const message = String(body?.message || body?.body || body?.text || '').trim().slice(0, 500);
+  if (!message) return c.json({ ok: false, message: 'Mensagem obrigatória.' }, 400);
+  const target = String(body?.target || 'ALL').toUpperCase();
+  const role = target === 'PASSENGERS' ? 'PASSENGER' : target === 'DRIVERS' ? 'DRIVER' : null;
+  try {
+    const recipients = role
+      ? await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`
+      : await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
+    if (!recipients.length) return c.json({ ok: true, sent: 0, pushed: 0 });
+    const data = JSON.stringify({ type: 'admin' });
+    if (role) {
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+        SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+        FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`;
+    } else {
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+        SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+        FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
+    }
+    const msgs = recipients
+      .map((r: any) => String(r.fcmToken || ''))
+      .filter((t: string) => t.indexOf('ExponentPushToken') === 0)
+      .map((to: string) => ({ to, sound: 'default', title, body: message, data: { type: 'admin' } }));
+    if (msgs.length) {
+      const send = (async () => {
+        for (let i = 0; i < msgs.length; i += 100) {
+          await fetch('https://exp.host/--/api/v2/push/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(msgs.slice(i, i + 100)),
+          }).catch(() => {});
+        }
+      })();
+      try { c.executionCtx.waitUntil(send); } catch { await send; }
+    }
+    return c.json({ ok: true, sent: recipients.length, pushed: msgs.length });
+  } catch (e: any) {
+    console.error('admin notification send error:', e);
+    return c.json({ ok: false, message: 'Falha ao enviar notificação.' }, 500);
+  }
+});
+
+// Notificações semanais programadas. Horários em Africa/Luanda (UTC+1, sem DST).
+async function deliverScheduledNotification(env: any, sql: any, target: string, title: string, message: string) {
+  const role = target === 'PASSENGERS' ? 'PASSENGER' : target === 'DRIVERS' ? 'DRIVER' : null;
+  const recipients = role
+    ? await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`
+    : await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
+  if (!recipients.length) return { sent: 0, pushed: 0 };
+  const data = JSON.stringify({ type: 'admin' });
+  if (role) {
+    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+      SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+      FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`;
+  } else {
+    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+      SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+      FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
+  }
+  const msgs = recipients
+    .map((r: any) => String(r.fcmToken || ''))
+    .filter((t: string) => t.indexOf('ExponentPushToken') === 0)
+    .map((to: string) => ({ to, sound: 'default', title, body: message, data: { type: 'admin' } }));
+  for (let i = 0; i < msgs.length; i += 100) {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(msgs.slice(i, i + 100)),
+    }).catch(() => {});
+  }
+  return { sent: recipients.length, pushed: msgs.length };
+}
+
+async function runNotificationSchedules(env: any) {
+  try {
+    const sql = neon(env.DB);
+    const rows = await sql`SELECT s.id AS "scheduleId", s.target, s.title, s.body, s."dayOfWeek",
+      sl.id AS "slotId", sl.time, sl."lastRunKey"
+      FROM notification_schedules s
+      JOIN notification_schedule_slots sl ON sl."scheduleId" = s.id
+      WHERE s.enabled = 1`;
+    const now = Date.now();
+    const local = new Date(now + 60 * 60 * 1000);
+    const y = local.getUTCFullYear();
+    const mo = local.getUTCMonth();
+    const d = local.getUTCDate();
+    const curDay = local.getUTCDay();
+    for (const r of rows) {
+      const t = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(r.time || ''));
+      if (!t) continue;
+      const slotDay = Number(r.dayOfWeek);
+      if (!Number.isInteger(slotDay) || slotDay < 0 || slotDay > 6) continue;
+      const delta = (curDay - slotDay + 7) % 7;
+      const dueUtc = Date.UTC(y, mo, d - delta, Number(t[1]), Number(t[2])) - 60 * 60 * 1000;
+      if (now < dueUtc || now >= dueUtc + 20 * 60 * 1000) continue;
+      const dateKey = new Date(Date.UTC(y, mo, d - delta)).toISOString().slice(0, 10);
+      const runKey = dateKey + 'T' + t[1] + ':' + t[2];
+      const claimed = await sql`UPDATE notification_schedule_slots SET "lastRunKey" = ${runKey}
+        WHERE id = ${r.slotId} AND ("lastRunKey" IS NULL OR "lastRunKey" <> ${runKey}) RETURNING id`;
+      if (!claimed.length) continue;
+      const message = String(r.body || '').trim().slice(0, 500);
+      if (!message) continue;
+      const title = String(r.title || '').trim().slice(0, 80) || 'LadiesGo!';
+      try {
+        await deliverScheduledNotification(env, sql, String(r.target || 'ALL'), title, message);
+        console.log('scheduled notification sent', String(r.slotId), runKey);
+      } catch (e: any) {
+        console.error('scheduled notification delivery error:', String(r.slotId), e);
+      }
+    }
+  } catch (e: any) {
+    console.error('notification schedules cron error:', e);
+  }
+}
+
+app.get('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const rows = await sql`SELECT s.id, s.target, s.title, s.body, s."dayOfWeek", s.enabled, s."createdAt",
+    sl.time, sl."lastRunKey"
+    FROM notification_schedules s
+    LEFT JOIN notification_schedule_slots sl ON sl."scheduleId" = s.id
+    ORDER BY s."createdAt" DESC, sl.time ASC LIMIT 300`;
+  const out: any[] = [];
+  const seen: Record<string, any> = {};
+  for (const r of rows) {
+    const id = String(r.id);
+    if (!seen[id]) {
+      seen[id] = { id, target: r.target, title: r.title, body: r.body, dayOfWeek: Number(r.dayOfWeek || 0), enabled: !!Number(r.enabled || 0), createdAt: r.createdAt, times: [], lastRuns: {} };
+      out.push(seen[id]);
+    }
+    if (r.time) {
+      seen[id].times.push(String(r.time));
+      if (r.lastRunKey) seen[id].lastRuns[String(r.time)] = String(r.lastRunKey);
+    }
+  }
+  return c.json({ ok: true, schedules: out });
+});
+
+app.post('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const body: any = await c.req.json().catch(() => ({}));
+  const title = String(body?.title || '').trim().slice(0, 80) || 'LadiesGo!';
+  const message = String(body?.message || body?.body || body?.text || '').trim().slice(0, 500);
+  if (!message) return c.json({ ok: false, message: 'Mensagem obrigatória.' }, 400);
+  const target = ['ALL', 'PASSENGERS', 'DRIVERS'].includes(String(body?.target || '').toUpperCase())
+    ? String(body.target).toUpperCase()
+    : 'ALL';
+  const dayOfWeek = Number(body?.dayOfWeek);
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) return c.json({ ok: false, message: 'Dia inválido.' }, 400);
+  const raw = Array.isArray(body?.times) ? body.times : [];
+  const times = [...new Set(raw.map((x: any) => String(x || '').slice(0, 5)).filter((x: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x)))].sort().slice(0, 3);
+  if (!times.length) return c.json({ ok: false, message: 'Escolhe pelo menos um horário.' }, 400);
+  const id = 'ns_' + crypto.randomUUID().slice(0, 12);
+  try {
+    await sql`INSERT INTO notification_schedules (id, target, title, body, "dayOfWeek", enabled, "createdAt", "updatedAt")
+      VALUES (${id}, ${target}, ${title}, ${message}, ${dayOfWeek}, 1, NOW(), NOW())`;
+    for (const time of times) {
+      await sql`INSERT INTO notification_schedule_slots (id, "scheduleId", time, "createdAt")
+        VALUES (${'nss_' + crypto.randomUUID().slice(0, 12)}, ${id}, ${time}, NOW())`;
+    }
+    return c.json({ ok: true, id, times });
+  } catch (e: any) {
+    try {
+      await sql`DELETE FROM notification_schedule_slots WHERE "scheduleId" = ${id}`;
+      await sql`DELETE FROM notification_schedules WHERE id = ${id}`;
+    } catch {}
+    console.error('admin notification schedule create error:', e);
+    return c.json({ ok: false, message: 'Falha ao programar notificação.' }, 500);
+  }
+});
+
+app.delete('/api/v1/admin/notifications/schedules/:id', adminMiddleware, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  await sql`DELETE FROM notification_schedule_slots WHERE "scheduleId" = ${id}`;
+  await sql`DELETE FROM notification_schedules WHERE id = ${id}`;
+  return c.json({ ok: true });
+});
+
 // GET /api/v1/admin/stats — Dashboard stats
 app.get('/api/v1/admin/stats', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
@@ -3815,7 +4005,8 @@ async function purgeTripPoints(env: any) {
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: any, env: any, _ctx: any) {
-    await purgeTripPoints(env);
+  async scheduled(event: any, env: any, _ctx: any) {
+    await runNotificationSchedules(env);
+    if (!event || event.cron === '17 3 * * *') await purgeTripPoints(env);
   },
 };

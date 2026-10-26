@@ -5,31 +5,22 @@ Instruções para agentes que trabalham neste repositório.
 ## Git
 - Fazer **sempre `git push`** depois de cada commit (decisão do dono, 2026-10-17).
 
-## Cloudflare — duas contas (e porquê)
-A conta original esgotou a quota diária do **Workers Free** (100.000 pedidos/dia, reset às 00:00 UTC → **erro 1027 / HTTP 429**). A causa foram **testes de carga** (k6 / firetest / ws-storm, ~2000 contas), **não** uso real. Para não parar a app, o **Worker da API** foi migrado para uma 2ª conta e o **Pages** ficou na conta antiga.
+## Cloudflare — conta única do projeto (2026-10-26)
+**Só se usa a conta `rererererererere670@gmail.com`** (Account ID `016a8f9ed58a5cd10e9be697944905f0`).
 
-| Função | Conta | Email | Account ID |
-|---|---|---|---|
-| **API Worker** (novo, em espera) | nova | `isabelcanjamba62@gmail.com` | `2ebfcbf70c6ea8d2b84130041528e249` |
-| **API Worker + Pages** (ATIVA) | antiga | `fddsfds45@gmail.com` | `5c66df87ffad64dbf294a55663baa0d4` |
+| O que | Onde |
+|---|---|
+| **Pages (produção)** | `https://ladiesgo.pages.dev` — projeto `ladiesgo` |
+| **Worker estático** | `https://ladiesgo.rererererererere670.workers.dev` (nome `ladiesgo`) |
 
-- **ESTADO ATUAL (2026-10-22): a produção está na conta ANTIGA.**
-  Todos os clientes (webapp + app nativa) apontam para `https://ladiesgo-api.ladiesgo-ao.workers.dev`
-  e o Worker lá publicado é o que tem o código mais recente (ver `/api/v1/health`, que devolve `budget`).
-  A conta nova (`ladiesgo-angola`) está em espera: o `wrangler.newaccount.toml` aponta para lá.
-  **Publicar na conta errada = o fix não chega aos utilizadores.**
-- API ativa: `https://ladiesgo-api.ladiesgo-ao.workers.dev` (D1 `ladiesgo` id `84893b8b-5661-4fbc-a6aa-810ffbc1ab38`)
-- API nova (em espera): `https://ladiesgo-api.ladiesgo-angola.workers.dev` (D1 id `ea61eb36-483c-484f-b364-f82c844c0b30`)
-- Pages: `https://ladiesgo.pages.dev`
-- Passos de rollback/migração: ver `cloudflare/README.md` (secção 4).
-
-## Regras Cloudflare (importantes)
-- **Nunca** correr `wrangler logout` — revoga o token e obriga a novo login. Para alternar contas:
-  `powershell -ExecutionPolicy Bypass -File cloudflare\use-account.ps1 old` (Pages) ou `new` (API).
-- **Nunca** correr testes de carga contra produção. Usar staging ou a 2ª conta.
-- Publicar **Worker/API (conta ativa = antiga)**: `cd cloudflare/api-worker` e `wrangler deploy --env=""`
-  (o `wrangler.toml` da raiz do api-worker é a conta antiga; `--config wrangler.newaccount.toml` é a conta nova, hoje em espera).
-- Publicar **Pages**: `cloudflare\use-account.ps1 old` e depois `wrangler pages deploy . --project-name=ladiesgo` a partir de `webapp/`.
+- **Não publicar** nas contas `fddsfds45@gmail.com` nem `isabelcanjamba62@gmail.com`.
+- **Exceção legada:** o Worker/API `https://ladiesgo-api.ladiesgo-ao.workers.dev` ainda vive na conta `fddsfds45` (`5c66df87ffad64dbf294a55663baa0d4`) e é o URL que os clientes usam. Só esse Worker pode ser publicado fora da conta `rerere…` até a API ser migrada; mais nada.
+- O login do wrangler deve ficar na conta `rerere…` (`~/.wrangler/config/default.rerere670account.toml`).
+- **Nunca** correr `wrangler logout` — revoga o token e obriga a novo login.
+- **Nunca** correr testes de carga contra produção.
+- Publicar **Pages**: a partir de `webapp/`, `wrangler pages deploy . --project-name=ladiesgo --branch=main --commit-dirty=true`.
+- Publicar **Worker estático**: a partir de `webapp/`, `wrangler deploy --name ladiesgo`.
+- Publicar **Worker/API (legado)**: a partir de `cloudflare/api-worker`, `wrangler deploy` (apenas enquanto a API não estiver migrada para a conta `rerere…`).
 
 ## Verificações HTTPS
 - PowerShell 5.1 / `curl` têm TLS quebrado para `*.workers.dev` (schannel). Usar `node`, ex.:
@@ -67,6 +58,8 @@ Regras para nao repetir:
 - Preferir `wrangler d1 migrations apply` (incremental) a reimportar o dump completo.
 
 ## Tokens de login (cuidado com o use-account.ps1)
+**Conta oficial:** `rerere…` — token em `~/.wrangler/config/default.rerere670account.toml`.
+`use-account.ps1 old/new` é **legado** (contas antiga/nova); não usar para Pages.
 `use-account.ps1` copia `default.<conta>account.toml` -> `default.toml`, mas o wrangler **renova e
 RODA** o token dentro de `default.toml` e NAO o escreve de volta no ficheiro da conta. Logo, trocar
 de conta depois de um refresh restaura um token antigo e o login passa a dar
@@ -74,17 +67,17 @@ de conta depois de um refresh restaura um token antigo e o login passa a dar
 Boas praticas: antes de trocar de conta copiar `default.toml` -> `default.<conta>account.toml`;
 em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).
 
-## Estado de produção (resumo operacional)
-- Conta nova (isabel): escritas bloqueadas até 00:00 UTC. Leituras OK. Fase 1a 348f7ff deployada.
-- Após 00:00 UTC: aplicar migrations/0008_places_fts.sql na D1 remota (new account).
-- Smoke test guest/register/toggle-online: 500→200/201 com reset.
-- Conta antiga (ladiesgo-ao): 429 Error 1027 (Workers req/dia) — manter inativa.
-- Webapp aponta para conta nova; Pages OK.
+## Estado de produção (2026-10-26)
+- **Site:** `https://ladiesgo.pages.dev` (Pages) e `https://ladiesgo.rererererererere670.workers.dev` (Worker estático) — conta `rerere…`, atualizados.
+- **API:** `https://ladiesgo-api.ladiesgo-ao.workers.dev` — conta `fddsfds45` (legado); é o URL usado pelos clientes até a migração para `rerere…`.
+- **Base de dados:** D1 `ladiesgo` (`84893b8b-5661-4fbc-a6aa-810ffbc1ab38`) na conta `fddsfds45`.
+- **Mobile:** carrega `https://ladiesgo.pages.dev/ladiesgo` e usa a API acima.
 
-## Fase 1 — Estabilização Imediata (concluída em código, pendente deploy)
+## Fase 1 — histórico (2026-10-17; NÃO usar para deploy)
+- Notas da conta `isabelcanjamba62` (em espera/desativada). **Não publicar nessa conta.**
 - **Rate limiting HTTP:** 100 req/min por IP em `/api/*` (sliding window, em memória por isolate). `/ping`, `/api/v1/health` e `/api/v1/auth/guest` estão isentos.
 - **Backdoor admin removido:** `999999999` / `1234567890` não entra mais como ADMIN. Qualquer admin deve existir na BD com `role='ADMIN'` e autenticar normalmente.
-- **JWT_SECRET:** definir novo segredo via `wrangler secret put JWT_SECRET --config wrangler.newaccount.toml`. Não usar o valor de `.dev.vars` em produção.
-- **Variáveis novas:** `RATE_LIMIT_MAX=100`, `RATE_LIMIT_WINDOW_MS=60000` em `wrangler.newaccount.toml`.
-- **Deploy:** `cd cloudflare/api-worker && wrangler deploy --config wrangler.newaccount.toml` (conta nova, NUNCA wrangler logout).
+- **JWT_SECRET:** `wrangler secret put JWT_SECRET` no Worker/API legado (conta `fddsfds45`); repetir na conta `rerere…` depois da migração. Não usar o valor de `.dev.vars` em produção.
+- **Variáveis novas:** `RATE_LIMIT_MAX=100`, `RATE_LIMIT_WINDOW_MS=60000` no `wrangler.toml` do Worker/API legado.
+- **Deploy (legado):** `cd cloudflare/api-worker` + `wrangler deploy` (conta `fddsfds45`); nunca `wrangler logout`.
 - **Smoke test:** `GET /api/v1/health` deve retornar 200; `POST /api/v1/auth/login` com `999999999` deve retornar 401 (backdoor removido).

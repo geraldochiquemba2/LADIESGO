@@ -19,35 +19,23 @@ wrangler pages deploy webapp --project-name=ladiesgo
 ```
 
 ## 3. Mobile
-`EXPO_PUBLIC_API_URL=https://ladiesgo-api.ladiesgo-angola.workers.dev/api/v1` (em `mobile/eas.json`; trocar para `https://api.ladiesgo.ao/api/v1` quando o domínio .ao existir com custom domain no Worker).
+`EXPO_PUBLIC_API_URL=https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1` (em `mobile/eas.json`; API legada na conta `fddsfds45`; trocar para `https://api.ladiesgo.ao/api/v1` quando o domínio .ao existir).
 GPS adaptativo: 5s/10m em viagem, 10s/20m online (ver `mobile/src/services/driverBgLocation.ts`).
 Sem socket obrigatório: REST polling em `GET /trips/:id` devolve motorista+ETA.
 
-## 4. Conta Cloudflare ativa (2026-10-17) — registo e como reverter
+## 4. Conta Cloudflare (2026-10-26) — apenas `rerere…`
+O projeto usa **só** a conta `rererererererere670@gmail.com` (Account ID `016a8f9ed58a5cd10e9be697944905f0`).
 
-**Motivo:** a conta antiga esgotou a quota diaria de Workers Free (100.000 pedidos/dia, erro 1027 / HTTP 429). A API e a base de dados D1 foram migradas para uma 2ª conta Cloudflare (plano Free, quota nova).
+- Pages: `https://ladiesgo.pages.dev` (projeto `ladiesgo`)
+- Worker estático: `https://ladiesgo.rererererererere670.workers.dev` (nome `ladiesgo`)
+- Deploy Pages: `cd webapp` + `wrangler pages deploy . --project-name=ladiesgo --branch=main --commit-dirty=true`
+- Deploy Worker estático: `cd webapp` + `wrangler deploy --name ladiesgo`
+- Token: `~/.wrangler/config/default.rerere670account.toml`; **nunca** `wrangler logout`.
 
-**Conta NOVA (ativa):**
-- Email: `isabelcanjamba62@gmail.com`
-- Account ID: `2ebfcbf70c6ea8d2b84130041528e249`
-- Subdominio workers.dev: `ladiesgo-angola`
-- Worker/API: `https://ladiesgo-api.ladiesgo-angola.workers.dev`
-- D1: `ladiesgo` (id `ea61eb36-483c-484f-b364-f82c844c0b30`)
-- Deploy do Worker: `cd cloudflare/api-worker` + `wrangler deploy --config wrangler.newaccount.toml`
-
-**Conta ANTIGA (neutralizada ate a quota reiniciar ~01:00 Angola):**
-- Email: `fddsfds45@gmail.com`
-- Account ID: `5c66df87ffad64dbf294a55663baa0d4`
-- Worker/API: `https://ladiesgo-api.ladiesgo-ao.workers.dev`
-- Subdominio: `ladiesgo-ao`
-- D1: `ladiesgo` (id `84893b8b-5661-4fbc-a6aa-810ffbc1ab38`)
-- O Pages (`ladiesgo.pages.dev`) continua nesta conta — é estatico, gratuito e ilimitado (nao consome a quota).
-
-**Como VOLTAR AO NORMAL (para a conta antiga):**
-1. Em `webapp/*.html` e `mobile/**`, trocar `ladiesgo-api.ladiesgo-angola.workers.dev` -> `ladiesgo-api.ladiesgo-ao.workers.dev`.
-2. `wrangler login` na conta antiga (`fddsfds45@gmail.com`) + `wrangler pages deploy webapp --project-name=ladiesgo` (o Pages pertence a essa conta).
-3. Mobile: ajustar `EXPO_PUBLIC_API_URL` em `mobile/eas.json` e gerar novo build (EAS).
-4. Cada ficheiro alterado tem um comentario `>> LADIESGO 2026-10-17` a marcar o ponto exato.
+**Legado (não publicar):**
+- `fddsfds45@gmail.com` (`5c66df87ffad64dbf294a55663baa0d4`): ainda aloja o Worker/API `https://ladiesgo-api.ladiesgo-ao.workers.dev` (D1 `ladiesgo`, `84893b8b-5661-4fbc-a6aa-810ffbc1ab38`) usado pelos clientes. Só este Worker pode ser publicado fora da conta `rerere…`, até a API ser migrada.
+- `isabelcanjamba62@gmail.com` (`2ebfcbf70c6ea8d2b84130041528e249`): conta em espera/desativada — não usar.
+- `ladiesgo-bh1.pages.dev` pertence à conta antiga; não é produção.
 
 **Backup / import:**
 - `C:\Users\Geraldo\backup-prod.sql` — export D1 de produção (utilizadoras reais).
