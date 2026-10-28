@@ -25,7 +25,7 @@ namespace_id = "1001"
 [[d1_databases]]
 binding = "DB"
 database_name = "ladiesgo"
-database_id = "84893b8b-5661-4fbc-a6aa-810ffbc1ab38"
+database_id = "fab720b7-d96e-423f-8454-bcc9942f6d50"
 migrations_dir = "migrations"
 
 [durable_objects]

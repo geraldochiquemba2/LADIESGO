@@ -7,8 +7,9 @@
 - **Cidade:** Luanda, Angola
 - **Idioma da UI:** Português (pt-PT), tratamento informal ("tu")
 - **Site/App web:** https://ladiesgo.pages.dev
-- **API:** https://ladiesgo-api.ladiesgo-ao.workers.dev (legado na conta `fddsfds45`)
-- **Conta Cloudflare oficial:** `rererererererere670@gmail.com` (Pages + Worker estático); não usar as contas antigas.
+- **API:** https://ladiesgo-api.rererererererere670.workers.dev (conta `rerere…`)
+- **Base de dados:** D1 `ladiesgo` (conta `rerere…`)
+- **Conta Cloudflare oficial:** `rererererererere670@gmail.com` — Pages, worker estático, API e D1; não usar as contas antigas.
 
 ## Público-alvo (ICP)
 - Mulheres em Luanda que precisam de transporte seguro
@@ -24,7 +25,7 @@
 - Em operação / MVP em Luanda
 - App web estática (HTML + JS, sem build step) servida no Cloudflare Pages
 - App nativa Expo/React Native é casca WebView que carrega a webapp
-- Backend: Cloudflare Workers + Hono + Neon/PostgreSQL (D1)
+- Backend: Cloudflare Workers + Hono + D1 (SQLite)
 
 ## Concorrência
 - Uber, Bolt (gerais, não exclusivos para mulheres)

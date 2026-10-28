@@ -48,8 +48,11 @@ export default function TrackDriverScreen({ navigation }: any) {
 
   const latestMyLoc = useRef<{ lat: number; lng: number } | null>(null);
   const driverLocRef = useRef<{ lat: number; lng: number } | null>(null);
+  const prevDriverLocRef = useRef<{ lat: number; lng: number } | null>(null);
   const tripStatusRef = useRef<string>(currentTrip?.status || 'ACCEPTED');
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastHeadingRef = useRef<number>(0);
+  const headingSmoothRef = useRef<number>(0);
 
   // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
   const [mapStyle, setMapStyle] = useState(MAP_STYLE);
@@ -127,9 +130,41 @@ export default function TrackDriverScreen({ navigation }: any) {
       // Receive driver's real-time location
       socketService.on('server:driver-location', (data) => {
         const dLoc = { lat: data.lat, lng: data.lng };
+        const prevD = prevDriverLocRef.current;
         driverLocRef.current = dLoc;
         setDriverLocation(dLoc);
-        setDriverHeading(data.heading ?? -1);
+
+        let targetH: number | null = null;
+        const h = data.heading;
+        if (typeof h === 'number' && isFinite(h) && h >= 0 && h <= 360) {
+          targetH = normalizeHeading(h);
+        }
+        if (prevD) {
+          const d = distMeters(prevD, dLoc);
+          if (d > 1.0) {
+            const bh = bearing(prevD, dLoc);
+            if (targetH === null) {
+              targetH = bh;
+            } else {
+              const delta = Math.abs(shortestHeadingDelta(targetH, bh));
+              if (delta > 20) {
+                targetH = bh;
+              } else {
+                targetH = lerpHeading(targetH, bh, 0.5);
+              }
+            }
+          }
+        }
+        if (targetH === null) {
+          targetH = headingSmoothRef.current >= 0 ? headingSmoothRef.current : lastHeadingRef.current;
+        }
+        const base = headingSmoothRef.current >= 0 ? headingSmoothRef.current : (lastHeadingRef.current >= 0 ? lastHeadingRef.current : targetH);
+        const smoothed = lerpHeading(base, targetH, 0.25);
+        headingSmoothRef.current = smoothed;
+        lastHeadingRef.current = smoothed;
+        setDriverHeading(smoothed);
+        prevDriverLocRef.current = dLoc;
+
         setEta({ minutes: data.etaMinutes, distanceKm: data.distanceKm });
         setEtaSeconds(data.etaMinutes * 60);
         dispatch(updateDriverLocation({ lat: data.lat, lng: data.lng }));
@@ -215,7 +250,7 @@ export default function TrackDriverScreen({ navigation }: any) {
       otherUserId: driver?.userId || driver?.user?.id,
     });
   };
-  const carRotation = driverHeading >= 0 ? driverHeading : 0;
+  const carRotation = normalizeHeading(driverHeading >= 0 ? driverHeading : (headingSmoothRef.current >= 0 ? headingSmoothRef.current : lastHeadingRef.current));
 
   return (
     <View style={styles.container}>

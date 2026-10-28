@@ -20,7 +20,7 @@ TEST ACCOUNTS - no SMS needed, ready in production:
 2. Driver (women only): +244923000002 / 1234567890
    - Already APPROVED > tap Online > accept the passenger's trip.
 
-Backend (Cloudflare Workers + D1): https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1
+Backend (Cloudflare Workers + D1): https://ladiesgo-api.rererererererere670.workers.dev/api/v1
 
 Background location: only active when the driver taps Online, to keep sharing position with the passenger while Waze / Maps is open. Stops on Offline.
 

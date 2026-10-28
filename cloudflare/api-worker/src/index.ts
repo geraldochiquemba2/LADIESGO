@@ -1187,7 +1187,7 @@ app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
   const rows = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = ${String(reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
   pushStatus(c, c.req.param('id'), 'CANCELLED');
-  hubPoke(c);
+  try { await hubBroadcast(c.env); } catch {}
   return c.json(rows[0]);
 });
 
@@ -2691,7 +2691,7 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
     }
     pushStatus(c, id, neonSt);
     if (neonSt === 'DRIVER_ARRIVED') { try { c.executionCtx.waitUntil(pushPaxArrived(c.env, id)); } catch {} }
-    if (neonSt === 'ACCEPTED' || neonSt === 'CANCELLED') hubPoke(c);
+    if (neonSt === 'ACCEPTED' || neonSt === 'CANCELLED') { try { await hubBroadcast(c.env); } catch {} }
     return c.json({ ok: true, status: st });
   } catch (e) {
     console.error('trip status error:', e);

@@ -12,7 +12,7 @@ const ACTIVE_TRIP_KEY = 'lg_driver_active_trip';
 const LAST_SEND_KEY = 'lg_driver_last_send';
 
 // >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA; usar conta antiga em produção.
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.rererererererere670.workers.dev/api/v1';
 const API_ORIGIN = API_URL.replace(/\/api\/v1\/?$/, '');
 
 export async function setDriverActiveTrip(active: boolean): Promise<void> {

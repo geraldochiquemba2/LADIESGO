@@ -27,7 +27,7 @@ O ficheiro mais importante é **`ladiesgo-home.html`** (~250 KB) — quase toda 
 
 ## Como fala com a API
 - No topo de **cada** HTML há um *fetch patch* que reescreve `/api/*` para o Worker:
-  `var A='https://ladiesgo-api.ladiesgo-ao.workers.dev'` (API legada na conta `fddsfds45`).
+  `var A='https://ladiesgo-api.rererererererere670.workers.dev'` (API na conta `rerere…`).
 - Em `localhost` (via `node server.js`) o `/api/*` é servido localmente.
 - **Se o host da API mudar de novo**, há que trocar essa constante em **todos** os HTML de `webapp/` **e** em `mobile/` (ver `cloudflare/README.md` §4).
 - Base das rotas da API: `/api/v1/...` (auth, users, drivers, trips, ratings, turn).
@@ -80,7 +80,7 @@ $env:CLOUDFLARE_ACCOUNT_ID='016a8f9ed58a5cd10e9be697944905f0'
 
 ## Convenções / cuidados
 - **Sem comentários novos** salvo os de rollback.
-- Alterações de "voltar ao normal" (migração de conta) estão marcadas com `>> LADIESGO 2026-10-17` nos HTML; passos completos em `cloudflare/README.md` §4.
+- O host da API (constante `A=` + WebSockets `wss://`) é o da conta `rerere…`; ver `cloudflare/README.md` §4.
 - Não pôr segredos no webapp — o host da API é público por design. Segredos vivem no Worker (`cloudflare/api-worker/.secrets`/`wrangler secret`).
 - Ao mudar a API no topo do HTML, actualizar **todos** os HTML (o patch está repetido em cada um).
 - Verificações HTTPS a `*.workers.dev` a partir do PowerShell/curl falham (TLS schannel): usar `node`.

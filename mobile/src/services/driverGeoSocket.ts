@@ -4,8 +4,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_URL =
-  // >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA (ladiesgo-angola); a conta antiga ladiesgo-ao esgotou a quota de Workers (erro 1027). VOLTAR AO NORMAL = trocar "ladiesgo-api.ladiesgo-ao.workers.dev" por "ladiesgo-api.ladiesgo-ao.workers.dev" e gerar novo build. Ver cloudflare/README.md
-  process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
+  // >> LADIESGO 2026-10-28: API + BD na conta Cloudflare rerere… (ladiesgo-api.rererererererere670.workers.dev). Ver cloudflare/README.md
+  process.env.EXPO_PUBLIC_API_URL || 'https://ladiesgo-api.rererererererere670.workers.dev/api/v1';
 const WS_URL = API_URL.replace(/^http/, 'ws') + '/drivers/live-geo';
 
 let ws: WebSocket | null = null;

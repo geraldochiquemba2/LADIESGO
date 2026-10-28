@@ -20,3 +20,6 @@ mobile/store-screenshots/
 .dev.vars*
 !.dev.vars.example
 !.env.example
+
+# backups locais
+ladiesgo-home.bak.html

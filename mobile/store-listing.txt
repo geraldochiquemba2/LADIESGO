@@ -3,8 +3,8 @@ LADIESGO! — FICHA DE LOJA (Play Store + App Store)
 Pacote/Bundle: com.ladiesgo.app (slug/scheme ladiesgo — não mudar)
 Nome loja + binário: LadiesGo!
 Versão: 1.0.0 (build iOS 5 via EAS, autoIncrement no EAS production)
-# >> LADIESGO 2026-10-17: API movida para a conta Cloudflare nova (ladiesgo-api.ladiesgo-ao.workers.dev); conta antiga ladiesgo-api.ladiesgo-ao.workers.dev esgotou quota de Workers (erro 1027).
-API produção: https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1
+# >> LADIESGO 2026-10-28: API + BD na conta Cloudflare rerere… (ladiesgo-api.rererererererere670.workers.dev).
+API produção: https://ladiesgo-api.rererererererere670.workers.dev/api/v1
 Site/app web: https://ladiesgo.pages.dev/ladiesgo (a app iOS é WebView disto)
 Cor marca: #61188E
 

@@ -50,7 +50,10 @@ export default function ActiveTripScreen({ navigation, route }: any) {
   const [pin, setPin] = useState('');
 
   const latestMyLoc = useRef<{ lat: number; lng: number } | null>(null);
+  const prevMyLocRef = useRef<{ lat: number; lng: number } | null>(null);
   const statusRef = useRef<TripStatus>((trip.status as TripStatus) || 'ACCEPTED');
+  const lastHeadingRef = useRef<number>(0);
+  const headingSmoothRef = useRef<number>(0);
 
   // Estilo do mapa com fallback (estratégia da web: OSM -> CARTO).
   const [mapStyle, setMapStyle] = useState(MAP_STYLE);
@@ -143,16 +146,51 @@ export default function ActiveTripScreen({ navigation, route }: any) {
       sub = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.BestForNavigation,
-          timeInterval: 5000,
-          distanceInterval: 10, // only fire when moved ≥ 10 m
+          timeInterval: 2000,
+          distanceInterval: 2,
         },
         (loc) => {
           const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-          const h = loc.coords.heading ?? -1;
+          const prevP = prevMyLocRef.current;
+          let targetH: number | null = null;
+
+          const devH = loc.coords.heading;
+          if (typeof devH === 'number' && isFinite(devH) && devH >= 0 && devH <= 360) {
+            targetH = normalizeHeading(devH);
+          }
+
+          if (prevP) {
+            const d = distMeters(prevP, pos);
+            if (d > 1.0) {
+              const bh = bearing(prevP, pos);
+              if (targetH === null) {
+                targetH = bh;
+              } else {
+                const delta = Math.abs(shortestHeadingDelta(targetH, bh));
+                if (delta > 20) {
+                  targetH = bh;
+                } else {
+                  targetH = lerpHeading(targetH, bh, 0.5);
+                }
+              }
+            }
+          }
+
+          if (targetH === null) {
+            targetH = headingSmoothRef.current >= 0 ? headingSmoothRef.current : lastHeadingRef.current;
+            if (targetH < 0 || targetH > 360) targetH = 0;
+          }
+
+          const base = headingSmoothRef.current >= 0 ? headingSmoothRef.current : (lastHeadingRef.current >= 0 ? lastHeadingRef.current : targetH);
+          const smoothed = lerpHeading(base, targetH, 0.25);
+          headingSmoothRef.current = smoothed;
+          lastHeadingRef.current = smoothed;
+
           latestMyLoc.current = pos;
+          prevMyLocRef.current = pos;
           setMyLocation(pos);
-          setHeading(h);
-          socketService.emit('driver:location-update', { ...pos, heading: h });
+          setHeading(smoothed);
+          socketService.emit('driver:location-update', { ...pos, heading: smoothed });
           const now = Date.now();
           if (now - lastRestTs >= 5000) {
             lastRestTs = now;
@@ -257,7 +295,7 @@ export default function ActiveTripScreen({ navigation, route }: any) {
 
   const action = ACTION_MAP[status];
   const passenger = trip.passenger;
-  const carRotation = heading >= 0 ? heading : 0;
+  const carRotation = normalizeHeading(heading >= 0 ? heading : (headingSmoothRef.current >= 0 ? headingSmoothRef.current : lastHeadingRef.current));
 
   const handleSOS = () => {
     Alert.alert('Emergência', 'Ligar para emergência em Angola?', [
@@ -737,3 +775,5 @@ const styles = StyleSheet.create({
   },
   pinConfirmText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
 });
+
+function toRad(d: number){return d*Math.PI/180} function toDeg(r: number){return r*180/Math.PI} function bearing(a:any,b:any){const lat1=toRad(a.lat),lat2=toRad(b.lat),dLng=toRad(b.lng-a.lng);const y=Math.sin(dLng)*Math.cos(lat2);const x=Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLng);let brng=toDeg(Math.atan2(y,x));return (brng+360)%360;} function distMeters(a:any,b:any){const R=6371000,dLat=toRad(b.lat-a.lat),dLng=toRad(b.lng-a.lng);const s=Math.sin(dLat/2)**2+Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));} function normalizeHeading(h:number){return ((h%360)+360)%360} function shortestHeadingDelta(f:number,t:number){let d=normalizeHeading(t)-normalizeHeading(f);if(d>180)d-=360;if(d<-180)d+=360;return d;} function lerpHeading(f:number,t:number,a:number){const from=normalizeHeading(f),delta=shortestHeadingDelta(from,t);return normalizeHeading(from+delta*Math.max(0,Math.min(1,a)));}

@@ -16,8 +16,8 @@ import { BG_LOCATION_TASK } from './src/services/bgLocation';
 // ?v= rebenta a cache da WebView: sem isto o iOS servia o HTML antigo
 // e as melhorias do mapa não apareciam. Aumenta a cada deploy do site.
 const SITE_URL = 'https://ladiesgo.pages.dev/ladiesgo?v=20261027';
-// >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA (ladiesgo-angola); a conta antiga ladiesgo-ao esgotou a quota de Workers (erro 1027). VOLTAR AO NORMAL = trocar "ladiesgo-api.ladiesgo-ao.workers.dev" por "ladiesgo-api.ladiesgo-ao.workers.dev" e gerar novo build. Ver cloudflare/README.md
-const API_URL = 'https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1';
+// >> LADIESGO 2026-10-17: API na CONTA CLOUDFLARE NOVA (ladiesgo-angola); a conta antiga ladiesgo-ao esgotou a quota de Workers (erro 1027). VOLTAR AO NORMAL = trocar "ladiesgo-api.rererererererere670.workers.dev" por "ladiesgo-api.rererererererere670.workers.dev" e gerar novo build. Ver cloudflare/README.md
+const API_URL = 'https://ladiesgo-api.rererererererere670.workers.dev/api/v1';
 const EAS_PROJECT_ID = 'ec5885e0-c677-4023-b65a-6642fe20f3fd';
 
 Notifications.setNotificationHandler({

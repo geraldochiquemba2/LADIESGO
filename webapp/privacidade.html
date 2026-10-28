@@ -2,8 +2,8 @@
 <html lang="pt">
 <head>
 <script>/* LadiesGo: /api/* -> Worker (Pages é estático; em localhost usa o server.js local) */
-/* >> LADIESGO 2026-10-17: API movida para a CONTA CLOUDFLARE NOVA (subdominio ladiesgo-angola) porque a conta antiga (ladiesgo-ao) esgotou a quota diaria de Workers Free (erro 1027 / HTTP 429). VOLTAR AO NORMAL = trocar ladiesgo-api.ladiesgo-ao.workers.dev por ladiesgo-api.ladiesgo-ao.workers.dev e re-deployar o Pages. Ver cloudflare/README.md */
-!function(){var A='https://ladiesgo-api.ladiesgo-ao.workers.dev',h=location.hostname;var o=window.fetch;window.fetch=function(u,x){try{if(typeof u==='string'){if(u.indexOf('/api/')===0)u=A+u;}else if(u instanceof Request){var p=new URL(u.url,location.href);if(p.origin===location.origin&&p.pathname.indexOf('/api/')===0)u=new Request(A+p.pathname+p.search,u);}}catch(e){}return o.call(this,u,x);};}();</script>
+/* >> LADIESGO 2026-10-28: API + BD na conta Cloudflare rerere… (ladiesgo-api.rererererererere670.workers.dev). Ver cloudflare/README.md §4 */
+!function(){var A='https://ladiesgo-api.rererererererere670.workers.dev',h=location.hostname;var o=window.fetch;window.fetch=function(u,x){try{if(typeof u==='string'){if(u.indexOf('/api/')===0)u=A+u;}else if(u instanceof Request){var p=new URL(u.url,location.href);if(p.origin===location.origin&&p.pathname.indexOf('/api/')===0)u=new Request(A+p.pathname+p.search,u);}}catch(e){}return o.call(this,u,x);};}();</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#5b21c9">
