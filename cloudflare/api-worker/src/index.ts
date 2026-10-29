@@ -7,7 +7,7 @@ import { newBucket, tryConsume } from './ratelimit';
 import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
 import { bumpRequest, budgetState, writeGuard } from './budget';
 
-type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -264,6 +264,15 @@ app.get('/debug/geo', (c) => {
   const key = c.env.DEBUG_KEY as string | undefined;
   if (!key || c.req.query('key') !== key) return c.json({ message: 'Not found.' }, 404);
   return c.json({ ...geoMetrics });
+});
+// Dispara o cron de notificações à mão. Só existe em staging (o cron real só corre
+// em produção); em qualquer outro ambiente devolve 404.
+app.post('/api/v1/debug/cron/notifications', async (c) => {
+  const key = c.env.DEBUG_KEY as string | undefined;
+  if (!key || c.req.query('key') !== key) return c.json({ message: 'Not found.' }, 404);
+  if (String(c.env.ENVIRONMENT || '') !== 'staging') return c.json({ message: 'Not found.' }, 404);
+  await runNotificationSchedules(c.env);
+  return c.json({ ok: true });
 });
 
 // ─── AUTH ───

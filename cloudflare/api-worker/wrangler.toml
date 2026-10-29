@@ -65,14 +65,16 @@ new_sqlite_classes = ["NotifHub"]
 # (em dev: põe as mesmas chaves em .dev.vars, ficheiro ignorado pelo git)
 
 # ============================================================================
-# STAGING — ambiente isolado para os testes de fogo (Worker + D1 + DOs proprios)
+# STAGING — ambiente isolado para os testes de fogo (Worker + D1 + DOs próprios)
 # ============================================================================
-# Deploy:      npx wrangler@4.151.1 deploy --env staging
+# D1 (só 1x):  npx wrangler@4.151.1 d1 create ladiesgo-staging
+#              -> copiar o database_id para [[env.staging.d1_databases]]
 # D1 migrar:   npx wrangler@4.151.1 d1 migrations apply ladiesgo-staging --remote --env staging
 # Segredos:    npx wrangler@4.151.1 secret put JWT_SECRET --env staging
 #              npx wrangler@4.151.1 secret put DEBUG_KEY  --env staging   (ativa /debug/*)
-# Limpar dados: POST https://ladiesgo-api-staging.<sub>.workers.dev/api/v1/debug/d1/reset
-# URL:         https://ladiesgo-api-staging.<sub>.workers.dev  (a base REST e /api/v1)
+# Deploy:      npx wrangler@4.151.1 deploy --env staging
+# URL:         https://ladiesgo-api-staging.<sub>.workers.dev  (a base REST é /api/v1)
+# Limpar dados: ficheiro SQL de DELETEs (o /debug/d1/reset só repõe contadores).
 [env.staging]
 name = "ladiesgo-api-staging"
 main = "src/index.ts"
@@ -81,11 +83,18 @@ compatibility_date = "2025-06-01"
 [env.staging.vars]
 JWT_EXPIRES_IN = "7d"
 ENVIRONMENT = "staging"
+RATE_LIMIT_MAX = "1000"
+RATE_LIMIT_WINDOW_MS = "60000"
+
+# Staging não tem cron: o agendador é exercitado à mão por
+# POST /api/v1/debug/cron/notifications?key=<DEBUG_KEY>.
+[env.staging.triggers]
+crons = []
 
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "ladiesgo-staging"
-database_id = "e8138ecd-5fa4-4a81-afa1-5f23e6b07045"
+database_id = "7e0cf0fd-527f-4e51-8e30-c93a55abddea"
 migrations_dir = "migrations"
 
 [env.staging.durable_objects]
