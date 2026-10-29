@@ -324,6 +324,44 @@ A partir daqui **não voltar a apontar `API_URL` para a conta antiga** nem insta
 - Só depois de um build com token real é que os pushes acima chegam ao telemóvel. Sem token na BD, o servidor
   não tem para onde enviar (a motorista real não tem `fcmToken`).
 
+## App Store — build e submissão (2026-10-29)
+**O build iOS não é EAS.** É GitHub Actions (`.github/workflows/build-ios.yml`): `expo prebuild` + Xcode +
+fastlane (`mobile/fastlane/Fastfile`, lane `release`), que faz cert/sigh/build e `upload_to_testflight`.
+O fastlane **só envia para o TestFlight** — a submissão para revisão é feita à parte, pela API do ASC.
+
+- **Build number = `github.run_number`** (`BUILD_NUMBER`). A marketing version vem de `mobile/app.json`
+  (`expo.version`). **Subir a versão no `app.json` já lança um build** — o workflow dispara em push que toque
+  `.github/workflows/build-ios.yml`, `mobile/fastlane/**` ou `mobile/app.json` (ou `workflow_dispatch`).
+- **`EXPO_PUBLIC_API_URL` do workflow tem de ser a rerere.** Esteve em
+  `ladiesgo-api.ladiesgo-angola.workers.dev` (conta legada) até `f64847d`; um build a partir dali punha o URL
+  antigo em `src/services/api.ts` (GPS em fundo). O `App.tsx` já tinha o URL da rerere escrito à mão, mas
+  não contar com isso.
+- **`concurrency: ios-build` (`ab22452`)** — dois builds em paralelo correm `sigh(force: true)` sobre o mesmo
+  App ID e um **revoga o perfil de provisionamento** do outro. Só protege runs futuros: runs que já estavam
+  na fila com o ficheiro antigo continuam a correr.
+- **Vários builds com a mesma marketing version:** ficam todos `VALID` no ASC. Ligar à versão **o número
+  certo** — em 2026-10-29 o run #14 saiu com o URL legado e o #15 com o correcto.
+- **`gh` CLI não existe nesta máquina.** Os runs vêem-se pela web ou pela API pública do GitHub
+  (`/repos/geraldochiquemba2/LADIESGO/actions/runs`); **cancelar** um run exige token.
+
+Estado das versões iOS:
+| Versão | Build | Estado |
+|---|---|---|
+| 1.0 | #18 | `READY_FOR_SALE` |
+| 1.0.1 | #11 | `READY_FOR_SALE` (libertada em 2026-10-29; push ainda quebrado — build sem o plugin) |
+| 1.0.2 | #15 | criada `e20b7ec7-3d6d-415b-bfa5-41f0f227c166`, release **MANUAL** |
+
+- **Uma versão aprovada tranca o build**: não se troca o build da 1.0.1 depois de aprovada, é preciso versão
+  nova. E **enquanto uma versão está `PENDING_DEVELOPER_RELEASE` não se pode criar outra** — HTTP **409**
+  `ENTITY_ERROR.RELATIONSHIP.INVALID` "You cannot create a new version of the App in the current state".
+  Liberta-se primeiro com `POST /v1/appStoreVersionReleaseRequests`.
+- **Criar versão pela API copia sozinho** as localizações **e** os conjuntos de screenshots da anterior.
+  Só falta preencher `whatsNew` e ligar o build.
+- Submissão: `POST /v1/reviewSubmissions` → `POST /v1/reviewSubmissionItems` → `PATCH submitted:true`
+  (script `%TEMP%\opencode\asc-submit-102.mjs`, que exige o número do build quando há mais de um candidato).
+- A chave ASC (`6CQX832WVJ`, issuer `92705617-…`) foi colada no chat a 2026-10-29: **está comprometida**.
+  Revogar e criar outra com papel **App Manager**, actualizando `mobile/eas.json` (linhas 42–44).
+
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).
 - O webapp usa **WebSocket primeiro** com polling de fallback (`pollTrip` 8s), por isso o uso real fica bem abaixo da quota.
