@@ -162,8 +162,18 @@ Sintomas reportados: ao desligar num lado, o outro demorava a fechar; e a voz ti
   a espera do jitter buffer (~200 ms no Chrome/WebView).
 - **Queda abrupta:** `iceConnectionState === 'disconnected'` durante 6 s (ou `failed`/`closed`) → termina a chamada
   e mostra "A chamada caiu." (antes ficava "Em chamada" com áudio morto).
-- **Duplicados/ordem:** os sinais são deduplicados por `trip|ts`; `__call.seen` passa a guardar **ts do servidor**
-  (antes `Date.now()` local podia saltar sinais e impedir a chamada seguinte de tocar).
+- **Duplicados/ordem:** os sinais são deduplicados por `trip|ts|type|fim-do-payload` (antes só `trip|ts`, e como o
+  `offer` e o 1.º `ice` saem no **mesmo milissegundo**, o `offer` era descartado como duplicado → ficava "A ligar…"
+  para sempre). `__call.seen` guarda **ts do servidor** (antes `Date.now()` local podia saltar sinais e impedir a
+  chamada seguinte de tocar).
+- **ICE antes do offer:** os candidatos que chegam antes de existir `remoteDescription` ficam em `__call.pend`
+  (máx. 120) e são aplicados por `__flushIce()` depois do `setRemoteDescription` (no `answer` e no `accept`).
+  O `offer` **não** limpa o `pend`. No `__callAccept` o estado passa a `calling` **antes** dos `await` e, no fim,
+  se o ICE já estiver `connected`, o handler é chamado à mão para promover a `active` (senão ficava "A ligar…"
+  com áudio já a passar).
+- Prova (2026-10-29, browser real, 2 origens diferentes, áudio sintético): offer entregue em ~1 s, `pend`=9,
+  `accept` → `active` nos dois lados, `iceConnectionState/connectionState = connected`, `inbound-rtp` a subir
+  (bytes 48 KB → 62 KB em 3 s, `audioLevel 1`), 6 candidatos `relay`. Desligar: outro lado `idle` no 1.º poll.
 - Prova (2026-10-29, produção, browser real em `/home`): `end` pelo WS chegou ao outro socket em **249 ms**,
   ou seja **240 ms antes** de o POST terminar (489 ms); 5/5 entregas 194–267 ms; `ping→pong` ~200 ms.
   Staging: 188–507 ms. Dados de teste apagados da D1 no fim (prod 25 users / 116 trips).

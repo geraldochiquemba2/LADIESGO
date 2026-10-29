@@ -403,7 +403,7 @@ async function __adoptActive(){
 }
 /* Chamada de voz nativa (WebRTC P2P + sinalização pela nossa API).
    Sem WhatsApp: a voz vai direta entre os telefones. Chamada normal só de recurso. */
-var __call={pc:null,mic:null,trip:null,peerName:'',state:'idle',seen:0,acceptT:0,tickT:null,offer:null,muted:false};
+var __call={pc:null,mic:null,trip:null,peerName:'',state:'idle',seen:0,acceptT:0,tickT:null,offer:null,muted:false,pend:[]};
 function __callH(){var h={};try{h=(typeof ah==='function')?ah():{};}catch(e){}return h;}
 function __callMe(){try{return JSON.parse(localStorage.getItem('taxi_user')||'null');}catch(e){return null}}
 function __callTripId(){try{if((typeof myTripId!=='undefined')&&myTripId)return myTripId;}catch(e){}try{if((typeof tripId!=='undefined')&&tripId)return tripId;}catch(e){}return null;}
@@ -513,7 +513,7 @@ async function startNativeCall(){
   __call.trip=tid;__call.peerName=(peer&&peer.name)||'';__call.muted=false;
   var s=null;
   try{s=await __pcSetup();}catch(e){__callUI('failed','Sem microfone. Verifica a permissão.');return;}
-  __call.pc=s.pc;__call.mic=s.stream;__call.state='calling';__call.seen=0;__call.offer=null;
+  __call.pc=s.pc;__call.mic=s.stream;__call.state='calling';__call.seen=0;__call.offer=null;__call.pend=[];
   __callUI('calling');
   try{var cq=document.getElementById('callQuota');if(cq)cq.textContent='📞 Chamadas grátis: '+__quotaFmt(__quota.remaining)+' restantes · máx 2 min';}catch(e){}
   try{
@@ -525,18 +525,27 @@ async function startNativeCall(){
   }catch(e){__callEnd(false);__callUI('failed','Falhou a ligar.');return;}
   setTimeout(function(){if(__call.state==='calling'){__sigPost('end',null);__callEnd(false);__callUI('failed','Sem resposta. Tenta de novo ou usa a chamada normal.');}},45000);
 }
+async function __flushIce(pc){
+  try{
+    var q=__call.pend||[];__call.pend=[];
+    for(var i=0;i<q.length;i++){try{await pc.addIceCandidate(new RTCIceCandidate(q[i]));}catch(e){}}
+  }catch(e){}
+}
 async function __callAccept(){
   if(__call.state!=='ringing'||!__call.offer)return;
   var s=null;
   try{s=await __pcSetup();}catch(e){__callEnd(false);__callUI('failed','Sem microfone.');return;}
-  __call.pc=s.pc;__call.mic=s.stream;
+  __call.pc=s.pc;__call.mic=s.stream;__call.state='calling';__call.muted=false;
   try{
     await s.pc.setRemoteDescription(new RTCSessionDescription(__call.offer.sdp));
+    await __flushIce(s.pc);
     var answer=await s.pc.createAnswer();
     await s.pc.setLocalDescription(answer);
     await __sigPost('answer',{sdp:s.pc.localDescription});
     __call.state='calling';__call.muted=false;
     __callUI('calling');
+    try{var _st=s.pc.iceConnectionState;if((_st==='connected'||_st==='completed')&&s.pc.oniceconnectionstatechange)s.pc.oniceconnectionstatechange();}catch(e){}
+    setTimeout(function(){try{if(__call.state==='calling'&&__call.pc===s.pc){__sigPost('end',null);__callEnd(false);__callUI('failed','A voz não ligou. Tenta outra vez ou usa a chamada normal.');}}catch(e){}},20000);
   }catch(e){__callEnd(false);__callUI('failed','Falhou a atender.');}
 }
 function __callEnd(post,how){
@@ -549,7 +558,7 @@ function __callEnd(post,how){
   try{if(__call.tickT){clearInterval(__call.tickT);__call.tickT=null;}}catch(e){}
   try{if(__call.mic){(__call.mic.getTracks()||[]).forEach(function(tr){try{tr.stop();}catch(e){}});}}catch(e){}
   try{if(__call.pc){__call.pc.close();}}catch(e){}
-  __call.pc=null;__call.mic=null;__call.state='idle';__call.offer=null;
+  __call.pc=null;__call.mic=null;__call.state='idle';__call.offer=null;__call.pend=[];
   try{if(__call.seen>0)localStorage.setItem('lg_call_seen',String(__call.seen));}catch(e){}
   if(_pend)try{_pend.then(function(r){try{if(r&&r.ts&&r.ts>__call.seen){__call.seen=r.ts;localStorage.setItem('lg_call_seen',String(r.ts));}}catch(e){}});}catch(e){}
 }
@@ -564,7 +573,7 @@ async function __callOnSignal(m){
     if(!m||typeof m!=='object')return;
     var myId='';try{myId=(__callMe()||{}).id||'';}catch(e){}
     if(m.ts!=null){
-      var _k=String(__call.trip||'')+'|'+String(m.ts);
+      var _k=String(__call.trip||'')+'|'+String(m.ts)+'|'+String(m.type||'')+'|'+String((m.payload&&(m.payload.candidate||m.payload.sdp))||'').slice(-40);
       try{if(!window.__callSeenSet)window.__callSeenSet={};if(window.__callSeenSet[_k])return;window.__callSeenSet[_k]=1;var _ks=Object.keys(window.__callSeenSet);if(_ks.length>120){for(var _i=0;_i<60;_i++)delete window.__callSeenSet[_ks[_i]];}}catch(e){}
       if(m.ts>__call.seen)__call.seen=m.ts;
     }
@@ -584,8 +593,13 @@ async function __callOnSignal(m){
     }
     if(m.type==='answer'&&__call.state==='calling'&&m.payload&&m.payload.sdp){
       try{await __call.pc.setRemoteDescription(new RTCSessionDescription(m.payload.sdp));}catch(e){}
-    }else if(m.type==='ice'&&m.payload&&m.payload.candidate&&__call.pc){
-      try{await __call.pc.addIceCandidate(new RTCIceCandidate(m.payload.candidate));}catch(e){}
+      try{await __flushIce(__call.pc);}catch(e){}
+    }else if(m.type==='ice'&&m.payload&&m.payload.candidate){
+      try{
+        var _cand=m.payload.candidate;
+        if(__call.pc&&__call.pc.remoteDescription&&__call.pc.remoteDescription.type){await __call.pc.addIceCandidate(new RTCIceCandidate(_cand));}
+        else{__call.pend=__call.pend||[];if(__call.pend.length<120)__call.pend.push(_cand);}
+      }catch(e){}
     }else if((m.type==='reject'||m.type==='end'||m.type==='cancel')&&(__call.state==='calling'||__call.state==='active'||__call.state==='ringing')){
       __callEnd(false);__callUI(m.type==='reject'?'failed':'close');if(m.type==='reject')__callUI('failed','Recusou a chamada.');
     }
