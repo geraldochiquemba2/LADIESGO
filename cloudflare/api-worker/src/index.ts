@@ -7,7 +7,7 @@ import { newBucket, tryConsume } from './ratelimit';
 import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
 import { bumpRequest, budgetState, writeGuard } from './budget';
 
-type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -163,10 +163,23 @@ async function verifyPassword(pw: string, stored: any): Promise<boolean> {
   return diff === 0;
 }
 
-function withoutHash(u: any) {
+function withoutHash(u: any, c?: any) {
   if (!u) return u;
   const { passwordHash, passwordhash, ...safe } = u;
+  if (safe.profilePhoto != null) safe.profilePhoto = photoUrl(c, safe.profilePhoto);
   return safe;
+}
+// A D1 guarda só o file_id do Telegram; a API devolve sempre um URL pronto a usar
+// em <img src>. Aceita também valores antigos (data URL/URL) sem os alterar.
+function photoUrl(c: any, v: any): string {
+  if (v == null) return '';
+  const s = String(v);
+  if (!s) return '';
+  if (s.startsWith('data:') || /^https?:\/\//i.test(s) || s.startsWith('/')) return s;
+  if (!/^[A-Za-z0-9_-]{20,256}$/.test(s)) return s;
+  let origin = '';
+  try { origin = new URL(c.req.url).origin; } catch {}
+  return (origin || '') + '/api/v1/users/photo/' + encodeURIComponent(s);
 }
 function havKm(aLa: number, aLo: number, bLa: number, bLo: number): number {
   const R = 6371, t = Math.PI / 180;
@@ -263,7 +276,7 @@ app.post('/api/v1/auth/guest', async (c) => {
   const rows = await sql`INSERT INTO users (id, phone, role, "isVerified", name, "createdAt", "updatedAt") VALUES (gen_random_uuid()::text, ${phone}, 'PASSENGER', true, ${String(body?.name || 'Guest').slice(0, 60)}, NOW(), NOW()) RETURNING id, phone, name, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
   const user = rows[0];
   const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: user.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
-  return c.json({ user: withoutHash(user), accessToken });
+  return c.json({ user: withoutHash(user, c), accessToken });
 });
 
 // LOGIN: verificação PBKDF2 (WebCrypto) no worker — mesmo modelo do Neon (hash na BD).
@@ -284,14 +297,14 @@ app.post('/api/v1/auth/login', async (c) => {
     }
     const user = rows[0];
     const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: 'ADMIN' }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
-    return c.json({ user: withoutHash(user), accessToken, isNew: false });
+    return c.json({ user: withoutHash(user, c), accessToken, isNew: false });
   }
   const sql = neon(c.env.DB);
   const rows = await sql`SELECT id, phone, "passwordHash", name, email, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt" FROM users WHERE phone = ${cleanPhone} AND "isActive" = true LIMIT 1`;
   if (!rows.length || !(await verifyPassword(String(password), rows[0].passwordHash))) return c.json({ message: 'Número ou senha incorretos' }, 401);
   const user = rows[0];
   const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: user.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
-  return c.json({ user: withoutHash(user), accessToken, isNew: false });
+  return c.json({ user: withoutHash(user, c), accessToken, isNew: false });
 });
 
 // REGISTER: cria conta com número + senha (PBKDF2 via WebCrypto no worker).
@@ -307,7 +320,7 @@ app.post('/api/v1/auth/register', async (c) => {
   const rows = await sql`INSERT INTO users (id, phone, "passwordHash", name, role, "isVerified", "updatedAt") VALUES (gen_random_uuid()::text, ${cleanPhone}, ${await hashPassword(String(password))}, ${String(name || '').slice(0, 60) || null}, ${finalRole}, true, NOW()) RETURNING id, phone, name, role, "profilePhoto", "fcmToken", "isActive", "isVerified", "mustChangePassword", "adminCreated", "walletBalance", "createdAt", "updatedAt"`;
   const user = rows[0];
   const accessToken = await signJwt({ sub: user.id, phone: user.phone, role: user.role }, c.env.JWT_SECRET, c.env.JWT_EXPIRES_IN || '7d');
-  return c.json({ user: withoutHash(user), accessToken, isNew: true });
+  return c.json({ user: withoutHash(user, c), accessToken, isNew: true });
 });
 
 app.post('/api/v1/auth/refresh-token', async (c) => {
@@ -341,18 +354,62 @@ app.get('/api/v1/users/profile', requireAuth, async (c) => {
   const user = c.get('user');
   const rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance" FROM users WHERE id = ${user.sub} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Não encontrado.' }, 404);
-  return c.json(rows[0]);
+  return c.json({ ...rows[0], profilePhoto: photoUrl(c, rows[0].profilePhoto) });
+});
+// GET /api/v1/users/photo/:fileId — serve a foto a partir do Telegram (na D1 só vive o file_id).
+// O ficheiro em si nunca é guardado na D1; cada pedido resolve o file_path no Telegram
+// (cache de 30 min por isolate) e faz streaming da imagem. Público: é usado em <img src>.
+const tgPhotoPathCache = new Map<string, { path: string; exp: number }>();
+app.get('/api/v1/users/photo/:fileId', async (c) => {
+  const fileId = String(c.req.param('fileId') || '');
+  if (!/^[A-Za-z0-9_-]{20,256}$/.test(fileId)) return c.json({ message: 'Not found.' }, 404);
+  const tok = String(c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN || '');
+  if (!tok) return c.json({ message: 'Not found.' }, 404);
+  try {
+    let fp = '';
+    const hit = tgPhotoPathCache.get(fileId);
+    if (hit && hit.exp > Date.now()) fp = hit.path;
+    if (!fp) {
+      const r = await fetch(`https://api.telegram.org/bot${tok}/getFile?file_id=${encodeURIComponent(fileId)}`, { signal: AbortSignal.timeout(10000) });
+      const j: any = await r.json().catch(() => null);
+      fp = j && j.ok && j.result && j.result.file_path ? String(j.result.file_path) : '';
+      if (!fp) return c.json({ message: 'Not found.' }, 404);
+      if (tgPhotoPathCache.size > 1000) tgPhotoPathCache.clear();
+      tgPhotoPathCache.set(fileId, { path: fp, exp: Date.now() + 30 * 60 * 1000 });
+    }
+    const im = await fetch(`https://api.telegram.org/file/bot${tok}/${fp}`, { signal: AbortSignal.timeout(15000) });
+    if (!im.ok || !im.body) return c.json({ message: 'Not found.' }, 404);
+    const tgType = String(im.headers.get('content-type') || '').toLowerCase();
+    const ext = String(fp.split('.').pop() || '').toLowerCase();
+    const inferred = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : 'image/jpeg';
+    return new Response(im.body, {
+      status: 200,
+      headers: {
+        'Content-Type': tgType.startsWith('image/') ? tgType : inferred,
+        'Cache-Control': 'public, max-age=86400, immutable',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  } catch {
+    return c.json({ message: 'Not found.' }, 404);
+  }
 });
 app.put('/api/v1/users/profile', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));
-  // Foto de perfil (data URL) enviada pela própria utilizadora.
-  let photo: string | null = null;
+  // Foto de perfil (data URL) enviada pela própria utilizadora: vai para o canal
+  // Telegram e a D1 guarda apenas o file_id devolvido pelo Telegram.
+  let photoFileId: string | null = null;
   if (body?.profilePhoto != null) {
-    photo = String(body.profilePhoto);
-    if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(photo)) return c.json({ message: 'Foto invalida.' }, 400);
-    if (photo.length > 2 * 1024 * 1024) return c.json({ message: 'Foto demasiado grande.' }, 413);
+    const dataUrl = String(body.profilePhoto);
+    if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(dataUrl)) return c.json({ message: 'Foto invalida.' }, 400);
+    if (dataUrl.length > 2 * 1024 * 1024) return c.json({ message: 'Foto demasiado grande.' }, 413);
+    const tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
+    if (!tgOn) return c.json({ message: 'Envio de fotos indisponivel.' }, 503);
+    // Tem de ser síncrono: precisamos do file_id antes de escrever na D1.
+    photoFileId = await tgSendPhoto(c.env, dataUrl, `LadiesGo · foto de perfil (${user.phone || user.sub || ''})`);
+    if (!photoFileId) return c.json({ message: 'Nao foi possivel guardar a foto.' }, 502);
   }
   // Token único por aparelho: limpa-o das outras contas (senão o próprio recebe os pushes).
   if (body?.fcmToken) {
@@ -360,20 +417,10 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
   }
   // QUOTA D1: guarda de idempotência — só escreve se algum campo mudar mesmo;
   // sem mudança, devolve a linha atual (SELECT) para manter a resposta igual.
-  let rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "profilePhoto" = COALESCE(${photo}, "profilePhoto"), "updatedAt" = NOW() WHERE id = ${user.sub} AND (COALESCE(${body?.name ?? null}, name) IS NOT name OR COALESCE(${body?.fcmToken ?? null}, "fcmToken") IS NOT "fcmToken" OR COALESCE(${photo}, "profilePhoto") IS NOT "profilePhoto") RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
+  let rows = await sql`UPDATE users SET name = COALESCE(${body?.name ?? null}, name), "fcmToken" = COALESCE(${body?.fcmToken ?? null}, "fcmToken"), "profilePhoto" = COALESCE(${photoFileId}, "profilePhoto"), "updatedAt" = NOW() WHERE id = ${user.sub} AND (COALESCE(${body?.name ?? null}, name) IS NOT name OR COALESCE(${body?.fcmToken ?? null}, "fcmToken") IS NOT "fcmToken" OR COALESCE(${photoFileId}, "profilePhoto") IS NOT "profilePhoto") RETURNING id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance"`;
   if (!rows.length) rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance" FROM users WHERE id = ${user.sub} LIMIT 1`;
-  // Registo no canal Telegram (mesmo fluxo do painel admin): só quando vem foto nova.
-  let tgOn = false;
-  if (photo) {
-    tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
-    if (tgOn) {
-      const u0: any = rows[0] || {};
-      const caption = `LadiesGo · foto de ${u0.name || u0.phone || ''} (${u0.role || ''})`;
-      try { c.executionCtx.waitUntil(tgSendPhoto(c.env, photo, caption).catch(() => false)); }
-      catch { tgSendPhoto(c.env, photo, caption).catch(() => false); }
-    }
-  }
-  return c.json({ ...(rows[0] || {}), telegram: photo ? tgOn : undefined });
+  const out: any = rows[0] ? { ...rows[0], profilePhoto: photoUrl(c, rows[0].profilePhoto) } : {};
+  return c.json({ ...out, telegram: photoFileId ? true : undefined });
 });
 // DELETE /api/v1/users/push-token — Logout: este aparelho deixa de receber pushes + motorista fica offline
 app.delete('/api/v1/users/push-token', requireAuth, async (c) => {
@@ -692,7 +739,7 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
       // próxima primeiro). Viagens antigas sem fila contam como broadcast.
       const q = offerQueueOf(r);
       if (!q.length && !r.offeredDriverId) {
-        out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', r.passenger_photo || ''));
+        out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', photoUrl(c, r.passenger_photo || '')));
         continue;
       }
       if (!r.offerBroadcast) {
@@ -700,12 +747,12 @@ app.get('/api/v1/trips/incoming', requireAuth, async (c) => {
         r = await advanceOfferIfNeeded(c.env, sql, r);
         if (offerSkippedOf(r).indexOf(did) >= 0) continue;
         if (r.offerBroadcast) {
-          out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', r.passenger_photo || ''));
+          out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', photoUrl(c, r.passenger_photo || '')));
           continue;
         }
         if (String(r.offeredDriverId || '') !== did) continue;
       }
-      out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', r.passenger_photo || ''));
+      out.push(webTripRow(r, null, r.passenger_name, (code) => byCode[code] || 'Económico', r.passenger_phone || '', photoUrl(c, r.passenger_photo || '')));
     }
     return c.json({ trips: out });
   } catch (e) {
@@ -770,6 +817,33 @@ app.get('/api/v1/drivers/live-geo', async (c) => {
     if (v) fwd.set(h, v);
   }
   fwd.set('X-User-Id', String(user.sub || ''));
+  return stub.fetch(new Request('https://geo/live', { method: 'GET', headers: fwd }));
+});
+
+// GET /api/v1/drivers/nearby-live → mapa em direto para qualquer utilizador
+// autenticado (token por query, como as restantes rotas). O DO só envia
+// id/posição/rumo — nunca nome, telefone ou categorias.
+app.get('/api/v1/drivers/nearby-live', async (c) => {
+  let user: any = null;
+  try {
+    const ah = c.req.header('Authorization') || '';
+    let tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+    if (!tok) tok = String(c.req.query('token') || '');
+    if (tok) user = await verifyJwt(tok, (c.env as any).JWT_SECRET);
+  } catch {}
+  if (!user?.sub) return c.json({ message: 'Não autenticado.' }, 401);
+  if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
+    return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.', usage: '/api/v1/drivers/nearby-live' }, 426);
+  const ns: any = (c.env as any).DRIVERGEO;
+  if (!ns || !ns.get) return c.json({ message: 'Mapa ao vivo indisponível.' }, 503);
+  const stub = ns.get(ns.idFromName('geo:global'));
+  const fwd = new Headers();
+  for (const h of ['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']) {
+    const v = c.req.header(h);
+    if (v) fwd.set(h, v);
+  }
+  fwd.set('X-User-Id', String(user.sub || ''));
+  fwd.set('X-Viewer', 'pax');
   return stub.fetch(new Request('https://geo/live', { method: 'GET', headers: fwd }));
 });
 
@@ -911,6 +985,58 @@ function hubPoke(c: any, cats?: string[]) {
   try { c.executionCtx.waitUntil(hubBroadcast(c.env, cats)); }
   catch { hubBroadcast(c.env, cats); }
 }
+// ─── Avisos instantâneos via DOs (`TRIPPUSH` e `NOTIFHUB`) ─────────────────
+// O WS de chamadas vive no DO `calls:<tripId>` (mesma classe TripPush, sockets
+// separados). O sinal é difundido logo após o INSERT, sem atrasar a resposta.
+async function pushCallSignal(env: any, tripId: string, sig: any) {
+  try {
+    const ns: any = (env as any).TRIPPUSH;
+    if (!ns || !ns.get) return;
+    const stub = ns.get(ns.idFromName(`calls:${tripId}`));
+    await stub.fetch(new Request('https://trip-push/call-signal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sig) }));
+  } catch {}
+}
+function callSignalPoke(c: any, tripId: string, sig: any) {
+  try { c.executionCtx.waitUntil(pushCallSignal(c.env, tripId, sig)); }
+  catch { pushCallSignal(c.env, tripId, sig); }
+}
+// Poke de mensagem nova: difunde {t:'unread'} aos sockets da viagem.
+async function tripChatPoke(env: any, tripId: string) {
+  try {
+    const ns: any = (env as any).TRIPPUSH;
+    if (!ns || !ns.get) return;
+    const stub = ns.get(ns.idFromName(`trip:${tripId}`));
+    await stub.fetch(new Request('https://trip-push/chat-poke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ n: 1 }) }));
+  } catch {}
+}
+function chatPoke(c: any, tripId: string) {
+  try { c.executionCtx.waitUntil(tripChatPoke(c.env, tripId)); }
+  catch { tripChatPoke(c.env, tripId); }
+}
+// NotifHub: 1 DO por utilizador; o poke acorda só os sockets dessa pessoa.
+async function notifPoke(env: any, userId: string) {
+  if (!userId) return;
+  try {
+    const ns: any = (env as any).NOTIFHUB;
+    if (!ns || !ns.get) return;
+    const stub = ns.get(ns.idFromName(`notif:${userId}`));
+    await stub.fetch(new Request('https://notif-hub/poke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, n: 1 }) }));
+  } catch {}
+}
+function notifPokeSoon(c: any, userId: string) {
+  try { c.executionCtx.waitUntil(notifPoke(c.env, userId)); }
+  catch { notifPoke(c.env, userId); }
+}
+// Vários destinatários (avisos da administração): pokes em paralelo por lotes.
+function notifPokeMany(env: any, ids: string[]): Promise<void> {
+  const list = (ids || []).map((x: any) => String(x || '')).filter(Boolean);
+  if (!list.length) return Promise.resolve();
+  return (async () => {
+    for (let i = 0; i < list.length; i += 25) {
+      await Promise.all(list.slice(i, i + 25).map((uid: string) => notifPoke(env, uid)));
+    }
+  })();
+}
 // ─── DriverGeo: posições GPS vivas em memória (substitui Redis GEO) ───
 // 1 DO global guarda { userId → { driverId, lat, lng, cats, ts, online } }.
 // As escritas de GPS deixam de tocar na D1 (0 escritas/ping); a D1 fica só
@@ -989,11 +1115,11 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
   const t = rows[0];
   if (c.req.query('view') === 'web') {
-    const drv = await webDriverInfo(c.env, sql, t.driverId);
+    const drv = await webDriverInfo(c, sql, t.driverId);
     const pu = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', pu[0]?.profilePhoto || ''), paxLive: pl && Date.now() - pl.ts < 60000 && String(t.status) !== 'IN_PROGRESS' ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', photoUrl(c, pu[0]?.profilePhoto || '')), paxLive: pl && Date.now() - pl.ts < 60000 && String(t.status) !== 'IN_PROGRESS' ? { lat: pl.lat, lng: pl.lng } : null });
   }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
   const liveD = t.driverUserId ? await geoGet(c.env, String(t.driverUserId)) : null;
@@ -1011,7 +1137,7 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   let paxInfo: any = {};
   try {
     const pax = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
-    if (pax.length) paxInfo = { passengerName: pax[0].name || '', passengerPhone: pax[0].phone || '', passengerPhoto: pax[0].profilePhoto || '' };
+    if (pax.length) paxInfo = { passengerName: pax[0].name || '', passengerPhone: pax[0].phone || '', passengerPhoto: photoUrl(c, pax[0].profilePhoto || '') };
   } catch {}
   return c.json({ ...t, driver, ...paxInfo, ...(pin ? { pin } : {}) });
 });
@@ -1211,6 +1337,30 @@ app.post('/api/v1/ratings', requireAuth, async (c) => {
   } catch (e) { console.error('ratings insert error:', e); }
   return c.json({ success: true });
 });
+// GET /api/v1/notifications/live → WS hibernável (1 DO por utilizador).
+// Ao ligar: {t:'hello'}; quando entra notificação nova: {t:'notif', n:1}.
+app.get('/api/v1/notifications/live', async (c) => {
+  let user: any = null;
+  try {
+    const ah = c.req.header('Authorization') || '';
+    let tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+    if (!tok) tok = String(c.req.query('token') || '');
+    if (tok) user = await verifyJwt(tok, (c.env as any).JWT_SECRET);
+  } catch {}
+  if (!user?.sub) return c.json({ message: 'Não autenticado.' }, 401);
+  if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
+    return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.', usage: '/api/v1/notifications/live' }, 426);
+  const ns: any = (c.env as any).NOTIFHUB;
+  if (!ns || !ns.get) return c.json({ message: 'Notificações ao vivo indisponíveis.' }, 503);
+  const stub = ns.get(ns.idFromName(`notif:${user.sub}`));
+  const fwd = new Headers();
+  for (const h of ['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']) {
+    const v = c.req.header(h);
+    if (v) fwd.set(h, v);
+  }
+  fwd.set('X-User-Id', String(user.sub || ''));
+  return stub.fetch(new Request('https://notif-hub/live', { method: 'GET', headers: fwd }));
+});
 app.get('/api/v1/notifications', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
@@ -1303,7 +1453,42 @@ app.post('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
   const p = payload === undefined || payload === null ? null : JSON.stringify(payload).slice(0, 4000);
   const rows = await sql`INSERT INTO call_signals (id, "tripId", "senderId", type, payload) VALUES (gen_random_uuid()::text, ${id}, ${user.sub}, ${String(type)}, ${p}::json) RETURNING "createdAt"`;
   sql`DELETE FROM call_signals WHERE "tripId" = ${id} AND "createdAt" < NOW() - INTERVAL '10 minutes'`.catch(() => {});
-  return c.json({ ok: true, ts: new Date(rows[0].createdAt).getTime() });
+  const ts = new Date(rows[0].createdAt).getTime();
+  // Empurra já para o WS de chamadas (o polling continua como fallback).
+  let sigPayload: any = null;
+  if (p) { try { sigPayload = JSON.parse(p); } catch { sigPayload = null; } }
+  callSignalPoke(c, id, { from: user.sub, type: String(type), payload: sigPayload, ts });
+  return c.json({ ok: true, ts });
+});
+// GET /api/v1/trips/:id/call/live → upgrade WS para o DO `calls:<tripId>`.
+// Só a motorista e a passageira da viagem (assertParticipant); frames:
+// {t:'ready'} ao ligar e {t:'signal', signal:{from,type,payload,ts}}.
+app.get('/api/v1/trips/:id/call/live', async (c) => {
+  const id = c.req.param('id');
+  let user: any = null;
+  try {
+    const ah = c.req.header('Authorization') || '';
+    let tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+    if (!tok) tok = String(c.req.query('token') || '');
+    if (tok) user = await verifyJwt(tok, (c.env as any).JWT_SECRET);
+  } catch {}
+  if (!user?.sub) return c.json({ message: 'Não autenticado.' }, 401);
+  if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
+    return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.', usage: `/api/v1/trips/${id}/call/live` }, 426);
+  const sql = neon(c.env.DB);
+  if (!(await assertParticipant(sql, id, user.sub)))
+    return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
+  const ns: any = (c.env as any).TRIPPUSH;
+  if (!ns || !ns.get) return c.json({ message: 'Chamada em tempo real indisponível.' }, 503);
+  const stub = ns.get(ns.idFromName(`calls:${id}`));
+  const fwd = new Headers();
+  for (const h of ['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']) {
+    const v = c.req.header(h);
+    if (v) fwd.set(h, v);
+  }
+  fwd.set('X-Trip-Id', id);
+  fwd.set('X-User-Id', String(user.sub || ''));
+  return stub.fetch(new Request('https://trip-push/call-live', { method: 'GET', headers: fwd }));
 });
 app.get('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
@@ -1350,6 +1535,8 @@ app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
   const clean = String(text || '').trim().slice(0, 300);
   if (!clean) return c.json({ message: 'Mensagem vazia.' }, 400);
   await sql`INSERT INTO chat_messages (id, "tripId", "senderId", "senderName", text) VALUES (gen_random_uuid()::text, ${id}, ${user.sub}, ${String(from || '').slice(0, 40) || 'Eu'}, ${clean})`;
+  // Aviso barato no WS da viagem (o cliente ignora o próprio).
+  chatPoke(c, id);
   // Avisa a outra parte (não bloqueia a resposta).
   c.executionCtx.waitUntil((async () => {
     try {
@@ -1709,6 +1896,8 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
         SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
         FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
     }
+    // Aviso ao vivo (best-effort): quem tiver o WS aberto atualiza já.
+    try { c.executionCtx.waitUntil(notifPokeMany(c.env, recipients.map((r: any) => r.id))); } catch {}
     const msgs = recipients
       .map((r: any) => String(r.fcmToken || ''))
       .filter((t: string) => t.indexOf('ExponentPushToken') === 0)
@@ -1749,6 +1938,8 @@ async function deliverScheduledNotification(env: any, sql: any, target: string, 
       SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
       FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
   }
+  // Aviso ao vivo (o cron já corre fora do caminho crítico).
+  try { await notifPokeMany(env, recipients.map((r: any) => r.id)); } catch {}
   const msgs = recipients
     .map((r: any) => String(r.fcmToken || ''))
     .filter((t: string) => t.indexOf('ExponentPushToken') === 0)
@@ -2069,7 +2260,7 @@ app.get('/api/v1/admin/drivers', adminMiddleware, async (c) => {
     WHERE d.status = 'APPROVED'
     ORDER BY d."createdAt" DESC
   `;
-  return c.json({ drivers: driversRes });
+  return c.json({ drivers: driversRes.map((d: any) => ({ ...d, profilePhoto: photoUrl(c, d.profilePhoto) })) });
 });
 
 // GET /api/v1/admin/users — List users
@@ -2128,7 +2319,7 @@ try {
         LIMIT ${limit} OFFSET ${offset}`;
     }
     const total = Number(totalRes[0]?.total || 0);
-    return c.json({ users: usersRes, total });
+    return c.json({ users: usersRes.map((u: any) => ({ ...u, profilePhoto: photoUrl(c, u.profilePhoto) })), total });
   } catch (e) {
     console.error('Admin users error:', e);
     return c.json({ message: 'Erro ao buscar utilizadores', error: String(e) }, 500);
@@ -2184,27 +2375,39 @@ app.get('/api/v1/admin/wallet', adminMiddleware, async (c) => {
   return c.json({ wallets: rows.map((r: any) => ({ id: r.id, name: r.name, phone: r.phone, balance: money(r.walletBalance), negTrips: Number(r.negTrips || 0), blocked: !!Number(r.walletBlocked || 0) })) });
 });
 
-// ─── Foto de perfil via admin (+ registo no canal Telegram) ───────────────
-// O admin carrega a foto (motorista ou passageira) no painel; guarda-se em
-// users."profilePhoto" e, se TG_BOT_TOKEN + TG_CHAT_ID estiverem definidos
-// (wrangler secret put), a mesma foto vai para o canal Telegram como registo.
-// Os segredos nunca ficam no repo: só o Worker os lê.
-async function tgSendPhoto(env: any, dataUrl: string, caption: string): Promise<boolean> {
+// ─── Foto de perfil via Telegram (D1 guarda só o file_id) ──────────────────
+// A foto é enviada ao canal (TG_BOT_TOKEN + TG_CHAT_ID, definidos com
+// `wrangler secret put`); guardamos na D1 apenas o file_id devolvido pelo
+// Telegram. O GET /api/v1/users/photo/:fileId serve a imagem a partir do
+// Telegram. Os segredos nunca ficam no repo: só o Worker os lê.
+function tgCreds(env: any): { tok: string; chat: string } {
+  return {
+    tok: String(env?.TG_BOT_TOKEN || env?.TELEGRAM_BOT_TOKEN || ''),
+    chat: String(env?.TG_CHAT_ID || env?.TELEGRAM_CHAT_ID || ''),
+  };
+}
+async function tgSendPhoto(env: any, dataUrl: string, caption: string): Promise<string | null> {
   try {
-    const tok = String(env?.TG_BOT_TOKEN || env?.TELEGRAM_BOT_TOKEN || '');
-    const chat = String(env?.TG_CHAT_ID || env?.TELEGRAM_CHAT_ID || '');
-    if (!tok || !chat) return false;
+    const { tok, chat } = tgCreds(env);
+    if (!tok || !chat) return null;
     const m = /^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i.exec(String(dataUrl || ''));
-    if (!m) return false;
+    if (!m) return null;
     const bin = Uint8Array.from(atob(m[2]), (ch: any) => ch.charCodeAt(0));
+    const mime = m[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : m[1].toLowerCase();
     const fd = new FormData();
     fd.append('chat_id', chat);
     if (caption) fd.append('caption', caption.slice(0, 1000));
-    fd.append('photo', new Blob([bin as any], { type: m[1] }), 'foto.jpg');
+    fd.append('photo', new Blob([bin as any], { type: mime }), 'foto.jpg');
     const r = await fetch(`https://api.telegram.org/bot${tok}/sendPhoto`, { method: 'POST', body: fd, signal: AbortSignal.timeout(15000) });
-    return r.ok;
+    if (!r.ok) return null;
+    const j: any = await r.json().catch(() => null);
+    const photos = j && j.ok && j.result && Array.isArray(j.result.photo) ? j.result.photo : [];
+    if (!photos.length) return null;
+    // A maior resolução é a última; escolhemos por área para não depender da ordem.
+    const best = photos.reduce((a: any, b: any) => (Number(b.width || 0) * Number(b.height || 0) > Number(a.width || 0) * Number(a.height || 0) ? b : a));
+    return best && best.file_id ? String(best.file_id) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 // PUT /api/v1/admin/users/:id/photo — Admin define a foto de perfil (qualquer conta)
@@ -2215,19 +2418,15 @@ app.put('/api/v1/admin/users/:id/photo', adminMiddleware, async (c) => {
   const photo = String(b.photo || '');
   if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(photo)) return c.json({ message: 'Foto invalida.' }, 400);
   if (photo.length > 2 * 1024 * 1024) return c.json({ message: 'Foto demasiado grande.' }, 413);
-  const rows = await sql`UPDATE users SET "profilePhoto" = ${photo}, "updatedAt" = NOW() WHERE id = ${id} RETURNING id, name, phone, role`;
+  const tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
+  if (!tgOn) return c.json({ message: 'Envio de fotos indisponivel.' }, 503);
+  const rows = await sql`SELECT id, name, phone, role FROM users WHERE id = ${id} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Utilizador nao encontrado.' }, 404);
   const u = rows[0];
-  const tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
-  if (tgOn) {
-    const caption = `LadiesGo · foto de ${u.name || u.phone || ''} (${u.role || ''})`;
-    try {
-      c.executionCtx.waitUntil(tgSendPhoto(c.env, photo, caption).catch(() => false));
-    } catch {
-      tgSendPhoto(c.env, photo, caption).catch(() => false);
-    }
-  }
-  return c.json({ success: true, telegram: tgOn });
+  const fileId = await tgSendPhoto(c.env, photo, `LadiesGo · foto de ${u.name || u.phone || ''} (${u.role || ''})`);
+  if (!fileId) return c.json({ message: 'Nao foi possivel guardar a foto.' }, 502);
+  await sql`UPDATE users SET "profilePhoto" = ${fileId}, "updatedAt" = NOW() WHERE id = ${id}`;
+  return c.json({ success: true, telegram: true, profilePhoto: photoUrl(c, fileId) });
 });
 
 // GET /api/v1/admin/drivers/pending — Pending driver registrations
@@ -2387,7 +2586,8 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
   };
 }
 
-async function webDriverInfo(env: any, sql: any, driverId: string | null) {
+async function webDriverInfo(c: any, sql: any, driverId: string | null) {
+  const env = c.env;
   if (!driverId) return null;
   const d = await sql`
     SELECT d."userId", d."currentLat", d."currentLng", d.rating, d."totalTrips", d."carMake", d."carModel", d."carColor", d."carPlate", u.name, u.phone, u."profilePhoto"
@@ -2409,7 +2609,7 @@ async function webDriverInfo(env: any, sql: any, driverId: string | null) {
     h: hh,
     name: r.name || 'Motorista',
     phone: r.phone || '',
-    photo: r.profilePhoto || '',
+    photo: photoUrl(c, r.profilePhoto || ''),
     rating: avg,
     totalTrips: Number(r.totalTrips || 0),
     carMake: r.carMake || '', carModel: r.carModel || '', carColor: r.carColor || '', carPlate: r.carPlate || '',
@@ -2719,7 +2919,7 @@ app.get('/api/v1/trips/public/:id', async (c) => {
         const lat = live && Number.isFinite(Number(live.lat)) ? Number(live.lat) : (r.currentLat != null ? Number(r.currentLat) : null);
         const lng = live && Number.isFinite(Number(live.lng)) ? Number(live.lng) : (r.currentLng != null ? Number(r.currentLng) : null);
         const carFull = [r.carMake, r.carModel].filter(Boolean).join(' ') + (r.carColor ? ' · ' + r.carColor : '');
-        driver = { name: r.name || 'Motorista', phone: r.phone || '', carFull, plate: r.carPlate || '', rating: r.rating != null ? Number(r.rating) : null, photo: r.carPhoto || r.profilePhoto || '', lat, lng };
+        driver = { name: r.name || 'Motorista', phone: r.phone || '', carFull, plate: r.carPlate || '', rating: r.rating != null ? Number(r.rating) : null, photo: photoUrl(c, r.carPhoto || r.profilePhoto || ''), lat, lng };
       }
     }
     const stops = Array.isArray(t.stops) ? t.stops : [];
@@ -2738,6 +2938,36 @@ app.get('/api/v1/trips/public/:id', async (c) => {
     console.error('public trip error:', e);
     return c.json({ message: 'Falhou. Tenta de novo.' }, 500);
   }
+});
+
+// GET /api/v1/trips/public/:id/live — versão em direto do link público (sem
+// login). Só estado + posição da motorista: nomes, telefones, chat e pax nunca
+// são enviados para sockets com tag 'pub'.
+app.get('/api/v1/trips/public/:id/live', async (c) => {
+  const id = c.req.param('id');
+  if ((c.req.header('Upgrade') || '').toLowerCase() !== 'websocket')
+    return c.json({ message: 'Usa WebSocket: GET com header Upgrade: websocket.', usage: `/api/v1/trips/public/${id}/live` }, 426);
+  const sql = neon(c.env.DB);
+  let st = '';
+  try {
+    const rows = await sql`SELECT status FROM trips WHERE id = ${id} LIMIT 1`;
+    if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
+    st = String(rows[0].status || '').toUpperCase().slice(0, 20);
+  } catch {
+    return c.json({ message: 'Falhou. Tenta de novo.' }, 500);
+  }
+  const ns: any = (c.env as any).TRIPPUSH;
+  if (!ns || !ns.get) return c.json({ message: 'Push em tempo real indisponível.' }, 503);
+  const stub = ns.get(ns.idFromName(`trip:${id}`));
+  const fwd = new Headers();
+  for (const h of ['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']) {
+    const v = c.req.header(h);
+    if (v) fwd.set(h, v);
+  }
+  fwd.set('X-Trip-Id', id);
+  fwd.set('X-Public', '1');
+  fwd.set('X-Trip-Status', st);
+  return stub.fetch(new Request(`https://trip-push/public/${id}`, { method: 'GET', headers: fwd }));
 });
 
 // POST /api/v1/trips/:id/position — Posição viva da passageira (web)
@@ -2906,7 +3136,7 @@ export class TripRinger {
 // de alarmes/push Expo com lógica de oferta — misturar partia-o).
 // Memória do DO: posição viva + throttle + cache de estado.
 // Neon: leituras esporádicas de estado (≤1/15s por viagem ativa), POST /notify
-// das transições e o histórico mínimo de trip_points (1 ponto/30s, auditoria);
+// das transições e o histórico mínimo de trip_points (1 ponto/60s, auditoria);
 // escritas Neon de estado continuam exclusivas do REST existente.
 const PUSH_GPS_MIN_MS = 10_000;
 const PUSH_STATUS_TTL_MS = 15_000;
@@ -2936,7 +3166,7 @@ export class TripPush {
   pushLng = 0;
   pushAt = 0;
   pushH: number | null = null;
-  // Histórico de auditoria (trip_points): 1 ponto/30s, independente do push.
+  // Histórico de auditoria (trip_points): 1 ponto/60s, independente do push.
   lastPointAt = 0;
   pointsOff = false;
   pointsErrAt = 0;
@@ -2963,6 +3193,7 @@ export class TripPush {
           if (changed) {
             await this.persistStatus();
             this.broadcast({ t: 'status', status: st });
+            this.broadcastTag('pub', { t: 'status', status: st });
             this.pushEta();
           }
         }
@@ -3003,6 +3234,72 @@ export class TripPush {
         }
       } catch {}
       return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    // Sinal de chamada (vem do POST REST /trips/:id/call/signal).
+    if (req.method === 'POST' && u.pathname.endsWith('/call-signal')) {
+      try {
+        const b: any = await req.json().catch(() => ({}));
+        this.broadcastCall({
+          t: 'signal',
+          signal: { from: String(b?.from || ''), type: String(b?.type || ''), payload: b?.payload ?? null, ts: Number(b?.ts || Date.now()) },
+        });
+      } catch {}
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    // Mensagem nova no chat: aviso barato aos sockets da viagem.
+    if (req.method === 'POST' && u.pathname.endsWith('/chat-poke')) {
+      try { this.broadcast({ t: 'unread', n: 1 }); } catch {}
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    // WS de chamadas: vive no DO `calls:<tripId>`, com sockets separados.
+    if (u.pathname.endsWith('/call-live')) {
+      if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
+        return new Response('Expected websocket', { status: 426 });
+      const ctId = String(req.headers.get('X-Trip-Id') || '').slice(0, 64);
+      if (!ctId) return new Response('Missing trip', { status: 400 });
+      this.tripId = ctId;
+      const cuid = String(req.headers.get('X-User-Id') || '');
+      const cpair: any = new WebSocketPair();
+      const cclient = cpair[0], cserver = cpair[1];
+      try {
+        this.state.acceptWebSocket(cserver, ['call']);
+        cserver.serializeAttachment({ kind: 'call', uid: cuid });
+      } catch {
+        return new Response('WS failed', { status: 500 });
+      }
+      try { cserver.send(JSON.stringify({ t: 'ready' })); } catch {}
+      return new Response(null, { status: 101, webSocket: cclient });
+    }
+    // Link público (sem login): hello só com status + posição da motorista.
+    if ((req.headers.get('Upgrade') || '').toLowerCase() === 'websocket' && req.headers.get('X-Public') === '1') {
+      const ptId = String(req.headers.get('X-Trip-Id') || '').slice(0, 64);
+      if (!ptId) return new Response('Missing trip', { status: 400 });
+      this.tripId = ptId;
+      try { await this.hydrate(); } catch {}
+      if (!this.status) {
+        try { const s = await this.state.storage.get('status'); if (s) this.status = String(s); } catch {}
+      }
+      if (!this.status) {
+        const st = String(req.headers.get('X-Trip-Status') || '').toUpperCase().slice(0, 20);
+        if (st) this.status = st;
+      }
+      const ppair: any = new WebSocketPair();
+      const pclient = ppair[0], pserver = ppair[1];
+      try {
+        this.state.acceptWebSocket(pserver, ['pub']);
+        pserver.serializeAttachment({ kind: 'pub', uid: '' });
+      } catch {
+        return new Response('WS failed', { status: 500 });
+      }
+      const pubHello: any = {
+        t: 'hello',
+        status: this.status,
+        driver: this.driver && Date.now() - this.driver.ts < 120000
+          ? { lat: this.driver.lat, lng: this.driver.lng, h: this.driver.h ?? null }
+          : null,
+      };
+      try { pserver.send(JSON.stringify(pubHello)); } catch {}
+      return new Response(null, { status: 101, webSocket: pclient });
     }
     if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
       return new Response('Expected websocket', { status: 426 });
@@ -3059,11 +3356,28 @@ export class TripPush {
     if (eta == null || this.lastEta === eta) return;
     this.lastEta = eta;
     this.broadcast({ t: 'eta', min: eta });
+    this.broadcastTag('pub', { t: 'eta', min: eta });
   }
   async webSocketMessage(ws: any, raw: any) {
     let m: any;
     try { m = JSON.parse(typeof raw === 'string' ? raw : String(raw)); } catch { return; }
     if (!m || typeof m !== 'object') return;
+    let tags: string[] = [];
+    try { tags = this.state.getTags(ws) || []; } catch {}
+    // Link público: só leitura sanitizada. Chamadas: só recebem sinais.
+    if (tags.indexOf('pub') >= 0) {
+      if (m.t === 'state') {
+        const pubState: any = {
+          t: 'state',
+          status: this.status,
+          driver: this.driver ? { lat: this.driver.lat, lng: this.driver.lng, h: this.driver.h ?? null } : null,
+          ts: Date.now(),
+        };
+        try { ws.send(JSON.stringify(pubState)); } catch {}
+      }
+      return;
+    }
+    if (tags.indexOf('call') >= 0) return;
     if (m.t === 'gps') { await this.onGps(ws, m).catch(() => {}); return; }
     if (m.t === 'heading') { await this.onHeading(ws, m).catch(() => {}); return; }
     if (m.t === 'chat') {
@@ -3130,6 +3444,7 @@ export class TripPush {
         att.pushLat = la; att.pushLng = lo; att.pushAt = now;
         if (hh != null) att.pushH = hh;
         this.broadcastExcept(ws, { t: 'driver', lat: la, lng: lo, h: hh != null ? hh : null, ts: now });
+        this.broadcastTag('pub', { t: 'driver', lat: la, lng: lo, h: hh != null ? hh : null, ts: now });
         this.pushEta();
       }
       try { ws.serializeAttachment(att); } catch {}
@@ -3170,17 +3485,18 @@ export class TripPush {
       this.pushLat = la; this.pushLng = lo; this.pushAt = now;
       if (hh != null) this.pushH = hh;
       this.broadcast({ t: 'driver', lat: la, lng: lo, h: hh != null ? hh : null, ts: now });
+      this.broadcastTag('pub', { t: 'driver', lat: la, lng: lo, h: hh != null ? hh : null, ts: now });
       this.pushEta();
     }
   }
-  // Histórico de auditoria: 1 ponto/30s por viagem ativa. Não bloqueia o WS
+  // Histórico de auditoria: 1 ponto/60s por viagem ativa. Não bloqueia o WS
   // (waitUntil) e não substitui a posição viva, que continua só em memória.
   async persistPoint(lat: number, lng: number, accuracy?: number) {
     try {
       const st = String(this.status || '');
       if (st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return;
       const now = Date.now();
-      if (now - this.lastPointAt < 30000) return;
+      if (now - this.lastPointAt < 60000) return;
       if (this.pointsOff && now - this.pointsErrAt < 300000) return;
       this.lastPointAt = now;
       let tripId = this.tripId;
@@ -3213,6 +3529,7 @@ export class TripPush {
       this.status = r.status;
       await this.persistStatus();
       this.broadcast({ t: 'status', status: r.status });
+      this.broadcastTag('pub', { t: 'status', status: r.status });
       this.pushEta();
     }
     return this.status;
@@ -3228,19 +3545,50 @@ export class TripPush {
       return Math.max(1, Math.ceil((dk / 30) * 60));
     } catch { return null; }
   }
+  // Sockets laterais (chamada / link público) não são da viagem: ficam fora
+  // do broadcast geral para não receberem chat, pax nem estado interno.
+  isSideSock(s: any): boolean {
+    try {
+      const a = (s.deserializeAttachment && s.deserializeAttachment()) || {};
+      const k = String(a.kind || '');
+      return k === 'call' || k === 'pub';
+    } catch { return false; }
+  }
   broadcast(obj: any) {
     let msg = '';
     try { msg = JSON.stringify(obj); } catch { return; }
     let socks: any[] = [];
     try { socks = this.state.getWebSockets(); } catch { return; }
-    for (const s of socks) { try { s.send(msg); } catch {} }
+    for (const s of socks) { if (this.isSideSock(s)) continue; try { s.send(msg); } catch {} }
   }
   broadcastExcept(ws: any, obj: any) {
     let msg = '';
     try { msg = JSON.stringify(obj); } catch { return; }
     let socks: any[] = [];
     try { socks = this.state.getWebSockets(); } catch { return; }
-    for (const s of socks) { if (s === ws) continue; try { s.send(msg); } catch {} }
+    for (const s of socks) { if (s === ws || this.isSideSock(s)) continue; try { s.send(msg); } catch {} }
+  }
+  // Versão sanitizada para os sockets com uma tag (ex.: 'pub').
+  broadcastTag(tag: string, obj: any) {
+    let msg = '';
+    try { msg = JSON.stringify(obj); } catch { return; }
+    let socks: any[] = [];
+    try { socks = this.state.getWebSockets(tag); } catch { return; }
+    for (const s of socks) { try { s.send(msg); } catch {} }
+  }
+  // Sinais de chamada: só sockets com attachment.kind === 'call'.
+  broadcastCall(obj: any) {
+    let msg = '';
+    try { msg = JSON.stringify(obj); } catch { return; }
+    let socks: any[] = [];
+    try { socks = this.state.getWebSockets('call'); } catch { return; }
+    for (const s of socks) {
+      try {
+        const a = (s.deserializeAttachment && s.deserializeAttachment()) || {};
+        if (String(a.kind || '') !== 'call') continue;
+        s.send(msg);
+      } catch {}
+    }
   }
 }
 
@@ -3298,6 +3646,55 @@ export class RequestsHub {
   socks(): any[] { try { return this.state.getWebSockets(); } catch { return []; } }
 }
 
+// ─── NotifHub: 1 DO por utilizador, WS hibernável do centro de notificações ───
+// O Worker faz POST /poke (não bloqueia a resposta) e o hub avisa só os
+// sockets com a tag `u:<userId>` — o cliente atualiza o contador/listagem.
+export class NotifHub {
+  state: any;
+  env: any;
+  constructor(state: any, env: any) {
+    this.state = state;
+    this.env = env;
+    try { this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong')); } catch {}
+  }
+  async fetch(req: any) {
+    const u = new URL(req.url);
+    if (req.method === 'POST' && u.pathname.endsWith('/poke')) {
+      try {
+        const b: any = await req.json().catch(() => ({}));
+        const uid = String(b?.userId || '').slice(0, 32);
+        const n = Math.max(1, Math.min(99, Number(b?.n) || 1));
+        const msg = JSON.stringify({ t: 'notif', n });
+        for (const s of this.socks()) {
+          let tags: string[] = [];
+          try { tags = this.state.getTags(s) || []; } catch {}
+          if (uid && tags.indexOf(`u:${uid}`) < 0) continue;
+          try { s.send(msg); } catch {}
+        }
+      } catch {}
+      return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
+    }
+    if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
+      return new Response('Expected websocket', { status: 426 });
+    const uid = String(req.headers.get('X-User-Id') || '').slice(0, 32);
+    if (!uid) return new Response('Missing user', { status: 400 });
+    const pair: any = new WebSocketPair();
+    const client = pair[0], server = pair[1];
+    try {
+      this.state.acceptWebSocket(server, [`u:${uid}`]);
+      server.serializeAttachment({ uid });
+    } catch {
+      return new Response('WS failed', { status: 500 });
+    }
+    try { server.send(JSON.stringify({ t: 'hello' })); } catch {}
+    return new Response(null, { status: 101, webSocket: client });
+  }
+  async webSocketMessage(_ws: any, _raw: any) {}
+  async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {}
+  async webSocketError(ws: any, _err: any) { try { ws.close(1011, 'err'); } catch {} }
+  socks(): any[] { try { return this.state.getWebSockets(); } catch { return []; } }
+}
+
 // ─── DriverGeo: 1 DO global, mapa em memória das posições vivas ───
 // Serve /drivers/nearby, buildOfferQueue, webDriverInfo e o polling da viagem.
 // Só vive em memória (rede de segurança = próximo ping repõe); TTL 5min na
@@ -3306,6 +3703,9 @@ export class DriverGeo {
   state: any;
   env: any;
   pos: Map<string, any>;
+  // Throttle/hash da difusão do mapa para os espectadores (tag 'pax').
+  lastNearbyAt = 0;
+  lastNearbyHash = '';
   constructor(state: any, env: any) {
     this.state = state;
     this.env = env;
@@ -3314,6 +3714,47 @@ export class DriverGeo {
   }
   json(o: any): Response {
     return new Response(JSON.stringify(o), { headers: { 'Content-Type': 'application/json' } });
+  }
+  socks(): any[] { try { return this.state.getWebSockets(); } catch { return []; } }
+  // Envia só aos sockets com a tag indicada (ignora falhas individuais).
+  sendTagged(tag: string, obj: any, except?: any) {
+    let msg = '';
+    try { msg = JSON.stringify(obj); } catch { return; }
+    for (const s of this.socks()) {
+      if (s === except) continue;
+      let tags: string[] = [];
+      try { tags = this.state.getTags(s) || []; } catch {}
+      if (tags.indexOf(tag) < 0) continue;
+      try { s.send(msg); } catch {}
+    }
+  }
+  // Vista do mapa para qualquer autenticado: só id/posição/rumo, nunca
+  // nome, telefone ou categorias. Só motoristas online vistos nos últimos 5min.
+  nearbyFrame(): any {
+    const now = Date.now();
+    const drivers: any[] = [];
+    for (const v of this.pos.values()) {
+      if (!v || !v.online) continue;
+      if (now - Number(v.ts || 0) >= 5 * 60 * 1000) continue;
+      drivers.push({
+        id: String(v.driverId || v.userId || ''),
+        lat: Number(v.lat),
+        lng: Number(v.lng),
+        h: v.h != null ? Number(v.h) : null,
+      });
+    }
+    return { t: 'nearby', drivers, ts: now };
+  }
+  // Difusão aos espectadores: no máximo 1x/5s e só quando algo mudou.
+  broadcastNearby(force = false) {
+    const now = Date.now();
+    if (!force && now - this.lastNearbyAt < 5000) return;
+    const frame = this.nearbyFrame();
+    const hash = frame.drivers.map((d: any) => `${d.id}:${d.lat.toFixed(4)},${d.lng.toFixed(4)},${d.h == null ? '' : d.h}`).join('|');
+    if (hash === this.lastNearbyHash) return;
+    this.lastNearbyAt = now;
+    this.lastNearbyHash = hash;
+    this.sendTagged('pax', frame);
   }
   // A hibernação do DO limpa a memória. Sem isto, as posições desapareciam
   // quando o objeto ficava ocioso e a passagreira deixava de ver carros.
@@ -3361,6 +3802,7 @@ export class DriverGeo {
       this.pos.set(userId, rec);
       try { this.state.storage.put('p:' + userId, rec).catch(() => {}); } catch {}
     }
+    this.broadcastNearby();
     return wasOnline;
   }
   // Espelha a transição online/offline da ligação WS na D1, para o filtro
@@ -3389,8 +3831,22 @@ export class DriverGeo {
       if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
         return new Response('Expected websocket', { status: 426 });
       const userId = String(req.headers.get('X-User-Id') || '');
+      const viewer = String(req.headers.get('X-Viewer') || '');
       const pair: any = new WebSocketPair();
       const client = pair[0], server = pair[1];
+      if (viewer === 'pax') {
+        // Espectador do mapa (nearby-live): recebe o estado atual e só frames
+        // sanitizados; nunca envia posições.
+        try {
+          this.state.acceptWebSocket(server, ['pax']);
+          server.serializeAttachment({ userId, viewer: 'pax' });
+        } catch {
+          return new Response('WS failed', { status: 500 });
+        }
+        try { await this.load(); } catch {}
+        try { server.send(JSON.stringify(this.nearbyFrame())); } catch {}
+        return new Response(null, { status: 101, webSocket: client });
+      }
       try {
         this.state.acceptWebSocket(server);
         server.serializeAttachment({ userId });
@@ -3416,6 +3872,7 @@ export class DriverGeo {
       const uid = String(b.userId || '');
       this.pos.delete(uid);
       try { this.state.storage.delete('p:' + uid).catch(() => {}); } catch {}
+      this.broadcastNearby();
       return this.json({ ok: true });
     }
     if (path.endsWith('/get')) {
@@ -3441,6 +3898,8 @@ export class DriverGeo {
     const a = (ws.deserializeAttachment && ws.deserializeAttachment()) || {};
     const userId = String(a.userId || '');
     if (!userId) return;
+    // Espectador do mapa: não escreve posições.
+    if (a.viewer === 'pax') return;
     // Token bucket
     if (!a.bucket) a.bucket = newBucket();
     if (!tryConsume(a.bucket)) return;
@@ -3452,6 +3911,7 @@ export class DriverGeo {
       this.pos.delete(userId);
       try { this.state.storage.delete('p:' + userId).catch(() => {}); } catch {}
       await this.d1Online(userId, false);
+      this.broadcastNearby();
       return;
     }
     const lat = Number(m.lat), lng = Number(m.lng);
@@ -3513,7 +3973,7 @@ app.post('/api/v1/shared/departures', requireAuth, async (c) => {
   if (!d.length) return c.json({ message: 'Motorista não encontrada.' }, 404);
   const driverRow = d[0];
   await sql`INSERT INTO shared_departures (id, driver_id, origin_lat, origin_lng, origin_name, dest_lat, dest_lng, dest_name, category, total_price, price_per_seat, total_seats, iban, express_code, whatsapp_number, scheduled_at, expires_at, status, created_at) VALUES (${id}, ${did}, ${originLat}, ${originLng}, ${String(b.originName || '').slice(0, 80)}, ${destLat}, ${destLng}, ${String(b.destName || '').slice(0, 80)}, ${category}, ${totalPrice}, ${pricePerSeat}, ${totalSeats}, ${String(b.iban || '').slice(0, 60)}, ${String(b.expressCode || '').slice(0, 30)}, ${String(driverRow.phone || '')}, ${scheduledAt}, ${expiresAt}, 'active', NOW())`;
-  return c.json({ ok: true, id, driver: { id: did, name: driverRow.name, phone: driverRow.phone, photo: driverRow.profilePhoto }, category, totalSeats, pricePerSeat, totalPrice, status: 'active', expiresAt });
+  return c.json({ ok: true, id, driver: { id: did, name: driverRow.name, phone: driverRow.phone, photo: photoUrl(c, driverRow.profilePhoto) }, category, totalSeats, pricePerSeat, totalPrice, status: 'active', expiresAt });
 });
 
 // GET /api/v1/shared/departures/nearby — Lista partidas próximas (passageira)
@@ -3541,7 +4001,7 @@ app.get('/api/v1/shared/departures/nearby', requireAuth, async (c) => {
       driverId: r.driver_id,
       driverName: r.driver_name,
       driverPhone: r.driver_phone,
-      driverPhoto: r.driver_photo,
+      driverPhoto: photoUrl(c, r.driver_photo),
       originLat: r.origin_lat, originLng: r.origin_lng, originName: r.origin_name,
       destLat: r.dest_lat, destLng: r.dest_lng, destName: r.dest_name,
       category: r.category,
@@ -3590,7 +4050,7 @@ app.get('/api/v1/shared/departures/:id/payment', requireAuth, async (c) => {
   const res = await sql`SELECT id, status, position, expires_at FROM shared_reservations WHERE departure_id = ${departureId} AND passenger_id = ${user.sub} AND status IN ('pending','paid') ORDER BY created_at DESC LIMIT 1`;
   if (!res.length) return c.json({ message: 'Você não tem reserva nesta partida.' }, 403);
   const rr = res[0];
-  return c.json({ driver: { name: r.driver_name, phone: r.driver_phone, photo: r.driver_photo }, iban: r.iban, expressCode: r.express_code, whatsappNumber: r.whatsapp_number, pricePerSeat: r.price_per_seat || 0, expiresAt: rr.expires_at || r.dep_expires_at, myPosition: rr.position, myStatus: rr.status, scheduledAt: r.scheduled_at });
+  return c.json({ driver: { name: r.driver_name, phone: r.driver_phone, photo: photoUrl(c, r.driver_photo) }, iban: r.iban, expressCode: r.express_code, whatsappNumber: r.whatsapp_number, pricePerSeat: r.price_per_seat || 0, expiresAt: rr.expires_at || r.dep_expires_at, myPosition: rr.position, myStatus: rr.status, scheduledAt: r.scheduled_at });
 });
 
 // POST /api/v1/shared/departures/:id/approve — Motorista aprova passageira
@@ -3640,6 +4100,7 @@ app.post('/api/v1/shared/departures/:id/alert', requireAuth, async (c) => {
   for (const r of (rs || [])) {
     await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt") VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${(r as any).passenger_id}, ${title}, ${body}, 'shared_alert', 0, ${departureId}, NOW())`;
   }
+  try { c.executionCtx.waitUntil(notifPokeMany(c.env, (rs || []).map((r: any) => r.passenger_id))); } catch {}
   return c.json({ ok: true, notified: (rs || []).length, alertsUsed: used, alertsLeft: 2 - used });
 });
 
@@ -3648,7 +4109,7 @@ app.get('/api/v1/shared/departures/:id/queue', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const departureId = c.req.param('id');
   const rows = await sql`SELECT sr.id, sr.passenger_id, sr.position, sr.status, sr.created_at, u.name AS passenger_name, u.phone AS passenger_phone, u."profilePhoto" AS passenger_photo FROM shared_reservations sr JOIN users u ON u.id = sr.passenger_id WHERE sr.departure_id = ${departureId} ORDER BY sr.position ASC`;
-  return c.json({ queue: (rows || []).map((r: any) => ({ id: r.id, passengerId: r.passenger_id, passengerName: r.passenger_name, passengerPhone: r.passenger_phone, passengerPhoto: r.passenger_photo, position: r.position, status: r.status, createdAt: r.created_at })) });
+  return c.json({ queue: (rows || []).map((r: any) => ({ id: r.id, passengerId: r.passenger_id, passengerName: r.passenger_name, passengerPhone: r.passenger_phone, passengerPhoto: photoUrl(c, r.passenger_photo), position: r.position, status: r.status, createdAt: r.created_at })) });
 });
 
 // DELETE /api/v1/shared/departures/:id/reserve — Passageira cancela a sua reserva
@@ -3876,8 +4337,11 @@ app.post('/api/v1/admin/premium/reservations/:id/confirm', adminMiddleware, asyn
   await sql`UPDATE premium_reservations SET status = 'confirmed' WHERE id = ${id} AND status = 'pending'`;
   await sql`UPDATE premium_fleet SET status = 'reserved' WHERE id = ${carId}`;
   try {
-    if (pid) await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
-      VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${pid}, ${'Reserva Premium confirmada'}, ${'O teu carro premium está confirmado. Vê os detalhes no app.'}, 'premium', 0, ${id}, NOW())`;
+    if (pid) {
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+        VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${pid}, ${'Reserva Premium confirmada'}, ${'O teu carro premium está confirmado. Vê os detalhes no app.'}, 'premium', 0, ${id}, NOW())`;
+      notifPokeSoon(c, String(pid));
+    }
   } catch {}
   return c.json({ ok: true, status: 'confirmed' });
 });

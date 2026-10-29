@@ -5,7 +5,9 @@ import { LUANDA } from './geo';
 // Substitui o antigo socket.io (que falava com o gateway NestJS). Agora:
 //   • Canal por viagem: WebSocket cru em GET /api/v1/trips/:id/live
 //     (Durable Object TripPush, com hibernação — mensagens WS grátis).
-//   • Mapa público: polling REST (/drivers/nearby, /trips/incoming).
+//   • Mapa público: WS /drivers/nearby-live (máx. 1 frame/5 s) com o
+//     polling REST (/drivers/nearby) só como fallback; pedidos via
+//     WS /trips/requests-live + polling (/trips/incoming).
 // Mantém a mesma interface (connect/emit/on/off/connected) para as telas
 // não precisarem de mudanças profundas.
 
@@ -54,6 +56,10 @@ class RealtimeService {
   private lastEtaMin: number | null = null;
 
   private driversTimer: ReturnType<typeof setInterval> | null = null;
+  // WS do mapa público: substitui o polling quando está aberto.
+  private nearbyWs: WebSocket | null = null;
+  private nearbyWsAttempts = 0;
+  private nearbyReconnectT: ReturnType<typeof setTimeout> | null = null;
   private requestsTimer: ReturnType<typeof setInterval> | null = null;
   private requestsWs: WebSocket | null = null;
   private requestsWsAttempts = 0;
@@ -76,6 +82,12 @@ class RealtimeService {
     this.closeTrip();
     this.stopPublicPolls();
     this.connectedFlag = false;
+  }
+
+  /** Logout: limpa o token e fecha todos os canais. */
+  logout(): void {
+    this.token = null;
+    this.disconnect();
   }
 
   // ── Canais por viagem ─────────────────────────────────────────────
@@ -401,31 +413,110 @@ class RealtimeService {
     } catch {}
   }
 
-  // ── Polling público (mapa) ────────────────────────────────────────
+  // ── Mapa público (mapa) ───────────────────────────────────────────
   private startDriversPoll(): void {
     if (this.driversTimer) return;
     const tick = async () => {
+      // WS aberto → não faz fetch (o polling é só fallback).
+      if (this.nearbyWs && this.nearbyWs.readyState === 1) return;
       const c = this.lastLocation || DEFAULT_CENTER;
       try {
         const res = await fetch(`${API}/drivers/nearby?lat=${c.lat}&lng=${c.lng}`);
         const body = await res.json();
         const list = (body?.drivers ?? body ?? []) as any[];
-        for (const d of list) {
-          const lat = Number(d.currentLat ?? d.lat);
-          const lng = Number(d.currentLng ?? d.lng);
-          if (Number.isFinite(lat) && Number.isFinite(lng)) {
-            this.dispatch('public:driver-location', {
-              driverId: String(d.id),
-              lat,
-              lng,
-              heading: -1,
-            });
-          }
-        }
+        this.emitNearbyDrivers(list);
       } catch {}
     };
     tick();
     this.driversTimer = setInterval(tick, 15000);
+    this.connectNearbyWs();
+  }
+
+  /** Despacha public:driver-location para cada motorista (WS ou polling). */
+  private emitNearbyDrivers(list: any[]): void {
+    if (!Array.isArray(list)) return;
+    for (const d of list) {
+      const lat = Number(d?.currentLat ?? d?.lat);
+      const lng = Number(d?.currentLng ?? d?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const h = d?.h != null ? Number(d.h) : -1;
+      this.dispatch('public:driver-location', {
+        driverId: String(d?.id),
+        lat,
+        lng,
+        heading: Number.isFinite(h) ? h : -1,
+      });
+    }
+  }
+
+  /** WS do mapa: /drivers/nearby-live (frames {t:'nearby', drivers, ts}). */
+  private connectNearbyWs(): void {
+    if (this.nearbyWs || this.nearbyReconnectT) return;
+    if (!this.token) {
+      // Sem JWT ainda: tenta ler e reagenda (o polling cobre entretanto).
+      AsyncStorage.getItem('accessToken')
+        .then((t) => {
+          this.token = t || this.token;
+          if (this.token) this.connectNearbyWs();
+          else this.scheduleNearbyReconnect();
+        })
+        .catch(() => this.scheduleNearbyReconnect());
+      return;
+    }
+    let sock: WebSocket;
+    try {
+      const q = `?token=${encodeURIComponent(this.token)}`;
+      sock = new WebSocket(`${WS_BASE}/drivers/nearby-live${q}`);
+    } catch {
+      this.scheduleNearbyReconnect();
+      return;
+    }
+    this.nearbyWs = sock;
+    sock.onopen = () => {
+      this.nearbyWsAttempts = 0;
+    };
+    sock.onmessage = (ev: any) => this.onNearbyMessage(ev);
+    sock.onerror = () => {};
+    sock.onclose = () => {
+      if (this.nearbyWs === sock) this.nearbyWs = null;
+      this.scheduleNearbyReconnect();
+    };
+  }
+
+  private onNearbyMessage(ev: any): void {
+    let m: any;
+    try {
+      m = JSON.parse(typeof ev?.data === 'string' ? ev.data : String(ev?.data));
+    } catch {
+      return;
+    }
+    if (!m || m.t !== 'nearby') return;
+    this.emitNearbyDrivers(m.drivers);
+  }
+
+  private scheduleNearbyReconnect(): void {
+    if (this.nearbyReconnectT) return;
+    if (!this.driversTimer) return; // ninguém está a ouvir o mapa
+    this.nearbyWsAttempts += 1;
+    const delay = Math.min(3000 * this.nearbyWsAttempts, 30000);
+    this.nearbyReconnectT = setTimeout(async () => {
+      this.nearbyReconnectT = null;
+      this.token = (await AsyncStorage.getItem('accessToken')) || this.token;
+      this.connectNearbyWs();
+    }, delay);
+  }
+
+  private closeNearbyWs(): void {
+    if (this.nearbyReconnectT) {
+      clearTimeout(this.nearbyReconnectT);
+      this.nearbyReconnectT = null;
+    }
+    this.nearbyWsAttempts = 0;
+    const ws = this.nearbyWs;
+    this.nearbyWs = null;
+    try {
+      ws?.close();
+    } catch {}
   }
 
   private startRequestsFeed(): void {
@@ -568,6 +659,7 @@ class RealtimeService {
       clearInterval(this.driversTimer);
       this.driversTimer = null;
     }
+    this.closeNearbyWs();
     this.stopRequestsFeed();
   }
 
@@ -595,6 +687,7 @@ class RealtimeService {
       clearInterval(this.driversTimer);
       this.driversTimer = null;
     }
+    this.closeNearbyWs();
   }
 
   private dispatch(event: string, data?: any): void {

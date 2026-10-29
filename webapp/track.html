@@ -23,6 +23,14 @@
   var map=L.map('map').setView([-8.839,13.289],13);
   try{L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map)}catch(e){}
   map.attributionControl.setPrefix('© OpenStreetMap');
+  var _tkWs=null,_tkWsT=null,_tkWant=false,_tkSt='',_tkEta=null;
+  function paintSt(st){if(st!=null)_tkSt=String(st);try{document.getElementById('st').innerHTML='<span class="pill">'+(ST[_tkSt]||_tkSt)+'</span>'+(_tkEta!=null?' · ⏱ '+_tkEta+' min':'');}catch(e){}}
+  function applyDriver(lat,lng){try{if(done)return;if(!Number.isFinite(lat)||!Number.isFinite(lng))return;if(!carMk)carMk=L.marker([lat,lng],{icon:L.divIcon({className:'',html:'<div style="width:40px;height:40px;border-radius:50%;background:#a855f7;display:grid;place-items:center;font-size:23px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);animation:lgpop .5s ease-out">🚕</div>',iconSize:[40,40],iconAnchor:[20,20]}),interactive:false}).addTo(map);else glideTo(carMk,[lat,lng]);if(fitted&&map.getBounds&&!map.getBounds().contains([lat,lng]))map.panTo([lat,lng],{animate:true});}catch(e){}}
+  function checkDone(st){try{var s=String(st||'').toUpperCase();if(s==='COMPLETED'||s==='CANCELLED'){done=true;if(carMk){try{map.removeLayer(carMk);}catch(e){}carMk=null;}try{tkWsClose();}catch(e){}}}catch(e){}}
+  function tkWsOpen(){try{return !!(_tkWs&&_tkWs.readyState===1);}catch(e){return false;}}
+  function tkWsRetry(){if(_tkWsT||done)return;_tkWsT=setTimeout(function(){_tkWsT=null;tkWsConnect();},3000);}
+  function tkWsClose(){try{_tkWant=false;if(_tkWsT){clearTimeout(_tkWsT);_tkWsT=null;}if(_tkWs){try{_tkWs.onopen=_tkWs.onmessage=_tkWs.onclose=_tkWs.onerror=null;}catch(e){}try{_tkWs.close();}catch(e){}_tkWs=null;}}catch(e){}}
+  function tkWsConnect(){try{if(done)return;if(tkWsOpen()||(_tkWs&&_tkWs.readyState===0))return;var ws=new WebSocket('wss://ladiesgo-api.rererererererere670.workers.dev/api/v1/trips/public/'+encodeURIComponent(id)+'/live');_tkWs=ws;_tkWant=true;ws.onopen=function(){try{if(!done)tick();}catch(e){}};ws.onmessage=function(ev){try{var m=JSON.parse(ev.data);if(!m||typeof m!=='object')return;var typ=String(m.t||'').toLowerCase();if(typ==='hello'){if(m.status)paintSt(m.status);if(m.driver&&m.driver.lat!=null)applyDriver(m.driver.lat,m.driver.lng);checkDone(m.status);return;}if(typ==='status'){if(m.status){paintSt(m.status);checkDone(m.status);if(!done){try{tick();}catch(e){}}}return;}if(typ==='driver'){if(m.lat!=null)applyDriver(m.lat,m.lng);return;}if(typ==='eta'){if(m.min!=null){_tkEta=String(m.min);paintSt();}return;}}catch(e){}};ws.onerror=function(){try{ws.close();}catch(e){}};ws.onclose=function(){if(_tkWs===ws)_tkWs=null;if(_tkWant&&!done)tkWsRetry();};}catch(e){tkWsRetry();}}
   var carMk=null,destMk=null,pickMk=null,stopMks=[],done=false;var fitted=false,stopSig='';function glideTo(mk,ll,ms){try{if(!mk||ll==null)return;var tgt=L.latLng(ll[0],ll[1]);mk._target=tgt;if(mk._glide)return;var tau=ms||320,last=null;function step(ts){try{var cur=mk.getLatLng(),g=mk._target||tgt,dt=(last==null?16:(ts-last));last=ts;if(dt<0)dt=16;if(dt>200)dt=200;var k=1-Math.exp(-dt/tau),nlat=cur.lat+(g.lat-cur.lat)*k,nlng=cur.lng+(g.lng-cur.lng)*k,dx=g.lat-nlat,dy=g.lng-nlng;if(dx*dx+dy*dy<1e-12){mk.setLatLng(g);mk._glide=null;return}mk.setLatLng([nlat,nlng]);mk._glide=requestAnimationFrame(step)}catch(e){try{mk.setLatLng(mk._target||tgt)}catch(_){}mk._glide=null}}mk._glide=requestAnimationFrame(step)}catch(e){try{mk.setLatLng(ll)}catch(_){}}}
   var ST={REQUESTED:'À espera de motorista',ACCEPTED:'Motorista a caminho',DRIVER_ARRIVED:'Motorista chegou',IN_PROGRESS:'Em viagem',COMPLETED:'Viagem concluída ✓',CANCELLED:'Viagem cancelada'};
   function emoji(c){return L.divIcon({className:'',html:'<div style="font-size:30px;line-height:30px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.4))">'+c+'</div>',iconSize:[30,30],iconAnchor:[15,28]});}
@@ -46,7 +54,7 @@
       window.__tkF=0;window.__tkN=0;
       var st=String(t.status||'');
       var started=(st==='DRIVER_ARRIVED'||st==='IN_PROGRESS'||st==='COMPLETED');
-      document.getElementById('st').innerHTML='<span class="pill">'+(ST[st]||st)+'</span>';
+      paintSt(st);
       var info=[];
       var _dt=(function(){try{var s=(st==='CANCELLED'||st==='COMPLETED')?(t.updatedAt||t.createdAt):(t.createdAt||t.updatedAt);var d=new Date(s);if(isNaN(d.getTime()))return '';return d.toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return '';}})();
       if(_dt)info.push('📅 '+_dt);
@@ -66,11 +74,13 @@
       if(t.dest&&t.dest.lat!=null){if(!destMk)destMk=L.marker([t.dest.lat,t.dest.lng],{icon:emoji('🏁'),interactive:false}).addTo(map);else destMk.setLatLng([t.dest.lat,t.dest.lng]);pts.push([t.dest.lat,t.dest.lng]);}
       var stops=Array.isArray(t.stops)?t.stops.filter(function(s){return s&&(s.lat!=null||(s.c&&s.c[0]!=null));}):[];
       var _sig=stops.slice(0,3).map(function(s){var _ll=s.lat!=null?[s.lat,s.lng]:s.c;return _ll[0]+','+_ll[1];}).join('|');stops.slice(0,3).forEach(function(s){var _pl=s.lat!=null?[s.lat,s.lng]:s.c;pts.push(_pl);});if(_sig!==stopSig){stopSig=_sig;stopMks.forEach(function(m){try{map.removeLayer(m);}catch(e){}});stopMks=[];stops.slice(0,3).forEach(function(s,i){var ll=s.lat!=null?[s.lat,s.lng]:s.c;var mk=L.marker(ll,{icon:stopIcon(i+1),interactive:false});mk.addTo(map);stopMks.push(mk);});}
-      if(t.driver&&t.driver.lat!=null){if(!carMk)carMk=L.marker([t.driver.lat,t.driver.lng],{icon:L.divIcon({className:'',html:'<div style="width:40px;height:40px;border-radius:50%;background:#a855f7;display:grid;place-items:center;font-size:23px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);animation:lgpop .5s ease-out">🚕</div>',iconSize:[40,40],iconAnchor:[20,20]}),interactive:false}).addTo(map);else glideTo(carMk,[t.driver.lat,t.driver.lng]);pts.push([t.driver.lat,t.driver.lng]);}
+      if(t.driver&&t.driver.lat!=null){applyDriver(t.driver.lat,t.driver.lng);pts.push([t.driver.lat,t.driver.lng]);}
       if(pts.length){try{if(!fitted){fitted=true;map.flyToBounds(L.latLngBounds(pts).pad(0.3),{duration:0.8});}else if(t.driver&&t.driver.lat!=null&&map.getBounds&&!map.getBounds().contains([t.driver.lat,t.driver.lng])){map.panTo([t.driver.lat,t.driver.lng],{animate:true});}}catch(e){}}
-      if(st==='COMPLETED'||st==='CANCELLED'){if(carMk){try{map.removeLayer(carMk);}catch(e){}carMk=null;}done=true;}
+      if(st==='COMPLETED'||st==='CANCELLED'){if(carMk){try{map.removeLayer(carMk);}catch(e){}carMk=null;}done=true;try{tkWsClose();}catch(e){}}
     }catch(e){document.getElementById('info').textContent='Sem ligação. A tentar de novo…';window.__tkF=Math.min((window.__tkF||0)+1,5);window.__tkN=Date.now()+Math.min(60000,4000*Math.pow(2,window.__tkF||1));}
   }
-  tick();setInterval(function(){if(document.visibilityState&&document.visibilityState!=='visible')return;tick();},4000);
+  tick();try{tkWsConnect();}catch(e){}
+  // Polling só como rede de segurança quando o WS está fechado.
+  setInterval(function(){if(document.visibilityState&&document.visibilityState!=='visible')return;if(tkWsOpen())return;tick();},4000);
 })();
 </script></body></html>

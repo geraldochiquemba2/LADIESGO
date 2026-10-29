@@ -34,6 +34,7 @@ bindings = [
   { name = "TRIPPUSH", class_name = "TripPush" },
   { name = "REQUESTSHUB", class_name = "RequestsHub" },
   { name = "DRIVERGEO", class_name = "DriverGeo" },
+  { name = "NOTIFHUB", class_name = "NotifHub" },
 ]
 
 [[migrations]]
@@ -51,6 +52,10 @@ new_sqlite_classes = ["RequestsHub"]
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["DriverGeo"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["NotifHub"]
 
 # Segredos (nunca commitar):
 # wrangler secret put DATABASE_URL  -> postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require
@@ -89,6 +94,7 @@ bindings = [
   { name = "TRIPPUSH", class_name = "TripPush" },
   { name = "REQUESTSHUB", class_name = "RequestsHub" },
   { name = "DRIVERGEO", class_name = "DriverGeo" },
+  { name = "NOTIFHUB", class_name = "NotifHub" },
 ]
 
 [[env.staging.migrations]]
@@ -106,3 +112,7 @@ new_sqlite_classes = ["RequestsHub"]
 [[env.staging.migrations]]
 tag = "v4"
 new_sqlite_classes = ["DriverGeo"]
+
+[[env.staging.migrations]]
+tag = "v5"
+new_sqlite_classes = ["NotifHub"]

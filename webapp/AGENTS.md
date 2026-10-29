@@ -46,12 +46,19 @@ O ficheiro mais importante é **`ladiesgo-home.html`** (~250 KB) — quase toda 
 Papéis: **PASSENGER**, **DRIVER**, **ADMIN** (mesma conta, papel escolhido no site).
 
 ## Tempo real (importante para a quota)
-- **3 WebSockets** (o servidor empurra updates):
-  - `.../api/v1/trips/<id>/live` — `liveConnect()` (estado da viagem)
+- **6 WebSockets em `ladiesgo-home.html`** (o servidor empurra updates; WS **primeiro**, polling só de fallback):
+  - `.../api/v1/trips/<id>/live` — `liveConnect()` (estado da viagem; também entrega `{t:'unread'}` para o badge do chat)
   - `.../api/v1/drivers/live-geo` — `geoWsConnect()` (GPS da motorista)
   - `.../api/v1/trips/requests-live` — `reqLiveConnect()` (pedidos recebidos)
-- **Polling só como fallback**, com `liveSkipPoll('key','liveWsOpen')` que **salta** o pedido quando o WS está aberto.
+  - `.../api/v1/drivers/nearby-live` — `nearbyWsConnect()` (carros no mapa; só `PASSENGER`, fecha quando a página está oculta)
+  - `.../api/v1/trips/<id>/call/live` — `callsWsConnect(tid)` (sinais da chamada: offer/answer/ice/reject/end/cancel)
+  - `.../api/v1/notifications/live` — `notifWsConnect()` (avisa quando há notificação nova)
+- **1 WebSocket em `track.html`** (link público, sem login):
+  - `.../api/v1/trips/public/<id>/live` — `tkWsConnect()` (`hello`/`status`/`driver`/`eta`; `tick` de 4 s só como fallback quando o WS está fechado).
+- **Polling só como fallback**, com `liveSkipPoll('key','liveWsOpen')` que **salta** o pedido quando o WS está aberto. Timers de mapa/contagens correm a **15 s** (na prática ~30 s com o WS aberto).
+- `pollNearby(force)` é o **único** leitor de `/drivers/nearby` (cache de **3 s** em `_nearbyCacheL`/`_nearbyCacheT`); `pollCars()`/`countDrivers()` são wrappers. Não voltar a duplicar o `fetch` — era um pedido a mais por ciclo.
 - `pollTrip` corre a **8 s** como fallback (antes 2 s). Não baixar nem subir sem motivo.
+- Badge do chat: `{t:'unread'}` no WS da viagem incrementa `__chatUnreadN`; `__chatTick` (30 s) salta quando o WS está aberto.
 - Regra Cloudflare: cada **ligação** WS conta 1 pedido; as **mensagens** WS **não** contam como pedidos do Worker (contam no Durable Object a 20:1). Por isso **preferir WS a polling**.
 - `geoPresence()` já se auto-limita (heartbeat 30 s em viagem, 60 s parada) — não é preciso mexer no intervalo.
 

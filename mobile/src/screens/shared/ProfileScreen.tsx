@@ -44,9 +44,10 @@ export default function ProfileScreen() {
       if (res.canceled || !res.assets?.[0]?.base64) return;
       const dataUrl = `data:image/jpeg;base64,${res.assets[0].base64}`;
       setUploading(true);
-      await usersApi.updateProfile({ profilePhoto: dataUrl });
-      setPhoto(dataUrl);
-      dispatch(setUser({ ...user, profilePhoto: dataUrl }));
+      const upd = await usersApi.updateProfile({ profilePhoto: dataUrl });
+      const saved = (upd.data as any)?.profilePhoto || dataUrl;
+      setPhoto(saved);
+      dispatch(setUser({ ...user, profilePhoto: saved }));
     } catch {
       Alert.alert('Erro', 'Não foi possível guardar a foto.');
     } finally {
