@@ -930,7 +930,7 @@ function prmPost(path,body){return fetch('/api/v1'+path,{method:'POST',headers:O
 function prmGet(path){return fetch('/api/v1'+path,{headers:ah()});}
 function prmWhen(s){if(!s)return '';var dt=new Date(s);if(isNaN(dt.getTime()))return '';function p(n){return (n<10?'0':'')+n;}return p(dt.getDate())+'/'+p(dt.getMonth()+1)+' '+p(dt.getHours())+':'+p(dt.getMinutes());}
 function prmFmtLocal(d){function p(n){return (n<10?'0':'')+n;}return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());}
-function prmDefaultTime(){return prmFmtLocal(new Date(Date.now()+60*60000));}
+function prmDefaultTime(){var d=new Date(Date.now()+65*60000);d.setMinutes(d.getMinutes()+((5-(d.getMinutes()%5))%5),0,0);return prmFmtLocal(d);}
 function prmMinTime(){return prmFmtLocal(new Date(Date.now()+60*60000));}
 var PRM_WA='+244932483543';
 function prmSheet(html){try{var m=document.getElementById('prmModal'),s=document.getElementById('prmSheet');if(m&&s){s.innerHTML=html;m.classList.add('on');return;}$('sheet').innerHTML=html;}catch(e){}}
@@ -985,7 +985,7 @@ function prmSelCar(id,cat){
 }
 function prmEstimate(){
   if(!(_prm.o&&_prm.d)||!_prm.car)return '<span class="mut">Marca X e Y para ver o preço.</span>';
-  try{var km=Math.max(1,havKm(_prm.o.lat,_prm.o.lng,_prm.d.lat,_prm.d.lng));var price=Math.round(km*Number(_prm.car.pricePerKm||0));return 'Distância ≈ '+km.toFixed(1)+' km · Preço ≈ '+Number(price).toLocaleString('pt-PT')+' Kz';}catch(e){return '';}
+  try{var km=Math.max(1,havKm([_prm.o.lat,_prm.o.lng],[_prm.d.lat,_prm.d.lng]));var price=Math.round(km*Number(_prm.car.pricePerKm||0));return 'Distância ≈ '+km.toFixed(1)+' km · Preço ≈ '+Number(price).toLocaleString('pt-PT')+' Kz';}catch(e){return '';}
 }
 function renderPremiumForm(){
   var car=_prm.car||{};
@@ -1007,12 +1007,15 @@ function prmToConfirm(){
   if(!_prm.o||!Number.isFinite(_prm.o.lat)){lte('Escolhe o ponto de busca (X).');return;}
   if(!_prm.d||!Number.isFinite(_prm.d.lat)){lte('Escolhe o destino (Y).');return;}
   var t=document.getElementById('prmTime');_prm.time=t?t.value:'';
+  var ms=_prm.time?Date.parse(_prm.time):NaN;
+  if(!Number.isFinite(ms)){lte('Indica a data e a hora da reserva.');try{if(t)t.focus();}catch(e){}return;}
+  if(ms<Date.now()+60*60000){lte('As reservas Premium exigem pelo menos 1 hora de antecedência.');try{if(t){t.style.borderColor='#d92d4b';t.focus();}}catch(e){}return;}
   _prm.ph='confirm';renderPremiumConfirm();
 }
 function renderPremiumConfirm(){
   var car=_prm.car||{};
   var t=_prm.time||'';
-  var km=0;try{km=Math.max(1,havKm(_prm.o.lat,_prm.o.lng,_prm.d.lat,_prm.d.lng));}catch(e){}
+  var km=0;try{km=Math.max(1,havKm([_prm.o.lat,_prm.o.lng],[_prm.d.lat,_prm.d.lng]));}catch(e){}
   var price=Math.round(km*Number(car.pricePerKm||0));
   prmSheet('<div class="pwbox"><h2 style="font-size:18px">Confirmar reserva</h2>'
     +'<div style="border:1px solid var(--ln);border-radius:12px;padding:10px;background:#fff">'
