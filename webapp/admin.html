@@ -331,7 +331,7 @@ async function saveUserPhoto(userId,file,msgId,avId){
   
   say('A preparar...');
   try{
-    var dataUrl=await resizePhoto(file,720,0.9);
+    var dataUrl=await resizePhoto(file,1600,0.95);
     say('A guardar...');
     var r=await fetch('/api/v1/admin/users/'+encodeURIComponent(userId)+'/photo',{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({photo:dataUrl})});
     var j=await r.json().catch(function(){return null;});
@@ -791,7 +791,7 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('input',e=>{if(e.target&&(e.target.id==='fText'))renderTrips();else if(e.target&&(e.target.id==='mSearch')){mapQuery=(e.target.value||'').toLowerCase().trim();renderActive();if(map)drawMap()}else if(e.target&&(e.target.id==='ndPhone')){clearTimeout(ndT);ndT=setTimeout(checkNumber,500)}else if(e.target&&(e.target.id==='uSearch')){const v=e.target.value;clearTimeout(window._uT);window._uT=setTimeout(()=>{uQ=(v||'').trim();uPage=1;load()},450)}else if(e.target&&(e.target.id==='wSearch')){clearTimeout(window._wT);window._wT=setTimeout(()=>{try{renderWallet();}catch(_){}},400)}});
 document.addEventListener('change',e=>{if(e.target&&(e.target.id==='fStatus')){tPage=1;loadTrips()}else if(e.target&&(e.target.id==='uRole')){uRole=e.target.value||'';uPage=1;load()}else if(e.target&&(e.target.id==='fDrvOrder')){try{renderFinance();}catch(_){}}});
-document.addEventListener('change',function(e){var t=e.target;if(!t||!t.getAttribute)return;if(t.id==='ndPhotoFile'){var _nf=(t.files||[])[0]||null;var _pv=document.getElementById('ndPhotoPrev');var _pm=document.getElementById('ndPhotoMsg');if(!_nf){ndPhotoData=null;if(_pv)_pv.innerHTML='';if(_pm)_pm.textContent='';return}resizePhoto(_nf,720,0.9).then(function(u){ndPhotoData=u;if(_pv)_pv.innerHTML='<img src="'+u+'" style="width:100%;height:100%;object-fit:cover">';if(_pm)_pm.textContent='Foto pronta a enviar.'}).catch(function(){ndPhotoData=null;if(_pm)_pm.textContent='Foto invalida.'});return}var uid=t.getAttribute('data-photo-user');if(uid&&(t.files||[]).length){saveUserPhoto(uid,t.files[0],t.getAttribute('data-photo-msg'),t.getAttribute('data-photo-av'));}});
+document.addEventListener('change',function(e){var t=e.target;if(!t||!t.getAttribute)return;if(t.id==='ndPhotoFile'){var _nf=(t.files||[])[0]||null;var _pv=document.getElementById('ndPhotoPrev');var _pm=document.getElementById('ndPhotoMsg');if(!_nf){ndPhotoData=null;if(_pv)_pv.innerHTML='';if(_pm)_pm.textContent='';return}resizePhoto(_nf,1600,0.95).then(function(u){ndPhotoData=u;if(_pv)_pv.innerHTML='<img src="'+u+'" style="width:100%;height:100%;object-fit:cover">';if(_pm)_pm.textContent='Foto pronta a enviar.'}).catch(function(){ndPhotoData=null;if(_pm)_pm.textContent='Foto invalida.'});return}var uid=t.getAttribute('data-photo-user');if(uid&&(t.files||[]).length){saveUserPhoto(uid,t.files[0],t.getAttribute('data-photo-msg'),t.getAttribute('data-photo-av'));}});
 $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('admOut').addEventListener('click',logout);

@@ -213,7 +213,7 @@ function sniffImage(u){try{if(!u||u.length<12)return '';if(u[0]===255&&u[1]===21
     
     say('A preparar…');
     try{
-      var dataUrl=await resizePhoto(file,720,0.9);
+      var dataUrl=await resizePhoto(file,1600,0.95);
       say('A guardar…');
       var r=await fetch('/api/v1/admin/users/'+encodeURIComponent(userId)+'/photo',{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({photo:dataUrl})});
       var j=await r.json().catch(function(){return null;});
