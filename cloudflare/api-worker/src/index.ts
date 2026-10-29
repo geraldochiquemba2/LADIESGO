@@ -195,9 +195,19 @@ function pinForTrip(id: string): string {
 const BASE_FARE = 5, PER_KM = 2.5;
 const RIDE_MULT: Record<string, number> = { ECONOMY: 1.0, COMFORT: 1.35, PREMIUM: 1.7 };
 // Categorias geridas no painel admin (nome/cor/mult editáveis; code estável).
-async function getCategories(sql: any) {
-  const rows = await sql`SELECT code, name, color, mult FROM ride_categories ORDER BY sort, code`;
-  return rows.map((r: any) => ({ code: r.code, name: r.name, color: r.color, mult: Number(r.mult) }));
+// mode 'app'   -> só as que a app mostra (ativas e não apagadas)
+//      'admin' -> as que o painel lista (não apagadas; inclui as inativas)
+//      'all'   -> tudo, incluindo apagadas: SÓ para o histórico resolver o nome
+async function getCategories(sql: any, mode: 'app' | 'admin' | 'all' = 'app') {
+  const rows = mode === 'all'
+    ? await sql`SELECT code, name, color, mult, active, deleted FROM ride_categories ORDER BY sort, code`
+    : mode === 'admin'
+      ? await sql`SELECT code, name, color, mult, active, deleted FROM ride_categories WHERE deleted = 0 ORDER BY sort, code`
+      : await sql`SELECT code, name, color, mult, active, deleted FROM ride_categories WHERE deleted = 0 AND active = 1 ORDER BY sort, code`;
+  return rows.map((r: any) => ({
+    code: r.code, name: r.name, color: r.color, mult: Number(r.mult),
+    active: Number(r.active) !== 0, deleted: Number(r.deleted) === 1,
+  }));
 }
 // ride_categories quase nunca muda, mas catMaps() é chamado em quase todos os
 // endpoints. Sem cache, cada pedido fazia um SELECT (queima a quota de leitura
@@ -211,7 +221,9 @@ async function catMaps(sql: any) {
   const byName: Record<string, string> = { 'Económico': 'ECONOMY', 'Conforto': 'COMFORT', 'Família': 'PREMIUM' };
   const mults: Record<string, number> = { ...RIDE_MULT };
   try {
-    for (const c of await getCategories(sql)) {
+    // 'all': inclui as apagadas, senão o histórico das viagens antigas perdia o
+    // nome da categoria e caía no fallback 'Económico'.
+    for (const c of await getCategories(sql, 'all')) {
       byCode[c.code] = c.name; byName[c.name] = c.code; mults[c.code] = c.mult;
     }
   } catch {}
@@ -2708,6 +2720,7 @@ app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
 
 // ─── CATEGORIAS (geridas no painel admin) ───
 // GET /api/v1/categories — Lista pública (a home usa para nomes/cores/preços)
+// Devolve só as ativas: desativar ou apagar tira a categoria da app.
 app.get('/api/v1/categories', async (c) => {
   try {
     const sql = neon(c.env.DB);
@@ -2718,6 +2731,17 @@ app.get('/api/v1/categories', async (c) => {
       { code: 'COMFORT', name: 'Conforto', color: '#ff5fc8', mult: 1.4 },
       { code: 'PREMIUM', name: 'Família', color: '#5b21c9', mult: 1.65 },
     ] });
+  }
+});
+
+// GET /api/v1/admin/categories — Lista do painel (inclui as inativas)
+app.get('/api/v1/admin/categories', adminMiddleware, async (c) => {
+  try {
+    const sql = neon(c.env.DB);
+    return c.json({ categories: await getCategories(sql, 'admin') });
+  } catch (e) {
+    console.error('list categories error:', e);
+    return c.json({ message: 'Falhou a listar.' }, 500);
   }
 });
 
@@ -2733,35 +2757,69 @@ app.post('/api/v1/admin/categories', adminMiddleware, async (c) => {
   }
   const code = name.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 16) || 'CAT';
   try {
-    await getCategories(sql);
     bustCatCache();
-    const rows = await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES (${code}, ${name}, ${color}, ${mult}, 99) RETURNING code, name, color, mult`;
+    const rows = await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES (${code}, ${name}, ${color}, ${mult}, 99) RETURNING code, name, color, mult, active`;
     const r = rows[0];
-    return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult) } });
+    return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult), active: true } });
   } catch (e) {
-    if (String(e).includes('duplicate') || String(e).includes('already exists')) return c.json({ message: 'Já existe categoria com esse nome.' }, 409);
+    if (String(e).includes('duplicate') || String(e).includes('already exists')) {
+      // Se já existiu e foi apagada, o code fica reservado de propósito: recriá-lo
+      // com outro nome/preço reescreveria o significado das viagens antigas.
+      let wasDeleted = false;
+      try { wasDeleted = (await getCategories(sql, 'all')).some((x: any) => x.code === code && x.deleted); } catch {}
+      return c.json({ message: wasDeleted ? 'Já existiu uma categoria com esse nome (o histórico é preservado, por isso o código fica reservado).' : 'Já existe categoria com esse nome.' }, 409);
+    }
     console.error('add category error:', e);
     return c.json({ message: 'Falhou ao criar.' }, 500);
   }
 });
 
-// PUT /api/v1/admin/categories/:code — Editar nome/cor/mult
+// PUT /api/v1/admin/categories/:code — Editar nome/cor/mult e ativar/desativar.
+// Aceita só os campos que vierem: `{"active":false}` desativa sem reenviar o resto.
 app.put('/api/v1/admin/categories/:code', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
   const code = String(c.req.param('code') || '').toUpperCase().slice(0, 16);
   const b = await c.req.json().catch(() => ({}));
-  const name = String(b.name || '').trim().slice(0, 30);
-  const color = String(b.color || '').trim();
-  const mult = Number(b.mult);
-  if (!code || name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5) {
+  const all = await getCategories(sql, 'all');
+  const cur = all.find((x: any) => x.code === code);
+  if (!cur) return c.json({ message: 'Categoria não encontrada.' }, 404);
+  if (cur.deleted) return c.json({ message: 'Esta categoria foi apagada.' }, 409);
+
+  const name = b.name != null ? String(b.name).trim().slice(0, 30) : cur.name;
+  const color = b.color != null ? String(b.color).trim() : cur.color;
+  const mult = b.mult != null ? Number(b.mult) : cur.mult;
+  const active = b.active != null ? (b.active ? 1 : 0) : (cur.active ? 1 : 0);
+  if (name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5) {
     return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5).' }, 400);
   }
-  await getCategories(sql);
+  // Desativar a última deixaria a app sem escalões de preço.
+  if (!active && !all.some((x: any) => x.code !== code && x.active && !x.deleted)) {
+    return c.json({ message: 'Tem de ficar pelo menos uma categoria ativa.' }, 409);
+  }
   bustCatCache();
-  const rows = await sql`UPDATE ride_categories SET name = ${name}, color = ${color}, mult = ${mult} WHERE code = ${code} RETURNING code, name, color, mult`;
+  const rows = await sql`UPDATE ride_categories SET name = ${name}, color = ${color}, mult = ${mult}, active = ${active} WHERE code = ${code} RETURNING code, name, color, mult, active`;
   if (!rows.length) return c.json({ message: 'Categoria não encontrada.' }, 404);
   const r = rows[0];
-  return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult) } });
+  return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult), active: Number(r.active) !== 0 } });
+});
+
+// DELETE /api/v1/admin/categories/:code — Apaga da app E do painel.
+// Não é um DELETE de verdade: marca `deleted = 1`. A linha fica para que
+// `catMaps()` continue a resolver o nome nas viagens antigas (o `rideType`
+// gravado na viagem é o code, não o nome).
+app.delete('/api/v1/admin/categories/:code', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const code = String(c.req.param('code') || '').toUpperCase().slice(0, 16);
+  const all = await getCategories(sql, 'all');
+  const cur = all.find((x: any) => x.code === code);
+  if (!cur) return c.json({ message: 'Categoria não encontrada.' }, 404);
+  if (cur.deleted) return c.json({ ok: true, already: true });
+  if (!all.some((x: any) => x.code !== code && x.active && !x.deleted)) {
+    return c.json({ message: 'Tem de ficar pelo menos uma categoria ativa. Desativa esta e cria outra primeiro.' }, 409);
+  }
+  bustCatCache();
+  await sql`UPDATE ride_categories SET deleted = 1, active = 0 WHERE code = ${code}`;
+  return c.json({ ok: true });
 });
 
 // ─── WEB CONTRACT (home ladiesgo-home.html) — Neon-backed ───

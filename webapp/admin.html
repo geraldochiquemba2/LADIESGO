@@ -158,7 +158,7 @@ table{border:1px solid #f1edf9}
   <section id="sec-cats" style="display:none">
     <h2>Categorias de viatura</h2>
     <p class="mut">Nome e cor aparecem na app; o multiplicador define o preço (base × mult). O código é fixo.</p>
-    <table><thead><tr><th>Código</th><th>Nome</th><th>Cor</th><th>Mult.</th><th>Exemplo 1 km</th><th></th></tr></thead><tbody id="cats"><tr><td colspan="6" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Código</th><th>Nome</th><th>Cor</th><th>Mult.</th><th>Exemplo 1 km</th><th>Estado</th><th>Ações</th></tr></thead><tbody id="cats"><tr><td colspan="7" class="mut">A carregar…</td></tr></tbody></table>
     <h2 style="margin-top:16px">Adicionar categoria</h2>
     <div class="filters"><input id="ncName" placeholder="Nome (ex: XL)" maxlength="30" autocomplete="off"><input type="color" id="ncColor" value="#61188E" style="width:52px;height:42px;border:1.5px solid var(--ln);border-radius:12px;padding:2px;background:#fff"><input id="ncMult" placeholder="Mult. (ex: 2)" inputmode="decimal" autocomplete="off" style="max-width:120px"><button class="chip" data-a="addcat" style="align-self:center">Adicionar</button></div>
     <div class="mut" id="catMsg" style="margin:8px 0"></div>
@@ -415,7 +415,7 @@ async function load(){
       jf('/api/v1/admin/drivers'),
       jf('/api/v1/admin/users?page='+uPage+'&limit=20'+(uRole?('&role='+uRole):'')+(uQ?('&q='+encodeURIComponent(uQ)):'')),
       jf('/api/v1/admin/drivers/pending'),
-      jf('/api/v1/categories')
+      jf('/api/v1/admin/categories')
     ]);
     if(seq!==_loadSeq)return;
     if(s)STATS=s;
@@ -452,7 +452,7 @@ async function decide(id,ok){
 function catEx(mult){const m=parseFloat(String(mult).replace(',','.'));if(!Number.isFinite(m))return'—';return '≈ '+fmt(Math.max(900,Math.round((500+400*1+70*3)*m/100)*100))+' Kz';}
 function renderCats(){
   try{if(document.activeElement&&$('cats')&&$('cats').contains(document.activeElement))return;}catch(e){}
-  $('cats').innerHTML=CATS.map(x=>'<tr><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" oninput="document.getElementById(\'ce_'+esc(x.code||'')+'\').textContent=catEx(this.value)" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td class="mut" id="ce_'+esc(x.code||'')+'">'+catEx(x.mult)+'<br><span class="mut sm">1 km × '+esc(x.mult||'')+'</span></td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button></td></tr>').join('')||'<tr><td colspan="6" class="mut">Sem categorias.</td></tr>';
+  $('cats').innerHTML=CATS.map(x=>'<tr'+(x.active===false?' style="opacity:.6"':'')+'><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" oninput="document.getElementById(\'ce_'+esc(x.code||'')+'\').textContent=catEx(this.value)" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td class="mut" id="ce_'+esc(x.code||'')+'">'+catEx(x.mult)+'<br><span class="mut sm">1 km × '+esc(x.mult||'')+'</span></td><td>'+(x.active===false?'<span style="color:#d92d4b;font-weight:700">Inativa</span>':'<span style="color:#12a150;font-weight:700">Ativa</span>')+'</td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button> <button class="chip" data-a="togglecat" data-id="'+esc(x.code||'')+'" data-st="'+(x.active===false?'1':'0')+'">'+(x.active===false?'Ativar':'Desativar')+'</button> <button class="chip" data-a="delcat" data-id="'+esc(x.code||'')+'">Apagar</button></td></tr>').join('')||'<tr><td colspan="7" class="mut">Sem categorias.</td></tr>';
 }
 async function addCat(){
   const m=$('catMsg');if(m){m.textContent='';m.style.color='';}
@@ -479,6 +479,26 @@ async function saveCat(code){
     if(m){m.textContent='✓ Categoria atualizada.';m.style.color='#12a150';}
     toast('Categoria atualizada ✓','ok');try{if(document.activeElement)document.activeElement.blur();}catch(e){}load();
   }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Falhou ao guardar.',false);}
+}
+async function toggleCat(code,st){
+  const m=$('catMsg');if(m)m.textContent='';
+  const on=(String(st)==='1');
+  try{
+    const r=await fetch('/api/v1/admin/categories/'+encodeURIComponent(code),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({active:on})});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
+    toast(on?'Categoria ativada ✓':'Categoria desativada ✓','ok');load();
+  }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Erro: '+((e&&e.message)||e),false);}
+}
+async function delCat(code){
+  if(!confirm('Apagar a categoria '+code+'?\n\nSai da app e do painel. As viagens antigas continuam a mostrar o nome dela.'))return;
+  const m=$('catMsg');if(m)m.textContent='';
+  try{
+    const r=await fetch('/api/v1/admin/categories/'+encodeURIComponent(code),{method:'DELETE',headers:ah()});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
+    toast('Categoria apagada ✓','ok');load();
+  }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Erro: '+((e&&e.message)||e),false);}
 }
 function renderUsers(){
   $('users').innerHTML=USERS.map(x=>'<tr><td><b>'+esc(x.name||'(sem nome)')+'</b><br><span class="mut">'+esc(x.phone||'')+'</span></td><td class="mut">'+dstr(x.createdAt)+'</td><td>'+esc(x.role||'')+(x.driver?' 🚕':'')+'</td><td><button class="chip" data-a="usertrips" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Ver</button> <button class="chip" data-a="resetpw" data-id="'+x.id+'" data-n="'+esc(x.name||x.phone||'')+'">Reset</button></td></tr>').join('')||'<tr><td colspan="4" class="mut">Sem registos.</td></tr>';
@@ -747,6 +767,10 @@ document.addEventListener('click',e=>{
   if(mk){mkDriver();return}
   const sc=e.target.closest('[data-a="savecat"]');
   if(sc){saveCat(sc.dataset.id);return}
+  const tc=e.target.closest('[data-a="togglecat"]');
+  if(tc){toggleCat(tc.dataset.id,tc.dataset.st);return}
+  const dc=e.target.closest('[data-a="delcat"]');
+  if(dc){delCat(dc.dataset.id);return}
   const ac=e.target.closest('[data-a="addcat"]');
   if(ac){addCat();return}
   const af=e.target.closest('[data-a="addfleet"]');
