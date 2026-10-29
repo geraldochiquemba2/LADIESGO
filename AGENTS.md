@@ -123,25 +123,28 @@ Limpeza: `DELETE`s por ordem (filhos → pais); **`POST /debug/d1/reset` só rep
 — nesse caso usa `turn:openrelay.metered.ca` (`openrelay`/`openrelay`), que funciona em Wi-Fi mas falha em rede móvel/CGNAT.
 
 Ordem de resolução (em `src/index.ts`):
-1. `METERED_DOMAIN` + `METERED_TURN_APIKEY` → pede credenciais efémeras a `https://<domínio>/api/v1/turn/credentials`.
-2. `METERED_ICE_JSON` → array JSON estático `[{urls, username, credential}]` (secret; devolve `source:'static'`).
-3. `FALLBACK_ICE` (OpenRelay público) → `demo:true`.
+1. **Rotativa:** `METERED_DOMAIN` + `METERED_SECRET_KEY` → cria credencial com `expiryInSeconds=172800` (48 h),
+   guarda-a em D1 (`turn_credentials`) e serve o `apiKey` dela (`source:'rotating'`). Renova quando a mais recente
+   tem **mais de 24 h**; a anterior fica válida até expirar (sobreposição de 24 h).
+2. Estática via `METERED_TURN_APIKEY` (credential-scoped) → `https://<domínio>/api/v1/turn/credentials`.
+3. `METERED_ICE_JSON` → array JSON estático `[{urls, username, credential}]` (`source:'static'`).
+4. `FALLBACK_ICE` (OpenRelay público) → `demo:true`.
 
-**Credenciais atuais (2026-10-29):** vieram do Worker legado `ladiesgo-api` da conta `fddsfds45` (`GET /turn/ice` antigo),
-onde `METERED_DOMAIN`/`METERED_TURN_APIKEY` existem como `secret_text`. A Cloudflare **nunca devolve** o valor de um
-`secret_text`, por isso copiou-se a credencial TURN estática que esse projeto usa (`4c63…`/`CCB7…`, relay
-`global.relay.metered.ca:80/443`) e, mais tarde, o dono forneceu a **API key** do Metered (dashboard).
-- Em produção e staging estão agora `METERED_DOMAIN=ladiesgo.metered.live`, `METERED_TURN_APIKEY` e
-  `METERED_ICE_JSON` (fallback).
-- **`*.metered.live` é wildcard:** qualquer subdomínio serve `/api/v1/turn/credentials`; quem identifica a conta é a
-  API key (key inválida → **401**, sem key → **400**). Não é preciso acertar no subdomínio do dashboard.
-- Esta conta Metered é **legada**: `/credentials` devolve as **mesmas credenciais estáticas** (não gera efémeras).
-  O caminho dinâmico serve para o Metered poder rodar as credenciais sem alterar a app; se a chamada falhar,
-  a API cai automaticamente para `METERED_ICE_JSON`.
-- Prova (2026-10-29): prod e staging `demo:false`; no browser, `RTCPeerConnection` com o payload de produção reuniu
-  **6 candidatos `typ relay`** (relay `139.84.236.150`).
-- Renovar/rodar:
-  `Get-Content ice.json -Raw | npx wrangler@4.151.1 secret put METERED_ICE_JSON --env=""` (idem `--env staging`) + deploy.
+**Configuração atual (2026-10-29):** workspace Metered `ladiesgo-taxi` → `METERED_DOMAIN=ladiesgo-taxi.metered.live`.
+Em produção e staging: `METERED_SECRET_KEY` + `METERED_DOMAIN` (rotação), `METERED_TURN_APIKEY` (legado, 2.º),
+`METERED_ICE_JSON` (último recurso).
+- **A credencial muda de dia para dia.** A que está no telemóvel expira em 48 h; uma nova é criada ~24 h antes.
+  Se vazar, deixa de servir no dia seguinte.
+- **Cron:** o horário diário `17 3 * * *` chama `rotateTurnCredential(env)` (a par do purge de `trip_points`).
+  O `/turn/ice` também roda sozinho se a credencial estiver velha (útil se o cron falhar).
+- **Tabela:** migração `0015_turn_credentials.sql` (`username` PK, `apiKey`, `label`, `createdAtMs`, `expiresAtMs`);
+  label `ladiesgo-prod` / `ladiesgo-staging`. Rodagem = **1 INSERT por dia** e limpeza de expirados > 1 dia.
+- **Secret Key ≠ API key:** a `995a…` só lê a credencial fixa; a Secret Key (`hbB-…`) é a chave-mestra da conta,
+  fica **só** no Worker e nunca vai para o browser. A Metered valida-a contra o subdomínio exato (outro domínio → 401).
+- Prova (2026-10-29): `source:'rotating'`, credencial `8dda…` (≠ estática `4c63…`), **6 candidatos `typ relay`** no
+  browser; em staging, credencial envelhecida 25 h → nova criada e a antiga mantida (2 linhas).
+- Rodar/chave nova: `"<valor>" | npx wrangler@4.151.1 secret put METERED_SECRET_KEY --env=""` (idem `--env staging`).
+  Sem `METERED_SECRET_KEY` o `/turn/ice` volta à credencial estática (funciona, mas não expira).
 
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).

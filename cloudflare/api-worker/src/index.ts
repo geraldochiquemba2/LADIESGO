@@ -7,7 +7,7 @@ import { newBucket, tryConsume } from './ratelimit';
 import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
 import { bumpRequest, budgetState, writeGuard } from './budget';
 
-type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_ICE_JSON?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_SECRET_KEY?: string; METERED_ICE_JSON?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -1432,6 +1432,101 @@ function staticIce(raw: string | undefined): any[] | null {
   }
 }
 
+// ─── TURN rotativo (Metered) ─────────────────────────────────
+// Cria credenciais com validade de 48 h e roda a cada 24 h (esquema recomendado pela Metered).
+// A credencial estática antiga fica como fallback se a criação falhar.
+const TURN_LIFETIME_SEC = 172_800;
+const TURN_ROTATE_MS = 24 * 60 * 60 * 1000;
+let turnKeyCache: { key: string; at: number } | null = null;
+
+function meteredHost(env: any): string {
+  return String(env.METERED_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+}
+
+function turnLabel(env: any): string {
+  return env.ENVIRONMENT === 'staging' ? 'ladiesgo-staging' : 'ladiesgo-prod';
+}
+
+async function meteredCreateCredential(env: any): Promise<{ username: string; apiKey: string } | null> {
+  const host = meteredHost(env);
+  const secret = String(env.METERED_SECRET_KEY || '').trim();
+  if (!host || !secret) return null;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(`https://${host}/api/v1/turn/credential?secretKey=${encodeURIComponent(secret)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expiryInSeconds: TURN_LIFETIME_SEC, label: turnLabel(env) }),
+      signal: ctl.signal,
+    });
+    clearTimeout(t);
+    const j: any = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.apiKey || !j.username) return null;
+    return { username: String(j.username), apiKey: String(j.apiKey) };
+  } catch {
+    return null;
+  }
+}
+
+// Devolve a apiKey da credencial mais recente ainda válida; cria uma nova se estiver velha/faltar.
+async function currentTurnCredential(sql: any, env: any): Promise<{ apiKey: string; username: string; fresh: boolean } | null> {
+  const host = meteredHost(env);
+  const secret = String(env.METERED_SECRET_KEY || '').trim();
+  if (!host || !secret) return null;
+  const label = turnLabel(env);
+  const now = Date.now();
+  try {
+    const rows = await sql`SELECT username, "apiKey", "createdAtMs" FROM turn_credentials
+      WHERE label = ${label} AND "expiresAtMs" > ${now + 2 * 60 * 60 * 1000}
+      ORDER BY "createdAtMs" DESC LIMIT 1`;
+    if (rows.length && now - Number(rows[0].createdAtMs) < TURN_ROTATE_MS)
+      return { apiKey: String(rows[0].apiKey), username: String(rows[0].username), fresh: true };
+  } catch { /* tabela ainda não migrada → tenta criar */ }
+
+  const made = await meteredCreateCredential(env);
+  if (!made) {
+    try {
+      const rows = await sql`SELECT username, "apiKey" FROM turn_credentials
+        WHERE label = ${label} AND "expiresAtMs" > ${now}
+        ORDER BY "createdAtMs" DESC LIMIT 1`;
+      if (rows.length) return { apiKey: String(rows[0].apiKey), username: String(rows[0].username), fresh: true };
+    } catch { /* sem tabela */ }
+    return null;
+  }
+  try {
+    await sql`INSERT OR REPLACE INTO turn_credentials (username, "apiKey", label, "createdAtMs", "expiresAtMs")
+      VALUES (${made.username}, ${made.apiKey}, ${label}, ${now}, ${now + TURN_LIFETIME_SEC * 1000})`;
+    // Limpeza: só apaga registos já expirados há mais de 1 dia (mantém a sobreposição de 24 h).
+    await sql`DELETE FROM turn_credentials WHERE label = ${label} AND "expiresAtMs" < ${now - 24 * 60 * 60 * 1000}`;
+  } catch { /* se a escrita falhar, a credencial criada ainda serve nesta resposta */ }
+  return { apiKey: made.apiKey, username: made.username, fresh: true };
+}
+
+async function meteredIce(env: any, apiKey: string): Promise<any[] | null> {
+  const host = meteredHost(env);
+  if (!host) return null;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(`https://${host}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`, { signal: ctl.signal });
+    clearTimeout(t);
+    const j: any = await r.json().catch(() => null);
+    if (!r.ok || !Array.isArray(j) || !j.length) return null;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+async function rotateTurnCredential(env: any): Promise<void> {
+  try {
+    const sql = neon(env.DB);
+    const cred = await currentTurnCredential(sql, env);
+    if (cred) turnKeyCache = { key: cred.apiKey, at: Date.now() };
+  } catch { /* nunca deixar o cron falhar por isto */ }
+}
+
 async function assertParticipant(sql: any, tripId: string, userId: string) {
   const rows = await sql`SELECT t.id FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${tripId} AND (t."passengerId" = ${userId} OR d."userId" = ${userId}) LIMIT 1`;
   return rows.length > 0;
@@ -1445,25 +1540,35 @@ async function turnQuota(sql: any, freeMb: string | undefined) {
 }
 
 app.get('/api/v1/turn/ice', requireAuth, async (c) => {
-  const domain = String(c.env.METERED_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-  const apiKey = String(c.env.METERED_TURN_APIKEY || '').trim();
+  const domain = meteredHost(c.env);
+  const secret = String(c.env.METERED_SECRET_KEY || '').trim();
   const staticServers = staticIce(c.env.METERED_ICE_JSON);
-  if (!domain || !apiKey) {
-    if (staticServers) return c.json({ iceServers: staticServers, demo: false, source: 'static' });
-    return c.json({ iceServers: FALLBACK_ICE, demo: true });
+
+  // 1) Credencial rotativa (48 h, renovada a cada 24 h) — Metered Secret Key.
+  if (domain && secret) {
+    try {
+      let key = turnKeyCache && Date.now() - turnKeyCache.at < 60_000 ? turnKeyCache.key : '';
+      if (!key) {
+        const cred = await currentTurnCredential(neon(c.env.DB), c.env);
+        if (cred) { key = cred.apiKey; turnKeyCache = { key, at: Date.now() }; }
+      }
+      if (key) {
+        const servers = await meteredIce(c.env, key);
+        if (servers) return c.json({ iceServers: servers, demo: false, source: 'rotating' });
+      }
+    } catch { /* cai para os caminhos seguintes */ }
   }
-  try {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 8000);
-    const r = await fetch(`https://${domain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`, { signal: ctl.signal });
-    clearTimeout(t);
-    const j: any = await r.json();
-    if (!r.ok || !Array.isArray(j)) throw new Error('metered');
-    return c.json({ iceServers: j, demo: false });
-  } catch {
-    if (staticServers) return c.json({ iceServers: staticServers, demo: false, source: 'static' });
-    return c.json({ iceServers: FALLBACK_ICE, demo: true });
+
+  // 2) Credencial estática via apiKey (credential-scoped).
+  const staticKey = String(c.env.METERED_TURN_APIKEY || '').trim();
+  if (domain && staticKey) {
+    const servers = await meteredIce(c.env, staticKey);
+    if (servers) return c.json({ iceServers: servers, demo: false });
   }
+
+  // 3) Lista estática em JSON / 4) OpenRelay público.
+  if (staticServers) return c.json({ iceServers: staticServers, demo: false, source: 'static' });
+  return c.json({ iceServers: FALLBACK_ICE, demo: true });
 });
 app.get('/api/v1/turn/quota', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
@@ -4541,6 +4646,9 @@ export default {
   fetch: app.fetch,
   async scheduled(event: any, env: any, _ctx: any) {
     await runNotificationSchedules(env);
-    if (!event || event.cron === '17 3 * * *') await purgeTripPoints(env);
+    if (!event || event.cron === '17 3 * * *') {
+      await purgeTripPoints(env);
+      await rotateTurnCredential(env);
+    }
   },
 };
