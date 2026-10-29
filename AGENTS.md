@@ -127,14 +127,17 @@ Ordem de resolução (em `src/index.ts`):
 2. `METERED_ICE_JSON` → array JSON estático `[{urls, username, credential}]` (secret; devolve `source:'static'`).
 3. `FALLBACK_ICE` (OpenRelay público) → `demo:true`.
 
-**Credenciais atuais:** vieram do Worker legado `ladiesgo-api` da conta `fddsfds45` (`GET /turn/ice` antigo), onde
-`METERED_DOMAIN`/`METERED_TURN_APIKEY` existem como `secret_text`. A Cloudflare **nunca devolve** o valor de um
-`secret_text` (nem por API/CLI/dashboard), por isso a API key **não** foi copiada; copiou-se a credencial TURN estática
-que esse projeto usa (`4c63…`/`CCB7…`, relay `global.relay.metered.ca:80/443`) e guardou-se como
-`METERED_ICE_JSON` (secret) em **produção e staging**.
-- A credencial é **partilhada** com o projeto Metered antigo (plano free ~500 MB/mês). Se esgotar, as chamadas
-  continuam a ligar em Wi-Fi (STUN) e falham em rede móvel. Solução definitiva: credencial Metered nova (dashboard
-  → TURN) e `METERED_ICE_JSON`/`METERED_DOMAIN`+`METERED_TURN_APIKEY` atualizados em ambos os ambientes.
+**Credenciais atuais (2026-10-29):** vieram do Worker legado `ladiesgo-api` da conta `fddsfds45` (`GET /turn/ice` antigo),
+onde `METERED_DOMAIN`/`METERED_TURN_APIKEY` existem como `secret_text`. A Cloudflare **nunca devolve** o valor de um
+`secret_text`, por isso copiou-se a credencial TURN estática que esse projeto usa (`4c63…`/`CCB7…`, relay
+`global.relay.metered.ca:80/443`) e, mais tarde, o dono forneceu a **API key** do Metered (dashboard).
+- Em produção e staging estão agora `METERED_DOMAIN=ladiesgo.metered.live`, `METERED_TURN_APIKEY` e
+  `METERED_ICE_JSON` (fallback).
+- **`*.metered.live` é wildcard:** qualquer subdomínio serve `/api/v1/turn/credentials`; quem identifica a conta é a
+  API key (key inválida → **401**, sem key → **400**). Não é preciso acertar no subdomínio do dashboard.
+- Esta conta Metered é **legada**: `/credentials` devolve as **mesmas credenciais estáticas** (não gera efémeras).
+  O caminho dinâmico serve para o Metered poder rodar as credenciais sem alterar a app; se a chamada falhar,
+  a API cai automaticamente para `METERED_ICE_JSON`.
 - Prova (2026-10-29): prod e staging `demo:false`; no browser, `RTCPeerConnection` com o payload de produção reuniu
   **6 candidatos `typ relay`** (relay `139.84.236.150`).
 - Renovar/rodar:
