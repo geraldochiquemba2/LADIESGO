@@ -210,7 +210,7 @@ function sniffImage(u){try{if(!u||u.length<12)return '';if(u[0]===255&&u[1]===21
     var m=$('edPhotoMsg'),say=function(x){if(m)m.textContent=x;};
     if(!userId){say('Conta inválida.');return;}
     if(!file)return;
-    if(file.size>8*1024*1024){say('Foto até 8 MB.');return;}
+    
     say('A preparar…');
     try{
       var dataUrl=await resizePhoto(file,720,0.9);

@@ -328,7 +328,7 @@ async function saveUserPhoto(userId,file,msgId,avId){
   var m=msgId?document.getElementById(msgId):null;var say=function(x){if(m)m.textContent=x;};
   if(!userId){say('Conta invalida.');return;}
   if(!file)return;
-  if(file.size>8*1024*1024){say('Foto ate 8 MB.');return;}
+  
   say('A preparar...');
   try{
     var dataUrl=await resizePhoto(file,720,0.9);

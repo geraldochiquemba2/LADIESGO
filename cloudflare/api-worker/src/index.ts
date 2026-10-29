@@ -413,7 +413,7 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
   if (body?.profilePhoto != null) {
     const dataUrl = String(body.profilePhoto);
     if (!/^data:image\/(jpeg|jpg|png|webp|gif);base64,/i.test(dataUrl)) return c.json({ message: 'Foto invalida.' }, 400);
-    if (dataUrl.length > 2 * 1024 * 1024) return c.json({ message: 'Foto demasiado grande.' }, 413);
+
     const tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
     if (!tgOn) return c.json({ message: 'Envio de fotos indisponivel.' }, 503);
     // Tem de ser síncrono: precisamos do file_id antes de escrever na D1.
@@ -2641,7 +2641,7 @@ app.put('/api/v1/admin/users/:id/photo', adminMiddleware, async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const photo = String(b.photo || '');
   if (!/^data:image\/(jpeg|jpg|png|webp|gif);base64,/i.test(photo)) return c.json({ message: 'Foto invalida.' }, 400);
-  if (photo.length > 2 * 1024 * 1024) return c.json({ message: 'Foto demasiado grande.' }, 413);
+
   const tgOn = !!((c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN) && (c.env.TG_CHAT_ID || c.env.TELEGRAM_CHAT_ID));
   if (!tgOn) return c.json({ message: 'Envio de fotos indisponivel.' }, 503);
   const rows = await sql`SELECT id, name, phone, role FROM users WHERE id = ${id} LIMIT 1`;
