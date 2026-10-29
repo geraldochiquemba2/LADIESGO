@@ -57,6 +57,7 @@ Papéis: **PASSENGER**, **DRIVER**, **ADMIN** (mesma conta, papel escolhido no s
   - `.../api/v1/trips/public/<id>/live` — `tkWsConnect()` (`hello`/`status`/`driver`/`eta`; `tick` de 4 s só como fallback quando o WS está fechado).
 - **Polling só como fallback**, com `liveSkipPoll('key','liveWsOpen')` que **salta** o pedido quando o WS está aberto. Timers de mapa/contagens correm a **15 s** (na prática ~30 s com o WS aberto).
 - `pollNearby(force)` é o **único** leitor de `/drivers/nearby` (cache de **3 s** em `_nearbyCacheL`/`_nearbyCacheT`); `pollCars()`/`countDrivers()` são wrappers. Não voltar a duplicar o `fetch` — era um pedido a mais por ciclo.
+- Mapa ao vivo: raio filtrado **no servidor** (`radius`, metros) + filtro de **apresentação** no cliente (`searchRadiusKm`/`drawNearbyCars`).
 - `pollTrip` corre a **8 s** como fallback (antes 2 s). Não baixar nem subir sem motivo.
 - Badge do chat: `{t:'unread'}` no WS da viagem incrementa `__chatUnreadN`; `__chatTick` (30 s) salta quando o WS está aberto.
 - Regra Cloudflare: cada **ligação** WS conta 1 pedido; as **mensagens** WS **não** contam como pedidos do Worker (contam no Durable Object a 20:1). Por isso **preferir WS a polling**.

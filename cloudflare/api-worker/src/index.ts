@@ -362,9 +362,9 @@ app.get('/api/v1/users/profile', requireAuth, async (c) => {
 const tgPhotoPathCache = new Map<string, { path: string; exp: number }>();
 app.get('/api/v1/users/photo/:fileId', async (c) => {
   const fileId = String(c.req.param('fileId') || '');
-  if (!/^[A-Za-z0-9_-]{20,256}$/.test(fileId)) return c.json({ message: 'Not found.' }, 404);
+  if (!/^[A-Za-z0-9_-]{20,256}$/.test(fileId)) return c.json({ message: 'Not found.' }, 404, { 'Cache-Control': 'no-store' });
   const tok = String(c.env.TG_BOT_TOKEN || c.env.TELEGRAM_BOT_TOKEN || '');
-  if (!tok) return c.json({ message: 'Not found.' }, 404);
+  if (!tok) return c.json({ message: 'Not found.' }, 404, { 'Cache-Control': 'no-store' });
   try {
     let fp = '';
     const hit = tgPhotoPathCache.get(fileId);
@@ -373,12 +373,12 @@ app.get('/api/v1/users/photo/:fileId', async (c) => {
       const r = await fetch(`https://api.telegram.org/bot${tok}/getFile?file_id=${encodeURIComponent(fileId)}`, { signal: AbortSignal.timeout(10000) });
       const j: any = await r.json().catch(() => null);
       fp = j && j.ok && j.result && j.result.file_path ? String(j.result.file_path) : '';
-      if (!fp) return c.json({ message: 'Not found.' }, 404);
+      if (!fp) return c.json({ message: 'Not found.' }, 404, { 'Cache-Control': 'no-store' });
       if (tgPhotoPathCache.size > 1000) tgPhotoPathCache.clear();
       tgPhotoPathCache.set(fileId, { path: fp, exp: Date.now() + 30 * 60 * 1000 });
     }
     const im = await fetch(`https://api.telegram.org/file/bot${tok}/${fp}`, { signal: AbortSignal.timeout(15000) });
-    if (!im.ok || !im.body) return c.json({ message: 'Not found.' }, 404);
+    if (!im.ok || !im.body) return c.json({ message: 'Not found.' }, 404, { 'Cache-Control': 'no-store' });
     const tgType = String(im.headers.get('content-type') || '').toLowerCase();
     const ext = String(fp.split('.').pop() || '').toLowerCase();
     const inferred = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : 'image/jpeg';
@@ -391,7 +391,7 @@ app.get('/api/v1/users/photo/:fileId', async (c) => {
       },
     });
   } catch {
-    return c.json({ message: 'Not found.' }, 404);
+    return c.json({ message: 'Not found.' }, 404, { 'Cache-Control': 'no-store' });
   }
 });
 app.put('/api/v1/users/profile', requireAuth, async (c) => {
@@ -822,7 +822,9 @@ app.get('/api/v1/drivers/live-geo', async (c) => {
 
 // GET /api/v1/drivers/nearby-live → mapa em direto para qualquer utilizador
 // autenticado (token por query, como as restantes rotas). O DO só envia
-// id/posição/rumo — nunca nome, telefone ou categorias.
+// id/posição/rumo — nunca nome, telefone ou categorias. Com ?lat=&lng= o DO
+// filtra pelo mesmo Haversine do /drivers/nearby (raio em metros, 5000 por
+// omissão, 200..50000). Sem centro válido devolve a frota toda (compatibilidade).
 app.get('/api/v1/drivers/nearby-live', async (c) => {
   let user: any = null;
   try {
@@ -844,7 +846,15 @@ app.get('/api/v1/drivers/nearby-live', async (c) => {
   }
   fwd.set('X-User-Id', String(user.sub || ''));
   fwd.set('X-Viewer', 'pax');
-  return stub.fetch(new Request('https://geo/live', { method: 'GET', headers: fwd }));
+  const qLat = c.req.query('lat'), qLng = c.req.query('lng');
+  const lat = qLat ? Number(qLat) : NaN, lng = qLng ? Number(qLng) : NaN;
+  let q = '';
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    const r = Number(c.req.query('radius'));
+    const radius = Number.isFinite(r) ? Math.min(50000, Math.max(200, r)) : 5000;
+    q = `?lat=${lat}&lng=${lng}&radius=${Math.round(radius)}`;
+  }
+  return stub.fetch(new Request('https://geo/live' + q, { method: 'GET', headers: fwd }));
 });
 
 // GET /api/v1/trips/history — Histórico (web)
@@ -3716,26 +3726,23 @@ export class DriverGeo {
     return new Response(JSON.stringify(o), { headers: { 'Content-Type': 'application/json' } });
   }
   socks(): any[] { try { return this.state.getWebSockets(); } catch { return []; } }
-  // Envia só aos sockets com a tag indicada (ignora falhas individuais).
-  sendTagged(tag: string, obj: any, except?: any) {
-    let msg = '';
-    try { msg = JSON.stringify(obj); } catch { return; }
-    for (const s of this.socks()) {
-      if (s === except) continue;
-      let tags: string[] = [];
-      try { tags = this.state.getTags(s) || []; } catch {}
-      if (tags.indexOf(tag) < 0) continue;
-      try { s.send(msg); } catch {}
-    }
+  // Centro/raio pedidos por um espectador do mapa (?lat=&lng=&radius=).
+  paxCenter(a: any): any {
+    if (!a || a.lat == null || a.lng == null || a.lat === '' || a.lng === '') return null;
+    const lat = Number(a.lat), lng = Number(a.lng), r = Number(a.radius);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng, radius: Number.isFinite(r) && r >= 200 && r <= 50000 ? r : 5000 };
   }
   // Vista do mapa para qualquer autenticado: só id/posição/rumo, nunca
   // nome, telefone ou categorias. Só motoristas online vistos nos últimos 5min.
-  nearbyFrame(): any {
+  // Com um centro, aplica o mesmo Haversine do /drivers/nearby (raio em metros).
+  nearbyFrame(center?: any): any {
     const now = Date.now();
     const drivers: any[] = [];
     for (const v of this.pos.values()) {
       if (!v || !v.online) continue;
       if (now - Number(v.ts || 0) >= 5 * 60 * 1000) continue;
+      if (center && havKm(center.lat, center.lng, Number(v.lat), Number(v.lng)) > center.radius / 1000) continue;
       drivers.push({
         id: String(v.driverId || v.userId || ''),
         lat: Number(v.lat),
@@ -3746,6 +3753,7 @@ export class DriverGeo {
     return { t: 'nearby', drivers, ts: now };
   }
   // Difusão aos espectadores: no máximo 1x/5s e só quando algo mudou.
+  // Cada socket recebe a frame filtrada pelo seu próprio centro (se tiver).
   broadcastNearby(force = false) {
     const now = Date.now();
     if (!force && now - this.lastNearbyAt < 5000) return;
@@ -3754,7 +3762,15 @@ export class DriverGeo {
     if (hash === this.lastNearbyHash) return;
     this.lastNearbyAt = now;
     this.lastNearbyHash = hash;
-    this.sendTagged('pax', frame);
+    for (const s of this.socks()) {
+      let tags: string[] = [];
+      let a: any = null;
+      try { tags = this.state.getTags(s) || []; } catch {}
+      if (tags.indexOf('pax') < 0) continue;
+      try { a = (s.deserializeAttachment && s.deserializeAttachment()) || null; } catch {}
+      const center = this.paxCenter(a);
+      try { s.send(JSON.stringify(center ? this.nearbyFrame(center) : frame)); } catch {}
+    }
   }
   // A hibernação do DO limpa a memória. Sem isto, as posições desapareciam
   // quando o objeto ficava ocioso e a passagreira deixava de ver carros.
@@ -3837,14 +3853,16 @@ export class DriverGeo {
       if (viewer === 'pax') {
         // Espectador do mapa (nearby-live): recebe o estado atual e só frames
         // sanitizados; nunca envia posições.
+        const qLat = u.searchParams.get('lat'), qLng = u.searchParams.get('lng');
+        const center = this.paxCenter({ lat: qLat, lng: qLng, radius: u.searchParams.get('radius') });
         try {
           this.state.acceptWebSocket(server, ['pax']);
-          server.serializeAttachment({ userId, viewer: 'pax' });
+          server.serializeAttachment({ userId, viewer: 'pax', ...(center || {}) });
         } catch {
           return new Response('WS failed', { status: 500 });
         }
         try { await this.load(); } catch {}
-        try { server.send(JSON.stringify(this.nearbyFrame())); } catch {}
+        try { server.send(JSON.stringify(this.nearbyFrame(center))); } catch {}
         return new Response(null, { status: 101, webSocket: client });
       }
       try {

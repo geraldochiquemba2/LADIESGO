@@ -60,6 +60,9 @@ Instruções para agentes que trabalham neste repositório.
   imagem ao canal Telegram (`TG_BOT_TOKEN` + `TG_CHAT_ID`) e gravam o `file_id` devolvido.
 - `GET /api/v1/users/photo/:fileId` serve a imagem a partir do Telegram (`getFile` + streaming;
   cache de 30 min do `file_path` por isolate). É público porque é usado em `<img src>`.
+- Resposta de sucesso leva `Cache-Control: public, max-age=86400, immutable` (24 h); erros (404/502)
+  vão com `no-store`. O URL tem o `file_id`, por isso uma foto nova (novo `file_id`) gera um URL novo —
+  cachear 24 h é seguro e poupa pedidos ao Worker.
 - A API devolve sempre `profilePhoto` como **URL absoluto** pronto para `<img src>`.
 - Se o Telegram falhar, o upload devolve **502** e **não** escreve na D1 (não voltar a guardar base64).
 - Migração de fotos base64 antigas: `npm run migrate:photos` (a partir de `cloudflare/api-worker`;
@@ -79,11 +82,12 @@ Todos são `GET` com header `Upgrade: websocket`; sem upgrade devolvem **426**. 
 
 | Rota | Auth | DO / id | Frames |
 |---|---|---|---|
-| `/api/v1/drivers/nearby-live` | qualquer autenticado | `DRIVERGEO` → `geo:global` (viewer `pax`, tag `pax`) | `{t:'nearby', drivers:[{id,lat,lng,h}], ts}` ao ligar e no máx. 1×/5 s (hash das posições). **Nunca** nome, telefone nem categorias. |
+| `/api/v1/drivers/nearby-live?token=<JWT>&lat=<n>&lng=<n>&radius=<m>` | qualquer autenticado | `DRIVERGEO` → `geo:global` (viewer `pax`, tag `pax`) | `{t:'nearby', drivers:[{id,lat,lng,h}], ts}` ao ligar e no máx. 1×/5 s (hash das posições). Só `id`/posição/rumo; lista vazia é enviada na mesma (`drivers: []`). **Nunca** nome, telefone nem categorias. |
 | `/api/v1/trips/:id/call/live` | só participante (`assertParticipant`, senão **403**) | `TRIPPUSH` → `calls:<tripId>` (tag `call`) | `{t:'ready'}` ao ligar; depois `{t:'signal', signal:{from,type,payload,ts}}` |
 | `/api/v1/notifications/live` | qualquer autenticado | `NOTIFHUB` → `notif:<userId>` (tag `u:<userId>`) | `{t:'hello'}` ao ligar; `{t:'notif', n:1}` quando entra notificação nova |
 | `/api/v1/trips/public/:id/live` | **nenhuma** (link público; **404** se a viagem não existir) | `TRIPPUSH` → `trip:<id>` (tag `pub`) | `{t:'hello', status, driver:{lat,lng,h}\|null}`; depois só `status`/`driver`/`eta` sanitizados |
 
+- **`nearby-live` — raio (2026-10-29):** `radius` em metros, opcional: default **5000**, mínimo **200**, máximo **50000**; valor inválido → default. Sem `lat`/`lng` válidos mantém-se o comportamento antigo (devolve a frota toda). O filtro de raio já é feito **no servidor**; o cliente pode continuar a filtrar (apresentação), mas já não é obrigatório.
 - **`NotifHub`** é a 5.ª DO (binding `NOTIFHUB`, migration `v5`, também em `[env.staging]`): 1 DO por utilizador, WS hibernável, auto-resposta `ping`/`pong`, rota interna `POST /poke`.
 - **Pokes internos** (Worker → DO, sempre em `waitUntil`/try-catch, para não bloquear a resposta):
   - `chatPoke()` no `POST /trips/:id/chat` → `{t:'unread', n:1}` a todos os sockets da viagem. O WS **não** leva `{t:'chat'}`: o texto vem por `GET /trips/:id/chat` (o app usa `unread` + REST).
@@ -129,6 +133,20 @@ em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).
 - **API:** `https://ladiesgo-api.rererererererere670.workers.dev`.
 - **Base de dados:** D1 `ladiesgo` (`fab720b7-d96e-423f-8454-bcc9942f6d50`) na conta `rerere…`, com os dados migrados.
 - **Mobile:** carrega `https://ladiesgo.pages.dev/ladiesgo` e usa a API acima.
+
+## Mobile (2026-10-29) — casca WebView
+- Entrada `mobile/index.ts` → `mobile/App.tsx` (WebView com `SITE_URL = https://ladiesgo.pages.dev/ladiesgo?v=…`).
+- O bundle tem **7 módulos**. Todo o resto de `mobile/src/` é **código órfão**: não é importado, não é compilado, não corre.
+
+| Corre (no bundle) | Órfão (não corre) |
+|---|---|
+| `mobile/index.ts`, `mobile/App.tsx` | `mobile/src/screens/**`, `mobile/src/navigation/**`, `mobile/src/components/**` |
+| `mobile/assets/icon.png` | `mobile/src/store/**`, `mobile/src/services/socket.ts` |
+| `mobile/src/services/api.ts`, `bgLocation.ts`, `driverBgLocation.ts`, `driverGeoSocket.ts` | restantes `mobile/src/services/*` |
+
+- Fluxo real: `/ladiesgo` (landing, ~22 KB) → `/app` (login) → `/home` (mapa/chat, ~398 KB). O `SITE_URL` abre **só** o `/ladiesgo`.
+- Mudar `App.tsx` (incluindo o `?v=` do `SITE_URL`, que quebra a cache da WebView) exige **build EAS + versão nova na loja**; mudar HTML de `webapp/` não.
+- Detalhes da casca nativa: ver `mobile/AGENTS.md`.
 
 ## Fase 1 — histórico (2026-10-17; NÃO usar para deploy)
 - Notas da conta `isabelcanjamba62` (em espera/desativada). **Não publicar nessa conta.**

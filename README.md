@@ -90,22 +90,16 @@ taxiapp/
 │   ├── .env.example
 │   └── package.json
 │
-├── 📁 mobile/                     # Expo React Native App
-│   ├── src/
-│   │   ├── screens/
-│   │   │   ├── passenger/         # Home, BookRide, FindingDriver
-│   │   │   ├── driver/            # Home, Register
-│   │   │   └── shared/            # Onboarding, Chat, Profile screens
-│   │   ├── navigation/
-│   │   │   └── AppNavigator.tsx   # Role-based routing
-│   │   ├── store/
-│   │   │   ├── slices/
-│   │   │   │   ├── authSlice.ts   # Login state
-│   │   │   │   └── tripSlice.ts   # Trip state + live updates
-│   │   │   └── index.ts
-│   │   └── services/
-│   │       └── api.ts             # Axios + all API calls
-│   └── App.tsx
+├── 📁 mobile/                     # Expo app = casca WebView (o produto vive no webapp)
+│   ├── index.ts                   # Entrada: registerRootComponent(App)
+│   ├── App.tsx                    # WebView + bridge de auth/GPS/bússola/push
+│   ├── assets/                    # Ícone do splash/loading
+│   └── src/services/              # Só estes 4 ficheiros entram no bundle:
+│       ├── api.ts                 # Axios + JWT + driversApi
+│       ├── bgLocation.ts          # Task de GPS em fundo
+│       ├── driverBgLocation.ts    # Task de GPS da motorista
+│       └── driverGeoSocket.ts     # WS /drivers/live-geo
+│                                  # (só o Metro compila o que é importado; ver mobile/AGENTS.md)
 │
 ├── 📁 admin/                      # React.js Admin Dashboard
 │   ├── src/
