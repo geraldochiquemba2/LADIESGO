@@ -463,7 +463,11 @@ async function __sigPost(type,payload){
   try{
     var tid=__call.trip;if(!tid)return {ok:false,ts:0};
     var h=__callH();h['Content-Type']='application/json';
-    var r=await fetch('/api/v1/trips/'+tid+'/call/signal',{method:'POST',headers:h,body:JSON.stringify({type:type,payload:payload||null})});
+    var crit=(type==='end'||type==='reject'||type==='cancel');
+    if(crit){try{if(callsWsOpen())_callsWs.send(JSON.stringify({t:'signal',type:type}));}catch(e){}}
+    var opt={method:'POST',headers:h,body:JSON.stringify({type:type,payload:payload||null})};
+    if(crit)opt.keepalive=true;
+    var r=await fetch('/api/v1/trips/'+tid+'/call/signal',opt);
     try{__call.lastPost=r.status;}catch(e){}
     var pst=0;try{var pjj=await r.json();pst=Number((pjj&&pjj.ts)||0)||0;}catch(e){}
     return {ok:r.ok,ts:pst};
@@ -478,7 +482,7 @@ async function __pcSetup(){
   stream.getTracks().forEach(function(tr){pc.addTrack(tr,stream);});
   var audio=document.getElementById('callAudio');
   if(!audio){audio=document.createElement('audio');audio.id='callAudio';audio.autoplay=true;try{audio.setAttribute('playsinline','');}catch(e){}document.body.appendChild(audio);}
-  pc.ontrack=function(ev){try{audio.srcObject=ev.streams[0];var p=audio.play();if(p&&p.catch)p.catch(function(){});}catch(e){}};
+  pc.ontrack=function(ev){try{audio.srcObject=ev.streams[0];try{ev.receiver.jitterBufferTarget=0;}catch(e2){}try{ev.receiver.playoutDelayHint=0;}catch(e2){}var p=audio.play();if(p&&p.catch)p.catch(function(){});}catch(e){}};
   pc.onicecandidate=function(ev){if(ev.candidate){try{var t=ev.candidate.type||'?';__call.cands=__call.cands||{};__call.cands[t]=1;}catch(e){}__sigPost('ice',{candidate:ev.candidate});}__callNet();};
   pc.oniceconnectionstatechange=function(){
     try{
@@ -488,6 +492,10 @@ async function __pcSetup(){
         try{if(__call.tickT)clearInterval(__call.tickT);}catch(e){}
         __call.tickT=setInterval(__callTick,1000);
         try{var ae=document.getElementById('callAudio');if(ae&&ae.paused){var pr=ae.play();if(pr&&pr.catch)pr.catch(function(){});}}catch(e){}
+      }else if(st==='disconnected'){
+        if(__call.state==='active'&&!__call.dcad){__call.dcad=setTimeout(function(){try{if(__call.pc&&(__call.pc.iceConnectionState==='disconnected'||__call.pc.iceConnectionState==='failed')){__sigPost('end',null);__callEnd(false);__callUI('failed','A chamada caiu.');}}catch(e){}},6000);}
+      }else if(st==='connected'||st==='completed'){
+        try{if(__call.dcad){clearTimeout(__call.dcad);__call.dcad=null;}}catch(e){}
       }else if(st==='failed'){
         if(__call.state==='calling'||__call.state==='ringing'){__callEnd(false);__callUI('failed','Sem ligação direta. Usa a chamada normal.');}
       }
@@ -532,15 +540,18 @@ async function __callAccept(){
   }catch(e){__callEnd(false);__callUI('failed','Falhou a atender.');}
 }
 function __callEnd(post,how){
+  var _pend=null;
   try{
-    if(post)__sigPost(how==='reject'?'reject':'end',null);
+    if(post)_pend=__sigPost(how==='reject'?'reject':'end',null);
   }catch(e){}
+  try{if(__call.dcad){clearTimeout(__call.dcad);__call.dcad=null;}}catch(e){}
   try{var lgD=__call.acceptT?Math.floor((Date.now()-__call.acceptT)/1000):0;var lgT=__call.trip;var lgCaller=!__call.offer;if(lgD>0&&lgT&&lgCaller){var lh=__callH();lh['Content-Type']='application/json';fetch('/api/v1/turn/log',{method:'POST',headers:lh,body:JSON.stringify({tripId:lgT,durationSec:lgD})}).then(function(){try{__quotaFetch();}catch(e){}}).catch(function(){});}__call.acceptT=0;}catch(e){}
   try{if(__call.tickT){clearInterval(__call.tickT);__call.tickT=null;}}catch(e){}
   try{if(__call.mic){(__call.mic.getTracks()||[]).forEach(function(tr){try{tr.stop();}catch(e){}});}}catch(e){}
   try{if(__call.pc){__call.pc.close();}}catch(e){}
   __call.pc=null;__call.mic=null;__call.state='idle';__call.offer=null;
-  try{__call.seen=Date.now();}catch(e){}
+  try{if(__call.seen>0)localStorage.setItem('lg_call_seen',String(__call.seen));}catch(e){}
+  if(_pend)try{_pend.then(function(r){try{if(r&&r.ts&&r.ts>__call.seen){__call.seen=r.ts;localStorage.setItem('lg_call_seen',String(r.ts));}}catch(e){}});}catch(e){}
 }
 async function __callFetch(tid,since){
   var h=__callH();
@@ -552,13 +563,17 @@ async function __callOnSignal(m){
   try{
     if(!m||typeof m!=='object')return;
     var myId='';try{myId=(__callMe()||{}).id||'';}catch(e){}
-    if(m.ts!=null&&m.ts<=__call.seen)return;
-    if(m.ts!=null)__call.seen=m.ts;
+    if(m.ts!=null){
+      var _k=String(__call.trip||'')+'|'+String(m.ts);
+      try{if(!window.__callSeenSet)window.__callSeenSet={};if(window.__callSeenSet[_k])return;window.__callSeenSet[_k]=1;var _ks=Object.keys(window.__callSeenSet);if(_ks.length>120){for(var _i=0;_i<60;_i++)delete window.__callSeenSet[_ks[_i]];}}catch(e){}
+      if(m.ts>__call.seen)__call.seen=m.ts;
+    }
     if(m.from===myId)return;
     if(m.type==='offer'){
       if(__call.state==='idle'){
         var _tid=__callTripId();if(!_tid)return;
         __call.trip=_tid;__call.offer=m.payload;__call.state='ringing';
+        try{localStorage.setItem('lg_call_seen',String(m.ts||0));}catch(e){}
         var _p=__callPeer();__call.peerName=(_p&&_p.name)||'';
         __callUI('ringing');return;
       }
@@ -580,7 +595,7 @@ async function __callLoop(force){
   try{
     var tid=__callTripId();
     if(!tid)return;
-    try{if(!force&&callsWsOpen()){var _nw=Date.now();if(_nw-(window.__callWsSkipT||0)<30000)return;window.__callWsSkipT=_nw;}}catch(e){}
+    try{if(!force&&callsWsOpen()){var _nw=Date.now();var _skip=(__call.state&&__call.state!=='idle')?3000:30000;if(_nw-(window.__callWsSkipT||0)<_skip)return;window.__callWsSkipT=_nw;}}catch(e){}
     var me=null;try{me=__callMe();}catch(e){}
     var myId=(me&&me.id)||'';
     if(__call.state==='idle'){
@@ -599,11 +614,11 @@ async function __callLoop(force){
       }
       return;
     }
-    var j2=await __callFetch(tid,__call.seen);
+    var j2=await __callFetch(tid,(__call.seen>3000?__call.seen-3000:0));
     var ms2=(j2&&j2.signals)||[];
     for(var k=0;k<ms2.length;k++){
       var m=ms2[k];
-      if(!m||m.ts<=__call.seen)continue;
+      if(!m)continue;
       await __callOnSignal(m);
     }
   }catch(e){}
@@ -612,7 +627,7 @@ var _callsWs=null,_callsTid=null,_callsWant=false,_callsRt=null;
 function callsWsOpen(){try{return !!(_callsWs&&_callsWs.readyState===1&&_callsTid&&_callsTid===__callTripId());}catch(e){return false;}}
 function callsWsRetry(){if(_callsRt||!_callsWant)return;_callsRt=setTimeout(function(){_callsRt=null;if(_callsWant)try{callsWsConnect(_callsTid);}catch(e){}},3000);}
 function callsWsClose(){try{_callsWant=false;_callsTid=null;if(_callsRt){clearTimeout(_callsRt);_callsRt=null;}if(_callsWs){try{_callsWs.onopen=_callsWs.onmessage=_callsWs.onclose=_callsWs.onerror=null;}catch(e){}try{_callsWs.close();}catch(e){}_callsWs=null;}}catch(e){}}
-function callsWsConnect(tid){try{tid=tid||__callTripId();if(!tid)return;if(_callsWs&&(_callsWs.readyState===0||_callsWs.readyState===1)&&_callsTid===tid)return;if(_callsWs){try{_callsWs.onopen=_callsWs.onmessage=_callsWs.onclose=_callsWs.onerror=null;}catch(e){}try{_callsWs.close();}catch(e){}_callsWs=null;}var t=null;try{t=localStorage.getItem('taxi_token');}catch(e){}if(!t){_callsWant=false;return;}var base='wss://ladiesgo-api.rererererererere670.workers.dev';try{if(typeof geoWsBase==='function')base=geoWsBase();}catch(e){}var ws=new WebSocket(base+'/api/v1/trips/'+encodeURIComponent(tid)+'/call/live?token='+encodeURIComponent(t));_callsWs=ws;_callsTid=tid;_callsWant=true;ws.onmessage=function(ev){try{var m=JSON.parse(ev.data);if(!m||typeof m!=='object')return;var typ=String(m.t||'').toLowerCase();if(typ==='ready'){try{__callLoop(true);}catch(e){}return;}if(typ==='signal'&&m.signal){__callOnSignal(m.signal);}}catch(e){}};ws.onerror=function(){try{ws.close();}catch(e){}};ws.onclose=function(){if(_callsWs===ws)_callsWs=null;if(_callsWant)callsWsRetry();};}catch(e){if(_callsWant)callsWsRetry();}}
+function callsWsConnect(tid){try{tid=tid||__callTripId();if(!tid)return;if(_callsWs&&(_callsWs.readyState===0||_callsWs.readyState===1)&&_callsTid===tid)return;if(_callsWs){try{_callsWs.onopen=_callsWs.onmessage=_callsWs.onclose=_callsWs.onerror=null;}catch(e){}try{_callsWs.close();}catch(e){}_callsWs=null;}var t=null;try{t=localStorage.getItem('taxi_token');}catch(e){}if(!t){_callsWant=false;return;}var base='wss://ladiesgo-api.rererererererere670.workers.dev';try{if(typeof geoWsBase==='function')base=geoWsBase();}catch(e){}var ws=new WebSocket(base+'/api/v1/trips/'+encodeURIComponent(tid)+'/call/live?token='+encodeURIComponent(t));_callsWs=ws;_callsTid=tid;_callsWant=true;ws.onmessage=function(ev){try{var m=JSON.parse(ev.data);if(!m||typeof m!=='object')return;window.__callsPongT=Date.now();var typ=String(m.t||'').toLowerCase();if(typ==='ready'){try{__callLoop(true);}catch(e){}return;}if(typ==='pong')return;if(typ==='signal'&&m.signal){__callOnSignal(m.signal);}}catch(e){}};ws.onerror=function(){try{ws.close();}catch(e){}};ws.onclose=function(){if(_callsWs===ws)_callsWs=null;try{if(__call.state&&__call.state!=='idle')__callLoop(true);}catch(e){}if(_callsWant)callsWsRetry();};}catch(e){if(_callsWant)callsWsRetry();}}
 function openCall(name,phone){
   try{
     var d=__waDigits(phone);
@@ -628,7 +643,7 @@ function openCall(name,phone){
     return true;
   }catch(e){return false;}
 }
-(function(){try{window.__callIdleT=0;try{if(!window._callsLiveInit){window._callsLiveInit=true;setInterval(function(){try{var _t=__callTripId();if(_t)callsWsConnect(_t);else callsWsClose();}catch(e){}},3000);}}catch(e){}setInterval(function(){try{var _a=false;try{_a=(typeof __call!=='undefined'&&__call.state!=='idle');}catch(e){}if(_a){try{__callLoop();}catch(e){}return;}var _rc=false;try{_rc=(typeof __call!=='undefined'&&__call.seen&&((Date.now()-__call.seen)<45000));}catch(e){}if(_rc){try{__callLoop();}catch(e){}return;}var _n=Date.now(),_every=30000;try{var _tid=(typeof __callTripId==='function')?__callTripId():null;if(_tid&&!document.hidden)_every=2000;else if(_tid)_every=10000;}catch(e){}if((_n-(window.__callIdleT||0))>=_every){window.__callIdleT=_n;try{__callLoop();}catch(e){}}}catch(e){}},1200);}catch(e){}})();
+(function(){try{window.__callIdleT=0;try{if(!window._callsLiveInit){window._callsLiveInit=true;setInterval(function(){try{var _t=__callTripId();if(!_t){callsWsClose();return;}callsWsConnect(_t);try{var _isCall=(__call.state&&__call.state!=='idle');if(!_isCall){window.__callsPingT=0;window.__callsPongT=0;return;}if(!callsWsOpen())return;var _pn=Date.now();if(!window.__callsPingT){window.__callsPingT=_pn;window.__callsPongT=_pn;}if(_pn-window.__callsPingT>=3000){window.__callsPingT=_pn;try{_callsWs.send('{"t":"ping"}');}catch(e){}}if(window.__callsPongT&&_pn-window.__callsPongT>12000){window.__callsPongT=0;window.__callsPingT=0;try{_callsWs.close();}catch(e){}__callLoop(true);}}catch(e){}}catch(e){}},3000);}}catch(e){}setInterval(function(){try{var _a=false;try{_a=(typeof __call!=='undefined'&&__call.state!=='idle');}catch(e){}if(_a){try{__callLoop();}catch(e){}return;}var _rc=false;try{_rc=(typeof __call!=='undefined'&&__call.seen&&((Date.now()-__call.seen)<45000));}catch(e){}if(_rc){try{__callLoop();}catch(e){}return;}var _n=Date.now(),_every=30000;try{var _tid=(typeof __callTripId==='function')?__callTripId():null;if(_tid&&!document.hidden)_every=2000;else if(_tid)_every=10000;}catch(e){}if((_n-(window.__callIdleT||0))>=_every){window.__callIdleT=_n;try{__callLoop();}catch(e){}}}catch(e){}},1200);}catch(e){}})();
 /* Avaliação obrigatória: a fatura só sai com avaliação; sobrevive a refresh
    e logout; bloqueia novo pedido até avaliar. */
 async function __pendingList(){

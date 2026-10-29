@@ -83,7 +83,7 @@ Todos são `GET` com header `Upgrade: websocket`; sem upgrade devolvem **426**. 
 | Rota | Auth | DO / id | Frames |
 |---|---|---|---|
 | `/api/v1/drivers/nearby-live?token=<JWT>&lat=<n>&lng=<n>&radius=<m>` | qualquer autenticado | `DRIVERGEO` → `geo:global` (viewer `pax`, tag `pax`) | `{t:'nearby', drivers:[{id,lat,lng,h}], ts}` ao ligar e no máx. 1×/5 s (hash das posições). Só `id`/posição/rumo; lista vazia é enviada na mesma (`drivers: []`). **Nunca** nome, telefone nem categorias. |
-| `/api/v1/trips/:id/call/live` | só participante (`assertParticipant`, senão **403**) | `TRIPPUSH` → `calls:<tripId>` (tag `call`) | `{t:'ready'}` ao ligar; depois `{t:'signal', signal:{from,type,payload,ts}}` |
+| `/api/v1/trips/:id/call/live` | só participante (`assertParticipant`, senão **403**) | `TRIPPUSH` → `calls:<tripId>` (tag `call`) | `{t:'ready'}` ao ligar; depois `{t:'signal', signal:{from,type,payload,ts}}`. Aceita `{t:'ping'}` → `{t:'pong'}` (heartbeat) e `{t:'signal',type:'end'\|'reject'\|'cancel'}` do cliente, que difunde logo (atalho do "desligar"). |
 | `/api/v1/notifications/live` | qualquer autenticado | `NOTIFHUB` → `notif:<userId>` (tag `u:<userId>`) | `{t:'hello'}` ao ligar; `{t:'notif', n:1}` quando entra notificação nova |
 | `/api/v1/trips/public/:id/live` | **nenhuma** (link público; **404** se a viagem não existir) | `TRIPPUSH` → `trip:<id>` (tag `pub`) | `{t:'hello', status, driver:{lat,lng,h}\|null}`; depois só `status`/`driver`/`eta` sanitizados |
 
@@ -145,6 +145,28 @@ Em produção e staging: `METERED_SECRET_KEY` + `METERED_DOMAIN` (rotação), `M
   browser; em staging, credencial envelhecida 25 h → nova criada e a antiga mantida (2 linhas).
 - Rodar/chave nova: `"<valor>" | npx wrangler@4.151.1 secret put METERED_SECRET_KEY --env=""` (idem `--env staging`).
   Sem `METERED_SECRET_KEY` o `/turn/ice` volta à credencial estática (funciona, mas não expira).
+
+## Chamada — fechar rápido e voz com menos atraso (2026-10-29)
+Sintomas reportados: ao desligar num lado, o outro demorava a fechar; e a voz tinha atraso.
+
+- **Desligar por WebSocket (atalho):** `__sigPost('end'|'reject'|'cancel')` envia **também** `{t:'signal',type:...}` pelo
+  WS `call/live`; o DO `calls:<tripId>` difunde logo com `ts=Date.now()`. O `POST /call/signal` continua a ser feito
+  (persistência + fallback) e leva `keepalive:true`.
+- **`POST /call/signal` deixou de esperar pela D1:** faz o poke ao DO em paralelo e grava a linha em `waitUntil`
+  com `"createdAt" = to_timestamp(ts/1000)` (o `ts` devolvido é o mesmo do frame). Antes o INSERT (D1 em WEUR)
+  atrasava ~0,5–0,8 s a entrega ao outro lado.
+- **Fallback de polling:** o salto de 30 s com WS aberto passa a **3 s enquanto há chamada** (30 s em `idle`).
+- **Heartbeat:** durante a chamada o cliente envia `{t:"ping"}` a cada 3 s; o DO responde `{t:"pong"}`. Sem pong
+  durante 12 s → fecha/reabre o WS e faz `__callLoop(true)` (caem as ligações meio-abertas típicas de rede móvel).
+- **Voz:** `pc.ontrack` define `receiver.jitterBufferTarget = 0` (e `playoutDelayHint = 0` como fallback) — corta
+  a espera do jitter buffer (~200 ms no Chrome/WebView).
+- **Queda abrupta:** `iceConnectionState === 'disconnected'` durante 6 s (ou `failed`/`closed`) → termina a chamada
+  e mostra "A chamada caiu." (antes ficava "Em chamada" com áudio morto).
+- **Duplicados/ordem:** os sinais são deduplicados por `trip|ts`; `__call.seen` passa a guardar **ts do servidor**
+  (antes `Date.now()` local podia saltar sinais e impedir a chamada seguinte de tocar).
+- Prova (2026-10-29, produção, browser real em `/home`): `end` pelo WS chegou ao outro socket em **249 ms**,
+  ou seja **240 ms antes** de o POST terminar (489 ms); 5/5 entregas 194–267 ms; `ping→pong` ~200 ms.
+  Staging: 188–507 ms. Dados de teste apagados da D1 no fim (prod 25 users / 116 trips).
 
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).

@@ -1596,13 +1596,21 @@ app.post('/api/v1/trips/:id/call/signal', requireAuth, async (c) => {
     return c.json({ message: 'Sem acesso a esta viagem.' }, 403);
   if (CALL_TYPES.indexOf(String(type)) < 0) return c.json({ message: 'Sinal inválido.' }, 400);
   const p = payload === undefined || payload === null ? null : JSON.stringify(payload).slice(0, 4000);
-  const rows = await sql`INSERT INTO call_signals (id, "tripId", "senderId", type, payload) VALUES (gen_random_uuid()::text, ${id}, ${user.sub}, ${String(type)}, ${p}::json) RETURNING "createdAt"`;
-  sql`DELETE FROM call_signals WHERE "tripId" = ${id} AND "createdAt" < NOW() - INTERVAL '10 minutes'`.catch(() => {});
-  const ts = new Date(rows[0].createdAt).getTime();
-  // Empurra já para o WS de chamadas (o polling continua como fallback).
+  const ts = Date.now();
   let sigPayload: any = null;
   if (p) { try { sigPayload = JSON.parse(p); } catch { sigPayload = null; } }
-  callSignalPoke(c, id, { from: user.sub, type: String(type), payload: sigPayload, ts });
+  // Entrega já ao WS. O INSERT na D1 é só o fallback do polling: fica em segundo
+  // plano para o "desligar" chegar ao outro lado sem esperar pela escrita.
+  const push = pushCallSignal(c.env, id, { from: user.sub, type: String(type), payload: sigPayload, ts });
+  const persist = (async () => {
+    try {
+      await sql`INSERT INTO call_signals (id, "tripId", "senderId", type, payload, "createdAt")
+        VALUES (gen_random_uuid()::text, ${id}, ${user.sub}, ${String(type)}, ${p}::json, to_timestamp(${ts / 1000}))`;
+      await sql`DELETE FROM call_signals WHERE "tripId" = ${id} AND "createdAt" < NOW() - INTERVAL '10 minutes'`;
+    } catch {}
+  })();
+  try { c.executionCtx.waitUntil(persist); } catch { await persist; }
+  await push;
   return c.json({ ok: true, ts });
 });
 // GET /api/v1/trips/:id/call/live → upgrade WS para o DO `calls:<tripId>`.
@@ -3522,7 +3530,18 @@ export class TripPush {
       }
       return;
     }
-    if (tags.indexOf('call') >= 0) return;
+    if (tags.indexOf('call') >= 0) {
+      if (m.t === 'ping') { try { ws.send(JSON.stringify({ t: 'pong', ts: Date.now() })); } catch {} return; }
+      if (m.t === 'signal') {
+        const typ = String(m.type || '');
+        if (typ === 'end' || typ === 'reject' || typ === 'cancel') {
+          let cuid = '';
+          try { cuid = String((ws.deserializeAttachment() || {}).uid || ''); } catch {}
+          this.broadcastCall({ t: 'signal', signal: { from: cuid, type: typ, payload: null, ts: Date.now() } });
+        }
+      }
+      return;
+    }
     if (m.t === 'gps') { await this.onGps(ws, m).catch(() => {}); return; }
     if (m.t === 'heading') { await this.onHeading(ws, m).catch(() => {}); return; }
     if (m.t === 'chat') {
