@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Linking, AppState } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Linking, AppState, Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
@@ -132,8 +132,59 @@ export default function App() {
   const geoGen = useRef(0);
   const headingSub = useRef<Location.LocationSubscription | null>(null);
   const headingAt = useRef(0);
+  const pushBusy = useRef(false);
+  const pushErr = useRef<string>('');
+  const pushDenied = useRef(false);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+
+  // ─── Token de push ────────────────────────────────────────────────────────
+  // A permissão ("podes mostrar avisos?") NÃO é o token. O token é a morada que
+  // a Apple/Google dão ao aparelho; sem ele o servidor não tem para onde enviar.
+  // Antes, uma falha aqui era engolida por um `catch {}` e ninguém sabia porquê:
+  // a app pedia a permissão, a pessoa aceitava, e o aviso nunca chegava.
+  // Agora a falha é reportada à API (tabela `push_diagnostics`) e volta-se a
+  // tentar sempre que a app regressa ao primeiro plano.
+  const reportPush = async (jwt: string | null, msg: string) => {
+    if (!jwt) return;
+    try {
+      await fetch(API_URL + '/users/push-diagnostic', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: String(msg || '').slice(0, 240), platform: Platform.OS }),
+      });
+    } catch {}
+  };
+
+  const ensurePushToken = async (jwt?: string | null) => {
+    const jwtNow = jwt || jwtRef.current || null;
+    if (pushTokenRef.current) {
+      if (jwtNow) registerPushToken(jwtNow, pushTokenRef.current);
+      return;
+    }
+    if (pushBusy.current || pushDenied.current) return;
+    pushBusy.current = true;
+    try {
+      const cur = await Notifications.getPermissionsAsync();
+      const perm = cur.granted
+        ? cur
+        : await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
+      if (!perm.granted) {
+        pushDenied.current = true;
+        if (pushErr.current !== 'permissao negada') { pushErr.current = 'permissao negada'; reportPush(jwtNow, 'permissao negada'); }
+        return;
+      }
+      const pt = await Notifications.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
+      pushTokenRef.current = pt.data;
+      pushErr.current = '';
+      if (jwtNow) registerPushToken(jwtNow, pt.data);
+    } catch (e: any) {
+      const msg = String((e && (e.message || e)) || 'erro desconhecido').slice(0, 240);
+      if (msg !== pushErr.current) { pushErr.current = msg; reportPush(jwtNow, msg); }
+    } finally {
+      pushBusy.current = false;
+    }
+  };
 
   const endLoading = () => {
     try { if (loadTimer.current) clearTimeout(loadTimer.current); } catch {}
@@ -301,16 +352,18 @@ export default function App() {
         const perm = await Location.requestForegroundPermissionsAsync();
         if (perm.granted) startHeadingWatch();
       } catch {}
-      try {
-        const perm = await Notifications.requestPermissionsAsync({
-          ios: { allowAlert: true, allowBadge: true, allowSound: true },
-        });
-        if (!perm.granted) return;
-        const pt = await Notifications.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
-        pushTokenRef.current = pt.data;
-        if (jwtRef.current) registerPushToken(jwtRef.current, pt.data);
-      } catch {}
+      await ensurePushToken();
     })();
+  }, []);
+
+  // Voltou ao primeiro plano: se ainda não temos token (falhou, ou a pessoa
+  // acabou de autorizar nas Definições), tenta outra vez. Sem explosão de
+  // pedidos: assim que há token isto é só um `registerPushToken` local.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') ensurePushToken();
+    });
+    return () => { try { sub.remove(); } catch {} };
   }, []);
 
   // Ao voltar do fundo depois de muito tempo o iOS pode matar o processo da
@@ -417,7 +470,7 @@ export default function App() {
         AsyncStorage.setItem('lg_bg_state', JSON.stringify(state)).catch(() => {});
         try { if (u.role === 'DRIVER' && u.id) AsyncStorage.setItem('lg_driver_user_id', u.id).catch(() => {}); } catch {}
       try { const c = u.cats || (u.driver && u.driver.cats); if (Array.isArray(c)) AsyncStorage.setItem('lg_driver_cats', JSON.stringify(c)).catch(() => {}); } catch {}
-      if (token && pushTokenRef.current) registerPushToken(token, pushTokenRef.current);
+      if (token) ensurePushToken(token);
         // Apple (background location): só liga o GPS em fundo quando faz
         // falta — motorista online ou viagem ativa. Passageira sem viagem
         // não precisa de fundo; poupa bateria e cumpre a guideline 5.1.1.

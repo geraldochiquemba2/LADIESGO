@@ -432,6 +432,23 @@ app.put('/api/v1/users/profile', requireAuth, async (c) => {
   return c.json({ ...out, telegram: photoFileId ? true : undefined });
 });
 // DELETE /api/v1/users/push-token — Logout: este aparelho deixa de receber pushes + motorista fica offline
+// POST /api/v1/users/push-diagnostic — o aparelho diz porque não conseguiu obter
+// o token de push. Sem isto a falha era invisível: a app pedia a permissão, a
+// pessoa aceitava, o `getExpoPushTokenAsync` falhava e um `catch {}` engolia.
+// Só grava a mensagem (nada de dados pessoais); se a tabela não existir, não
+// estraga nada (devolve ok:false).
+app.post('/api/v1/users/push-diagnostic', requireAuth, async (c) => {
+  try {
+    const sql = neon(c.env.DB);
+    const user = c.get('user');
+    const b = await c.req.json().catch(() => ({}));
+    await sql`INSERT INTO push_diagnostics (id, "userId", platform, error, "createdAt")
+      VALUES ('pd_' || lower(hex(randomblob(16))), ${String(user.sub)}, ${String((b as any).platform || '').slice(0, 16)}, ${String((b as any).error || '').slice(0, 240)}, NOW())`;
+    return c.json({ ok: true });
+  } catch {
+    return c.json({ ok: false });
+  }
+});
 app.delete('/api/v1/users/push-token', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
