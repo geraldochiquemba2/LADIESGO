@@ -1,5 +1,9 @@
 default_platform(:ios)
 
+# Nota (2026-10-29): o perfil tem de incluir a capability Push Notifications na
+# App ID com.ladiesgo.app, senão o `sigh(force: true)` gera um perfil sem
+# aps-environment e o token de push nunca é criado (a app pede a permissão na
+# mesma, por isso o sintoma é "aceitei mas não chega nada").
 platform :ios do
   desc "Gera/reutiliza certificado, compila o IPA com Xcode e envia para o TestFlight (sem EAS)"
   lane :release do
