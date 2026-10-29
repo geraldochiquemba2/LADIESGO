@@ -7,7 +7,7 @@ import { newBucket, tryConsume } from './ratelimit';
 import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
 import { bumpRequest, budgetState, writeGuard } from './budget';
 
-type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_ICE_JSON?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -1416,6 +1416,22 @@ const PER_CALL_SEC = 120;
 const MB_PER_MIN = 0.6;
 const CALL_TYPES = ['offer', 'answer', 'ice', 'reject', 'end', 'cancel'];
 
+// Credenciais TURN estáticas do Metered (JSON: [{urls, username, credential}]).
+// Alternativa ao par METERED_DOMAIN + METERED_TURN_APIKEY quando só se tem a credencial
+// estática (ex.: recuperada de um projeto Metered antigo). Nunca é devolvida sem auth.
+function staticIce(raw: string | undefined): any[] | null {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  try {
+    const arr = JSON.parse(s);
+    if (!Array.isArray(arr)) return null;
+    const clean = arr.filter((x: any) => x && x.urls).slice(0, 8);
+    return clean.length ? clean : null;
+  } catch {
+    return null;
+  }
+}
+
 async function assertParticipant(sql: any, tripId: string, userId: string) {
   const rows = await sql`SELECT t.id FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${tripId} AND (t."passengerId" = ${userId} OR d."userId" = ${userId}) LIMIT 1`;
   return rows.length > 0;
@@ -1431,7 +1447,11 @@ async function turnQuota(sql: any, freeMb: string | undefined) {
 app.get('/api/v1/turn/ice', requireAuth, async (c) => {
   const domain = String(c.env.METERED_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   const apiKey = String(c.env.METERED_TURN_APIKEY || '').trim();
-  if (!domain || !apiKey) return c.json({ iceServers: FALLBACK_ICE, demo: true });
+  const staticServers = staticIce(c.env.METERED_ICE_JSON);
+  if (!domain || !apiKey) {
+    if (staticServers) return c.json({ iceServers: staticServers, demo: false, source: 'static' });
+    return c.json({ iceServers: FALLBACK_ICE, demo: true });
+  }
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 8000);
@@ -1441,6 +1461,7 @@ app.get('/api/v1/turn/ice', requireAuth, async (c) => {
     if (!r.ok || !Array.isArray(j)) throw new Error('metered');
     return c.json({ iceServers: j, demo: false });
   } catch {
+    if (staticServers) return c.json({ iceServers: staticServers, demo: false, source: 'static' });
     return c.json({ iceServers: FALLBACK_ICE, demo: true });
   }
 });

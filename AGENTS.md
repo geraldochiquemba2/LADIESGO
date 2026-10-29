@@ -118,6 +118,28 @@ só no motorista (895 ms); 2.ª chamada do cron → sem frame novo.
 
 Limpeza: `DELETE`s por ordem (filhos → pais); **`POST /debug/d1/reset` só repõe os contadores**, não apaga linhas.
 
+## TURN / chamadas (2026-10-29) — Metered
+`GET /api/v1/turn/ice` (autenticado) devolve `{ iceServers, demo }`. **`demo:true` só existe quando não há TURN configurado**
+— nesse caso usa `turn:openrelay.metered.ca` (`openrelay`/`openrelay`), que funciona em Wi-Fi mas falha em rede móvel/CGNAT.
+
+Ordem de resolução (em `src/index.ts`):
+1. `METERED_DOMAIN` + `METERED_TURN_APIKEY` → pede credenciais efémeras a `https://<domínio>/api/v1/turn/credentials`.
+2. `METERED_ICE_JSON` → array JSON estático `[{urls, username, credential}]` (secret; devolve `source:'static'`).
+3. `FALLBACK_ICE` (OpenRelay público) → `demo:true`.
+
+**Credenciais atuais:** vieram do Worker legado `ladiesgo-api` da conta `fddsfds45` (`GET /turn/ice` antigo), onde
+`METERED_DOMAIN`/`METERED_TURN_APIKEY` existem como `secret_text`. A Cloudflare **nunca devolve** o valor de um
+`secret_text` (nem por API/CLI/dashboard), por isso a API key **não** foi copiada; copiou-se a credencial TURN estática
+que esse projeto usa (`4c63…`/`CCB7…`, relay `global.relay.metered.ca:80/443`) e guardou-se como
+`METERED_ICE_JSON` (secret) em **produção e staging**.
+- A credencial é **partilhada** com o projeto Metered antigo (plano free ~500 MB/mês). Se esgotar, as chamadas
+  continuam a ligar em Wi-Fi (STUN) e falham em rede móvel. Solução definitiva: credencial Metered nova (dashboard
+  → TURN) e `METERED_ICE_JSON`/`METERED_DOMAIN`+`METERED_TURN_APIKEY` atualizados em ambos os ambientes.
+- Prova (2026-10-29): prod e staging `demo:false`; no browser, `RTCPeerConnection` com o payload de produção reuniu
+  **6 candidatos `typ relay`** (relay `139.84.236.150`).
+- Renovar/rodar:
+  `Get-Content ice.json -Raw | npx wrangler@4.151.1 secret put METERED_ICE_JSON --env=""` (idem `--env staging`) + deploy.
+
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).
 - O webapp usa **WebSocket primeiro** com polling de fallback (`pollTrip` 8s), por isso o uso real fica bem abaixo da quota.
