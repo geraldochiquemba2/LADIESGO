@@ -135,6 +135,10 @@ export default function App() {
   const pushBusy = useRef(false);
   const pushErr = useRef<string>('');
   const pushDenied = useRef(false);
+  // Reserva Premium que veio de um toque na notificação (fica à espera do site).
+  const prmPending = useRef<string | null>(null);
+  // Identificador da notificação já aberta no arranque a frio (evita repetir).
+  const prmSeen = useRef<string>('');
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
@@ -215,6 +219,36 @@ export default function App() {
 
   const inject = (code: string) => {
     try { webRef.current?.injectJavaScript(code + ';true;'); } catch {}
+  };
+  // Toque numa notificação Premium → abre a reserva certa, já com os dados
+  // bancários (o site expõe window.__lgOpenPrm). Se a página ainda não tem o
+  // handler (landing/login), o pedido fica guardado e repete-se em cada load.
+  const pushPrm = () => {
+    const id = prmPending.current;
+    if (!id) return;
+    inject('try{if(window.__lgOpenPrm&&window.__lgOpenPrm(' + JSON.stringify(id) + '))window.ReactNativeWebView.postMessage(JSON.stringify({t:"prm-opened"}))}catch(e){}');
+  };
+  // `cold` = veio de getLastNotificationResponseAsync (o iOS devolve a última
+  // notificação tocada em cada arranque). Nesse caso só se abre uma vez.
+  const prmFromNotification = (resp: any, cold?: boolean) => {
+    try {
+      const req = resp && resp.notification && resp.notification.request;
+      const data: any = (req && req.content && req.content.data) || {};
+      const rid = data && data.reservationId ? String(data.reservationId) : '';
+      if (!rid || !/^premium/.test(String((data && data.type) || ''))) return;
+      // Arranque a frio: o iOS devolve a última resposta outra vez. Só vale se
+      // o toque for recente (30 min) — senão abria a reserva em cada arranque.
+      const raw = Number((resp.notification && (resp.notification as any).date) || 0);
+      const ms = raw > 1e12 ? raw : raw > 1e9 ? raw * 1000 : 0;
+      if (ms && Date.now() - ms > 30 * 60 * 1000) return;
+      if (cold) {
+        const nid = String((req && req.identifier) || rid);
+        if (prmSeen.current === nid) return;
+        prmSeen.current = nid;
+      }
+      prmPending.current = rid;
+      pushPrm();
+    } catch {}
   };
   const geoReply = (id: string, kind: 'pos' | 'err', payload: any) => {
     inject('try{window.__lgGeoDispatch(' + JSON.stringify(String(id)) + ',' + JSON.stringify(kind) + ',' + JSON.stringify(payload) + ')}catch(e){}');
@@ -356,6 +390,19 @@ export default function App() {
     })();
   }, []);
 
+  // Notificação tocada (app aberta, em fundo, ou arranque a frio) → reserva
+  // Premium com os dados bancários. O push leva {type:'premium*', reservationId}.
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener(prmFromNotification);
+    (async () => {
+      try {
+        const last = await (Notifications as any).getLastNotificationResponseAsync();
+        if (last) prmFromNotification(last, true);
+      } catch {}
+    })();
+    return () => { try { sub.remove(); } catch {} };
+  }, []);
+
   // Voltou ao primeiro plano: se ainda não temos token (falhou, ou a pessoa
   // acabou de autorizar nas Definições), tenta outra vez. Sem explosão de
   // pedidos: assim que há token isto é só um `registerPushToken` local.
@@ -423,6 +470,11 @@ export default function App() {
       if (msg.t === 'pong') {
         try { if (pingTimer.current) clearTimeout(pingTimer.current); } catch {}
         pingTimer.current = null;
+        return;
+      }
+      if (msg.t === 'prm-opened') {
+        // O site abriu a reserva: já não é preciso repetir a injeção.
+        prmPending.current = null;
         return;
       }
       if (msg.t === 'gps-get') {
@@ -608,6 +660,8 @@ export default function App() {
             // Esconde com atraso: sem isto há um flash branco entre o
             // fim do load e a primeira pintura da página (fundo roxo).
             setTimeout(endLoading, 700);
+            // Se veio de uma notificação Premium, abre a reserva nessa página.
+            setTimeout(pushPrm, 1200);
           }}
           onError={() => {
             endLoading();
