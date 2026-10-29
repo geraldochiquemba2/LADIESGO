@@ -179,6 +179,31 @@ Sintomas reportados: ao desligar num lado, o outro demorava a fechar; e a voz ti
   ou seja **240 ms antes** de o POST terminar (489 ms); 5/5 entregas 194–267 ms; `ping→pong` ~200 ms.
   Staging: 188–507 ms. Dados de teste apagados da D1 no fim (prod 25 users / 116 trips).
 
+## Cancelamento — aviso imediato ao outro lado (2026-10-29)
+Sintoma: quem cancelava via a viagem terminar, mas o outro lado só descobria 10–30 s depois (polling).
+
+- **Bug de raiz:** em `POST /api/v1/trips/:id/status` os `UPDATE` de `DRIVER_ARRIVED`, `IN_PROGRESS` e `CANCELLED`
+  não tinham `RETURNING`. A D1 devolve `[]` quando não há `RETURNING`, logo o `if (!r.length) return 400`
+  disparava **sempre**: a linha era gravada mas a resposta era `400 {"message":"Transição inválida."}` e o
+  `pushStatus` **nunca corria**. Passou a ter `RETURNING id` nos 3 ramos (afetava também `arrived`/`in_progress`/
+  `completed` no fluxo web, não só o cancelamento).
+- **Ordem:** o push ao DO sai **depois** do `UPDATE`; se saísse antes o outro lado lia o estado antigo na D1 e
+  voltava a mostrar a viagem.
+- **O frame leva quem cancelou e o motivo:** `notifyTripPush`/`pushStatus` aceitam `extra`, o DO `TripPush /notify`
+  difunde `{t:'status',status,by,reason}`. `PUT /trips/:id/cancel` manda o `role` do token; `/status` manda o `by`
+  do corpo (a home já o enviava, era ignorado).
+- **Cliente não espera pelo polling:** no handler do WS, em `cancelled`, se o `by` **não** for o meu papel, limpa
+  `myTripId`/`tripId` + `lg_mtrip`/`lg_trip`/`lg_org`/`lg_orgm`, remove marcadores, volta a `home`, mostra
+  `showCancelBanner` com o texto por papel ("Corrida cancelada pela motorista/passageira" + "Motivo: …"), fecha o
+  WS e faz `return` (não chama `pollTrip`/`pollMine`). Quem cancelou continua a ver "Cancelaste a corrida".
+- Prova (2026-10-29, produção, Node com WS global + browser real em 2 origens):
+  passageira→motorista 200/748 ms com frame em 770 ms; motorista→passageira 200/736 ms com frame em 737 ms.
+  No browser: frame com `by`/`reason` em 484 ms (A) e 519 ms (B), banner correto no recetor e
+  "Cancelaste a corrida" no ator. `arrived`/`in_progress`/`completed` passaram de 400 falso para 200
+  (frames 275–636 ms).
+- Nota: `wrangler d1 execute --remote` continua a funcionar; a **API REST** da D1 com o token OAuth guardado
+  devolve `7403` (o token não tem scope de D1). Para escritas por script usar **wrangler**.
+
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).
 - O webapp usa **WebSocket primeiro** com polling de fallback (`pollTrip` 8s), por isso o uso real fica bem abaixo da quota.

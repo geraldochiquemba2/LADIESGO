@@ -920,17 +920,17 @@ app.get('/api/v1/trips/active', requireAuth, async (c) => {
 // accept/arrived/start/complete/cancel e na rota web /status. O DO também
 // aprende o status por leitura Neon esporádica (≤1/15s por viagem ativa)
 // e em {"t":"state"}, como rede de segurança.
-async function notifyTripPush(env: any, tripId: string, status: string) {
+async function notifyTripPush(env: any, tripId: string, status: string, extra?: any) {
   try {
     const ns: any = (env as any).TRIPPUSH;
     if (!ns || !ns.get) return;
     const stub = ns.get(ns.idFromName(`trip:${tripId}`));
-    await stub.fetch(new Request('https://trip-push/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }));
+    await stub.fetch(new Request('https://trip-push/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, ...(extra || {}) }) }));
   } catch {}
 }
 // Dispara o aviso ao DO sem bloquear a resposta (best-effort).
-function pushStatus(c: any, tripId: string, status: string) {
-  try { c.executionCtx.waitUntil(notifyTripPush(c.env, tripId, status)); }
+function pushStatus(c: any, tripId: string, status: string, extra?: any) {
+  try { c.executionCtx.waitUntil(notifyTripPush(c.env, tripId, status, extra)); }
   catch { notifyTripPush(c.env, tripId, status); }
 }
 // ─── GPS em segundo plano → TripPush (ponte da posição viva) ────────────────
@@ -1331,7 +1331,7 @@ app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
   const { reason } = await c.req.json().catch(() => ({}));
   const rows = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = ${String(reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
-  pushStatus(c, c.req.param('id'), 'CANCELLED');
+  pushStatus(c, c.req.param('id'), 'CANCELLED', { by: String((user as any).role || '').toLowerCase() === 'driver' ? 'driver' : 'passenger', reason: String(reason || '').slice(0, 80) });
   try { await hubBroadcast(c.env); } catch {}
   return c.json(rows[0]);
 });
@@ -3019,12 +3019,12 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       if (!acc.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'DRIVER_ARRIVED') {
       // QUOTA D1: guarda de transição — retry escreve 0 linhas.
-      const r = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'ACCEPTED'`;
+      const r = await sql`UPDATE trips SET status = 'DRIVER_ARRIVED', "arrivedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'ACCEPTED' RETURNING id`;
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'IN_PROGRESS') {
       // PIN da passageira obrigatório para iniciar (como na rota mobile /start).
       if (String((b as any).pin || '') !== pinForTrip(id)) return c.json({ message: 'Código incorreto.' }, 400);
-      const r = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "arrivedAt" = COALESCE("arrivedAt", NOW()), "updatedAt" = NOW() WHERE id = ${id} AND status IN ('ACCEPTED', 'DRIVER_ARRIVED')`;
+      const r = await sql`UPDATE trips SET status = 'IN_PROGRESS', "startedAt" = NOW(), "arrivedAt" = COALESCE("arrivedAt", NOW()), "updatedAt" = NOW() WHERE id = ${id} AND status IN ('ACCEPTED', 'DRIVER_ARRIVED') RETURNING id`;
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     } else if (neonSt === 'COMPLETED') {
       const devTs = Number((b as any).ts);
@@ -3039,10 +3039,10 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       }
     } else if (neonSt === 'CANCELLED') {
       // QUOTA D1: guarda de transição — retry escreve 0 linhas.
-      const r = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')`;
+      const r = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${String(b.by || '').slice(0, 16)}, "cancelReason" = ${String(b.reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${id} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') RETURNING id`;
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     }
-    pushStatus(c, id, neonSt);
+    pushStatus(c, id, neonSt, neonSt === 'CANCELLED' ? { by: String((b as any).by || '').toLowerCase() === 'driver' ? 'driver' : 'passenger', reason: String((b as any).reason || '').slice(0, 80) } : undefined);
     if (neonSt === 'DRIVER_ARRIVED') { try { c.executionCtx.waitUntil(pushPaxArrived(c.env, id)); } catch {} }
     if (neonSt === 'ACCEPTED' || neonSt === 'CANCELLED') { try { await hubBroadcast(c.env); } catch {} }
     return c.json({ ok: true, status: st });
@@ -3338,6 +3338,8 @@ export class TripPush {
       try {
         const b: any = await req.json().catch(() => ({}));
         const st = String(b?.status || '').toUpperCase().slice(0, 20);
+        const by = String(b?.by || '').toLowerCase() === 'driver' ? 'driver' : (String(b?.by || '').toLowerCase() === 'passenger' ? 'passenger' : '');
+        const reason = String(b?.reason || '').slice(0, 80);
         if (st) {
           await this.hydrate();
           const changed = this.status !== st;
@@ -3345,7 +3347,7 @@ export class TripPush {
           this.statusAt = Date.now();
           if (changed) {
             await this.persistStatus();
-            this.broadcast({ t: 'status', status: st });
+            this.broadcast({ t: 'status', status: st, by, reason });
             this.broadcastTag('pub', { t: 'status', status: st });
             this.pushEta();
           }
