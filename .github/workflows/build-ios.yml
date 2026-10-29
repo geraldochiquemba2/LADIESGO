@@ -28,7 +28,10 @@ jobs:
       MOBILE_DIR: ${{ github.workspace }}/mobile
       DIST_CERT_PASSWORD: ladiesgo
       BUILD_NUMBER: ${{ github.run_number }}
-      EXPO_PUBLIC_API_URL: https://ladiesgo-api.ladiesgo-angola.workers.dev/api/v1
+      # Conta oficial (rerere...). NUNCA apontar para a conta legada
+      # (ladiesgo-api.ladiesgo-ao / ladiesgo-angola): o JWT e os tokens de push
+      # ficam em bases diferentes e o push quebra em silencio. Ver AGENTS.md.
+      EXPO_PUBLIC_API_URL: https://ladiesgo-api.rererererererere670.workers.dev/api/v1
     defaults:
       run:
         working-directory: mobile
