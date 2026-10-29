@@ -23,3 +23,11 @@ mobile/store-screenshots/
 
 # backups locais
 ladiesgo-home.bak.html
+
+# chaves privadas (App Store Connect, APNs, etc.) — nunca no git
+*.p8
+*.p12
+*.mobileprovision
+
+# artefactos de automação de browser
+.playwright-mcp/

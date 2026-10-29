@@ -1927,7 +1927,11 @@ app.get('/api/places/search', async (c) => {
   // Coordenadas arredondadas a ~1km: a mesma pesquisa em pontos próximos partilha
   // cache (os 15 melhores resultados não mudam de forma percetível nesse raio),
   // o que multiplica os acertos de cache e reduz os varrimentos à BD.
-  const pkey = 'places:v12:' + q.toLowerCase() + ':' + Math.round(lat * 100) / 100 + ',' + Math.round(lng * 100) / 100;
+  // v13 (2026-10-29): subiu de v12 porque as coordenadas de `places` foram
+  // corrigidas contra a Yango (ex.: ISPTEC apontava para o INSUTEC, 5 km ao lado).
+  // Sem mudar a chave, as respostas em cache (7 dias, por datacenter) continuavam
+  // a mostrar as coordenadas antigas.
+  const pkey = 'places:v13:' + q.toLowerCase() + ':' + Math.round(lat * 100) / 100 + ',' + Math.round(lng * 100) / 100;
   const phit = await cacheGet(c, pkey);
   if (phit) return phit;
   // Base local primeiro: instantâneo, offline e com distância à localização.
