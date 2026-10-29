@@ -260,6 +260,21 @@ cancelamento nos dois sentidos/chegou/iniciou/concluiu e limpa no fim).
 `NULL` dos dois lados; `arrived` → `NULL`; `completed` → `NULL`; `in_progress` sem push (token fica, correto).
 Base no fim: 25 users / 119 trips / 1 motorista, 0 vestígios `ZZ%`/`drvtest-%`.
 
+### Causa raiz provada (2026-10-29) — build instalado fala com a API antiga
+O último build iOS instalado é o **#11 (19/10, commit `7ca72d5`)**, que tem dentro dele
+`API_URL = https://ladiesgo-api.ladiesgo-ao.workers.dev/api/v1` (conta legada) e
+`SITE_URL = https://ladiesgo.pages.dev/ladiesgo?v=20261015`. Desde a migração de 28/10 o **site** é o novo
+(as viagens são criadas na D1 nova) mas o **registo do token de push** vai para a API antiga:
+
+- `registerPushToken()` faz `PUT {API_URL}/users/profile` com `{ fcmToken }` e o JWT **da API nova**
+  (o login é feito no site novo). A API antiga valida com o `JWT_SECRET` antigo → **401 `Sessão inválida.`**
+  (provado a 2026-10-29 com JWT novo contra o Worker antigo) e o erro é engolido pelo `catch {}`.
+- Resultado: o token não fica em base nenhuma. **O telefone da motorista real nunca teve token**, nem na
+  base antiga (verificado: a D1 antiga `84893b8b…` tem exactamente os mesmos 2 tokens de 16/10 e 18/10 que a
+  nova, e `fcmToken` da Maria Gaspar = `NULL` nas duas).
+- **Corolário: copiar tokens da D1 antiga para a nova não resolve nada** — o que lá existe já cá está. Escrever
+  tokens novos só os pode criar um build que aponte à API nova (`API_URL` da rerere, build ≥ #12).
+
 **Pendente (só o dono consegue resolver):**
 - **iOS:** juntar `"expo-notifications"` a `plugins` no `mobile/app.json` e **reconstruir** (build nativo novo —
   mudar `App.tsx`/`app.json` não chega com deploy de HTML). A App ID `com.ladiesgo.app` tem de ter a capability
