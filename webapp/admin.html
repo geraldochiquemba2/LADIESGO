@@ -121,7 +121,7 @@ table{border:1px solid #f1edf9}
 <button data-t="drivers">🚕 <span>Motoristas</span></button>
 <button data-t="clients">👤 <span>Passageiras</span></button>
 <button data-t="cats">🏷 <span>Categorias</span></button>
-<button data-t="premium">💎 <span>Gold/Premium</span></button>
+<button data-t="premium"><span>Gold/Premium</span></button>
 <button data-t="wallet">💳 <span>Carteiras</span></button>
   <button data-t="finance">💸 <span>Finanças</span></button>
   <button data-t="new">➕ <span>Registar</span></button>
@@ -166,6 +166,12 @@ table{border:1px solid #f1edf9}
   <section id="sec-premium" style="display:none">
     <h2>Gold / Premium — frota</h2>
     <p class="mut">Carros premium criados pela operação. <b>Só aparecem às passageiras</b> na app. Define a categoria, o preço por km e, se quiseres, associa uma motorista.</p>
+    <h2 style="margin-top:16px">Dados bancários (Premium)</h2>
+    <p class="mut">Aparecem só à passageira que está em 1.º na fila, quando lhe chega a vez de pagar.</p>
+    <div class="filters"><input id="ppIban" placeholder="IBAN (ex: AO06 0000 0000 0000 0000 0)" autocomplete="off"><input id="ppExpress" placeholder="Código Express (ex: 923 872 439)" autocomplete="off"></div>
+    <div class="filters"><input id="ppHolder" placeholder="Titular da conta" autocomplete="off"><input id="ppNote" placeholder="Nota (ex: enviar comprovativo por WhatsApp)" autocomplete="off"></div>
+    <div class="filters"><button class="chip" data-a="savepay" style="align-self:center">Guardar dados bancários</button></div>
+    <div id="ppMsg" class="mut" style="margin:8px 0"></div>
     <div class="filters">
       <select id="pfCat"><option value="Gold">Gold</option><option value="Premium">Premium</option><option value="VIP">VIP</option></select>
       <input id="pfMake" placeholder="Marca (ex: Mercedes)" autocomplete="off">
@@ -181,8 +187,12 @@ table{border:1px solid #f1edf9}
     </div>
     <div class="mut" id="pfMsg" style="margin:8px 0"></div>
     <h2>Frota</h2>
-    <table><thead><tr><th>Categoria</th><th>Viatura</th><th>Preço/km</th><th>Motorista</th><th>Estado</th><th>Reservas</th><th></th></tr></thead><tbody id="fleet"><tr><td colspan="7" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Categoria</th><th>Viatura</th><th>Preço/km</th><th>Motorista</th><th>Estado</th><th>Reservado por</th><th>Reservas</th><th></th></tr></thead><tbody id="fleet"><tr><td colspan="8" class="mut">A carregar…</td></tr></tbody></table>
     <h2 style="margin-top:16px">Reservas recentes</h2>
+    <div class="filters" style="align-items:center">
+      <input id="presQ" placeholder="Pesquisar passageira por nome ou número" autocomplete="off" inputmode="search">
+    </div>
+    <div class="mut sm" id="presInfo" style="margin:-4px 0 8px"></div>
     <table><thead><tr><th>Quando</th><th>Passageira</th><th>Viatura</th><th>De → Para</th><th>Preço</th><th>Estado</th><th>Pos.</th><th></th></tr></thead><tbody id="pres"><tr><td colspan="8" class="mut">A carregar…</td></tr></tbody></table>
   </section>
   <section id="sec-new" style="display:none">
@@ -232,13 +242,19 @@ table{border:1px solid #f1edf9}
       <input id="nTitle" placeholder="Título (opcional)" autocomplete="off">
     </div>
     <textarea id="nMsg" placeholder="Escreve aqui o aviso ou recomendação..." style="width:100%;min-height:120px;border:1.5px solid var(--ln);border-radius:12px;padding:12px;font:inherit;font-size:16px;resize:vertical"></textarea>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label class="chip" style="height:40px;padding:0 14px;display:inline-flex;align-items:center;gap:6px;cursor:pointer">🖼️ Imagem<input type="file" id="nImg" accept="image/*" style="display:none"></label>
+      <button type="button" class="chip" id="nImgRm" style="height:40px;padding:0 12px;display:none">Remover imagem</button>
+      <span id="nImgHint" class="mut" style="font-size:12.5px">Opcional. Aparece em grande no mapa da app.</span>
+    </div>
+    <div id="nImgPrev" style="display:none;margin-top:8px"></div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <button class="chip" data-a="sendnotif" style="height:42px;padding:0 18px">📣 Enviar agora</button>
       <span id="nMsgRes" class="mut"></span>
     </div>
     <div style="margin-top:24px;border-top:1px solid var(--ln);padding-top:16px">
       <h3 style="margin:0 0 4px;font-size:16px">Programar semanal</h3>
-      <p class="mut" style="margin:0 0 10px;font-size:13px">Repete todas as semanas à hora de Luanda. Cada horário tem o seu próprio título e mensagem.</p>
+      <p class="mut" style="margin:0 0 10px;font-size:13px">Repete todas as semanas à hora de Luanda. Cada horário tem o seu próprio título, mensagem e imagem. Só os horários com mensagem são programados.</p>
       <div class="filters" style="align-items:center">
         <select id="nSchTarget" aria-label="Destinatários">
           <option value="ALL">Para todos</option>
@@ -691,11 +707,58 @@ function renderFinance(){
 }
 async function creditWallet(phone){const m=$('wMsg');const ph=(phone||(($('wPhone')||{}).value||'')).trim();const amt=Number(((($('wAmount')||{}).value||'').replace(/[^\d.]/g,'')));if(!ph){if(m)m.textContent='Escreve o número da motorista.';return}if(!(amt>0)){if(m)m.textContent='Escreve o valor pago.';return}if(m)m.textContent='A carregar…';try{const r=await fetch('/api/v1/admin/wallet/credit',{method:'POST',headers:ah(),body:JSON.stringify({phone:ph,amount:amt})});const j=await r.json();if(!r.ok)throw new Error((j&&j.message)||'Falhou');if(m)m.textContent='Carregado ✓ '+(j.user&&j.user.name?j.user.name+' · ':'')+'novo saldo: '+fmt(j.after)+' Kz'+(j.blocked?' (ainda bloqueada)':'');toast('Carregamento feito ✓','ok');try{$('wPhone').value='';$('wAmount').value='';}catch(e){}renderWallet();}catch(e){if(m)m.textContent='Erro: '+((e&&e.message)||e);}}
 let FLEET=[];
-function fleetPill(st){var m={available:['#dcfce7','#166534'],reserved:['#f3e8ff','#6b21a8'],unavailable:['#fee2e2','#991b1b']};var v=m[st]||m.unavailable;return '<span class="pill" style="background:'+v[0]+';color:'+v[1]+'">'+esc(st||'')+'</span>';}
+function fleetPill(st){var m={available:['#dcfce7','#166534','Disponível'],reserved:['#f3e8ff','#6b21a8','Reservado'],unavailable:['#fee2e2','#991b1b','Indisponível']};var v=m[st]||m.unavailable;return '<span class="pill" style="background:'+v[0]+';color:'+v[1]+'">'+esc(v[2])+'</span>';}
+function resPill(st){var m={pending:['#fef3c7','#92400e','Pendente'],confirmed:['#dcfce7','#166534','Confirmada'],cancelled:['#fee2e2','#991b1b','Cancelada'],completed:['#e0e7ff','#3730a3','Concluída'],expired:['#f1f5f9','#475569','Expirada']};var v=m[st]||['#f1f5f9','#475569',st];return '<span class="pill" style="background:'+v[0]+';color:'+v[1]+'">'+esc(v[2]||'')+'</span>';}
+function resWho(x){
+  var r=x&&x.reservation;
+  if(!r)return '<span class="mut">—</span>';
+  var h='<b>'+esc(r.passengerName||'—')+'</b>';
+  if(r.passengerPhone)h+='<br><a class="mono" href="tel:'+esc(r.passengerPhone)+'" style="color:#61188E">'+esc(r.passengerPhone)+'</a>';
+  if(r.scheduledAt)h+='<br><span class="mut sm">'+dstr(r.scheduledAt)+'</span>';
+  if(r.pickup||r.dest)h+='<br><span class="mut sm">'+esc(String(r.pickup||'?')+' → '+String(r.dest||'?'))+'</span>';
+  if(r.priceTotal!=null)h+='<br><span class="mono sm">'+fmt(r.priceTotal)+' Kz</span>';
+  return h;
+}
 let _fleetSeq=0;
+let _presAll=[];
+let _presCar='',_presCarName='';
+function presMatch(x,q,qd){
+  var nm=String(x.passengerName||'').toLowerCase();
+  var ph=String(x.passengerPhone||'');
+  if(!q)return true;
+  if(nm.indexOf(q)>=0)return true;
+  if(ph.toLowerCase().indexOf(q)>=0)return true;
+  if(qd&&ph.replace(/\D/g,'').indexOf(qd)>=0)return true;
+  return false;
+}
+function paintPres(){
+  var pb=$('pres');if(!pb)return;
+  var raw=String((($('presQ')||{}).value)||'');
+  var q=raw.trim().toLowerCase();var qd=raw.replace(/\D/g,'');
+  var all=_presAll||[];
+  var base=_presCar?all.filter(function(x){return String(x.carId||'')===String(_presCar);}):all;
+  var list=q?base.filter(function(x){return presMatch(x,q,qd);}):base;
+  var inf=$('presInfo');
+  if(inf){
+    var txt=(q?(list.length+' de '+base.length+' reserva'+(base.length===1?'':'s')):(base.length+' reserva'+(base.length===1?'':'s')));
+    if(_presCar)txt='Carro '+_presCarName+' · '+txt;
+    inf.innerHTML=esc(txt)+(_presCar?' <button class="chip" data-a="carresall" style="margin-left:6px">Ver todas</button>':'');
+  }
+  if(!list.length){
+    pb.innerHTML='<tr><td colspan="8" class="mut">'+(q?('Sem reservas para "'+esc(raw.trim())+'".'):(_presCar?'Sem reservas para este carro.':'Sem reservas.'))+'</td></tr>';
+    return;
+  }
+  pb.innerHTML=list.map(function(x){
+    var car=[x.car&&x.car.make,x.car&&x.car.model].filter(Boolean).join(' ')+(x.car&&x.car.plate?(' · '+x.car.plate):'');
+    var rota=(x.pickup&&x.pickup.name?x.pickup.name:'')+' → '+(x.dest&&x.dest.name?x.dest.name:'');
+    var acts=(x.status==='pending')?'<button class="chip" data-a="confirmres" data-id="'+esc(x.id)+'">Confirmar</button> <button class="chip" data-a="rejectres" data-id="'+esc(x.id)+'">Rejeitar</button>':'';
+    return '<tr><td class="mut">'+dstr(x.createdAt)+'</td><td><b>'+esc(x.passengerName||'—')+'</b>'+(x.passengerPhone?'<br><a class="mut mono" href="tel:'+esc(x.passengerPhone)+'">'+esc(x.passengerPhone)+'</a>':'')+'</td><td>'+esc(car)+'</td><td>'+esc(rota)+'</td><td class="mono">'+fmt(x.priceTotal)+' Kz</td><td>'+resPill(x.status)+'</td><td class="mono">'+Number(x.position||0)+'</td><td>'+acts+'</td></tr>';
+  }).join('');
+}
 async function renderPremium(){
   const seq=++_fleetSeq;
-  const tb=$('fleet');if(tb)tb.innerHTML='<tr><td colspan="7" class="mut">A carregar…</td></tr>';
+  try{loadPremiumPayment();}catch(e){}
+  const tb=$('fleet');if(tb)tb.innerHTML='<tr><td colspan="8" class="mut">A carregar…</td></tr>';
   const drvSel=$('pfDriver');
   try{if(drvSel)drvSel.innerHTML='<option value="">Sem motorista associada</option>'+(DRV||[]).map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name||x.phone||'')+'</option>').join('');}catch(e){}
   try{const r=await fetch('/api/v1/admin/premium/fleet',{headers:ah(),cache:'no-store'});const j=await r.json();if(seq===_fleetSeq)FLEET=(j&&j.cars)||[];}catch(e){if(seq===_fleetSeq)FLEET=[];}
@@ -706,20 +769,18 @@ async function renderPremium(){
       +'<td><input id="fp_'+esc(x.id)+'" value="'+Number(x.pricePerKm||0)+'" inputmode="numeric" style="border:1.5px solid var(--ln);border-radius:10px;padding:7px 9px;font:inherit;font-size:15px;width:88px"> Kz <button class="chip" data-a="savefleet" data-id="'+esc(x.id)+'">Guardar</button></td>'
       +'<td>'+esc(x.driverName||'—')+(x.driverPhone?'<br><span class="mut">'+esc(x.driverPhone)+'</span>':'')+'</td>'
       +'<td>'+fleetPill(x.status)+'</td>'
+      +'<td>'+resWho(x)+'</td>'
       +'<td class="mono">'+Number(x.activeReservations||0)+'</td>'
-      +'<td><button class="chip" data-a="togglefleet" data-id="'+esc(x.id)+'" data-st="'+(x.status==='available'?'unavailable':'available')+'">'+(x.status==='available'?'Indisponível':'Disponível')+'</button> <button class="chip" data-a="releasefleet" data-id="'+esc(x.id)+'">Libertar</button> <button class="chip" data-a="delfleet" data-id="'+esc(x.id)+'">Apagar</button></td></tr>';
-  }).join('')||'<tr><td colspan="7" class="mut">Sem carros na frota.</td></tr>';
+      +'<td><button class="chip" data-a="carres" data-id="'+esc(x.id)+'">Ver reservas'+(Number(x.activeReservations||0)>0?' ('+Number(x.activeReservations||0)+')':'')+'</button> '+(x.status==='reserved'?'':'<button class="chip" data-a="togglefleet" data-id="'+esc(x.id)+'" data-st="'+(x.status==='available'?'unavailable':'available')+'">'+(x.status==='available'?'Indisponível':'Disponível')+'</button> ')+'<button class="chip" data-a="releasefleet" data-id="'+esc(x.id)+'">Libertar</button> <button class="chip" data-a="delfleet" data-id="'+esc(x.id)+'">Apagar</button></td></tr>';
+  }).join('')||'<tr><td colspan="8" class="mut">Sem carros na frota.</td></tr>';
   const pb=$('pres');if(pb)pb.innerHTML='<tr><td colspan="8" class="mut">A carregar…</td></tr>';
   try{
     const r=await fetch('/api/v1/admin/premium/reservations',{headers:ah(),cache:'no-store'});const j=await r.json();
     if(seq!==_fleetSeq)return;
     const list=(j&&j.reservations)||[];
-    if(pb)pb.innerHTML=list.length?list.map(function(x){
-      var car=[x.car&&x.car.make,x.car&&x.car.model].filter(Boolean).join(' ')+(x.car&&x.car.plate?(' · '+x.car.plate):'');
-      var rota=(x.pickup&&x.pickup.name?x.pickup.name:'')+' → '+(x.dest&&x.dest.name?x.dest.name:'');
-      var acts=(x.status==='pending')?'<button class="chip" data-a="confirmres" data-id="'+esc(x.id)+'">Confirmar</button> <button class="chip" data-a="rejectres" data-id="'+esc(x.id)+'">Rejeitar</button>':'';
-      return '<tr><td class="mut">'+dstr(x.createdAt)+'</td><td><b>'+esc(x.passengerName||'—')+'</b>'+(x.passengerPhone?'<br><span class="mut">'+esc(x.passengerPhone)+'</span>':'')+'</td><td>'+esc(car)+'</td><td>'+esc(rota)+'</td><td class="mono">'+fmt(x.priceTotal)+' Kz</td><td><span class="pill">'+esc(x.status||'')+'</span></td><td class="mono">'+Number(x.position||0)+'</td><td>'+acts+'</td></tr>';
-    }).join(''):'<tr><td colspan="8" class="mut">Sem reservas.</td></tr>';
+    _presAll=list;
+    if(pb)pb.innerHTML='<tr><td colspan="8" class="mut">A carregar…</td></tr>';
+    paintPres();
   }catch(e){if(seq===_fleetSeq&&pb)pb.innerHTML='<tr><td colspan="8" class="mut">Falhou a carregar.</td></tr>';}
 }
 async function addFleet(){
@@ -750,8 +811,52 @@ async function releaseFleet(id){try{const r=await fetch('/api/v1/admin/premium/f
 async function delFleet(id){if(!confirm('Apagar este carro premium?'))return;try{const r=await fetch('/api/v1/admin/premium/fleet/'+encodeURIComponent(id),{method:'DELETE',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Carro apagado ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function confirmRes(id){try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/confirm',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva confirmada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
 async function rejectRes(id){if(!confirm('Rejeitar esta reserva premium?'))return;try{const r=await fetch('/api/v1/admin/premium/reservations/'+encodeURIComponent(id)+'/reject',{method:'POST',headers:ah()});const j=await r.json().catch(()=>null);if(!r.ok)throw new Error((j&&j.message)||'Falhou.');toast('Reserva rejeitada ✓','ok');renderPremium();}catch(e){toast('Erro: '+((e&&e.message)||e),false);}}
+function ppSay(txt,err){const m=$('ppMsg');if(!m)return;m.textContent=txt;m.style.color=err?'#d92d4b':'';}
+// Só carrega uma vez por sessão de painel: o renderPremium() corre outra vez
+// depois de confirmar/recusar reservas e não pode apagar o que o admin escreveu.
+let _ppLoaded=false;
+// Mensagem de erro legível: a API publicada pode ainda não ter a rota (404) ou
+// estar em baixo, e o corpo vazio deixava o admin só com "Falhou.".
+function apiErr(r,j){
+  const msg=(j&&j.message)||'';
+  if(r.status===404)return 'A API publicada ainda não tem esta rota (HTTP 404). Falta publicar o Worker/API.';
+  if(r.status===401||r.status===403)return 'Sessão de admin inválida ou sem permissão (HTTP '+r.status+'). Volta a entrar.';
+  if(r.status>=500)return 'A API respondeu com erro '+(r.status===502?'502 (Telegram/BD indisponível)':('HTTP '+r.status))+'. Tenta outra vez.';
+  return msg||('Falhou (HTTP '+r.status+').');
+}
+async function loadPremiumPayment(){
+  if(_ppLoaded)return;
+  try{
+    const r=await fetch('/api/v1/admin/premium/payment',{headers:ah(),cache:'no-store'});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok)throw new Error(apiErr(r,j));
+    const p=(j&&j.payment)||{};
+    if($('ppIban'))$('ppIban').value=p.iban||'';
+    if($('ppExpress'))$('ppExpress').value=p.expressCode||'';
+    if($('ppHolder'))$('ppHolder').value=p.holder||'';
+    if($('ppNote'))$('ppNote').value=p.note||'';
+    _ppLoaded=true;
+    ppSay('');
+  }catch(e){ppSay('Não foi possível carregar os dados bancários: '+((e&&e.message)||e),true);}
+}
+async function savePay(btn){
+  const gv=id=>((($(id)||{}).value||'').trim());
+  const iban=gv('ppIban'),expressCode=gv('ppExpress'),holder=gv('ppHolder'),note=gv('ppNote');
+  if(!iban&&!expressCode){ppSay('Preenche pelo menos o IBAN ou o código Express.',true);return;}
+  if(iban&&iban.length<10){ppSay('O IBAN parece curto (menos de 10 caracteres).',true);return;}
+  ppSay('A guardar…');
+  if(btn){btn.disabled=true;}
+  try{
+    const r=await fetch('/api/v1/admin/premium/payment',{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({iban:iban,expressCode:expressCode,holder:holder,note:note})});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok)throw new Error(apiErr(r,j));
+    ppSay('Guardado ✓');
+    toast('Dados bancários guardados ✓','ok');
+  }catch(e){const m=(e&&e.message)||String(e);ppSay('Erro: '+m,true);toast(m,false);}
+  finally{if(btn){btn.disabled=false;}}
+}
 function goTab(k){document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('sel',b.dataset.t===k));['monitor','trips','drivers','clients','cats','premium','wallet','finance','new','notifs'].forEach(x=>$('sec-'+x).style.display=x===k?'':'none');var _tt={monitor:'Monitor ao vivo',trips:'Viagens',drivers:'Motoristas',clients:'Passageiras',cats:'Categorias',premium:'Gold / Premium',wallet:'Carteiras',finance:'Finanças',new:'Registar motorista'}[k];var _ps={monitor:'Mapa ao vivo e viagens em curso',trips:'Histórico completo com filtros',drivers:'Estado, detalhes e histórico',clients:'Contas registadas',cats:'Preços por tipo de viatura',premium:'Frota premium e reservas das passageiras',wallet:'Pontos, comissões e carregamentos',finance:'Receita, comissões e ganhos das motoristas',new:'Criar conta de motorista'}[k];var _el=$('pageTitle');if(_el&&_tt)_el.textContent=_tt;var _el2=$('pageSub');if(_el2&&_ps)_el2.textContent=_ps;if(k==='monitor'&&map)setTimeout(()=>map.invalidateSize(),50);if(k==='premium')try{renderPremium();}catch(e){}if(k==='wallet')try{renderWallet();}catch(e){}if(k==='finance')try{renderFinance();}catch(e){}if(k==='notifs'){try{loadNotifSchedules();}catch(e){}try{loadNotifHistory();}catch(e){}}}
-document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}}catch(e){}});
+document.addEventListener('input',function(e){try{if(e.target&&e.target.id==='drvQ'){drvQ=e.target.value||'';renderDrivers();}else if(e.target&&e.target.id==='fDrvQ'){renderFinance();}else if(e.target&&e.target.id==='presQ'){paintPres();}}catch(e){}});
 document.addEventListener('click',e=>{
   const pgc=e.target.closest('[data-pg]');if(pgc){const k=pgc.dataset.pg||null;try{if(k==='revenue'){goTab('finance');}else if(k==='drivers'){goTab('drivers');}else{var _fs=$('fStatus');if(_fs)_fs.value=(k==='pending'||k==='completed'||k==='cancelled')?k:(k==='active'?'active':'');goTab('trips');tPage=1;loadTrips();}}catch(e){}return}const f=e.target.closest('[data-f]');
   if(f){const k=f.dataset.f;mapFilter=mapFilter===k?null:k;load();return}
@@ -779,6 +884,20 @@ document.addEventListener('click',e=>{
   if(sf){saveFleet(sf.dataset.id);return}
   const tf=e.target.closest('[data-a="togglefleet"]');
   if(tf){toggleFleet(tf.dataset.id,tf.dataset.st);return}
+  const cvr=e.target.closest('[data-a="carres"]');
+  if(cvr){
+    try{
+      const cid=cvr.getAttribute('data-id')||'';
+      const fl=(FLEET||[]).filter(function(z){return String(z.id)===String(cid);})[0];
+      _presCar=cid;
+      _presCarName=fl?(([fl.make,fl.model].filter(Boolean).join(' ')||fl.category||'')+(fl.plate?(' · '+fl.plate):'')):'selecionado';
+      paintPres();
+      const pEl=$('pres');if(pEl&&pEl.scrollIntoView)setTimeout(function(){try{pEl.scrollIntoView({behavior:'smooth',block:'center'});}catch(e){}},60);
+    }catch(e){}
+    return;
+  }
+  const cva=e.target.closest('[data-a="carresall"]');
+  if(cva){_presCar='';_presCarName='';paintPres();return}
   const rf=e.target.closest('[data-a="releasefleet"]');
   if(rf){releaseFleet(rf.dataset.id);return}
   const df=e.target.closest('[data-a="delfleet"]');
@@ -787,6 +906,8 @@ document.addEventListener('click',e=>{
   if(cr){confirmRes(cr.dataset.id);return}
   const rj=e.target.closest('[data-a="rejectres"]');
   if(rj){rejectRes(rj.dataset.id);return}
+  const sp=e.target.closest('[data-a="savepay"]');
+  if(sp){savePay(sp);return}
   const wc=e.target.closest('[data-a="credit"]');
   if(wc){creditWallet();return}
   const wr=e.target.closest('[data-a="wcredit"]');
@@ -804,6 +925,9 @@ document.addEventListener('click',e=>{
   if(_rmRow){const _row=_rmRow.closest('.nSchRow');const _box=$('nSchRows');if(_row&&_box){if(_box.children.length>1)_row.remove();else if(typeof toast==='function')toast('Mantém pelo menos um horário.',false);}return}
   if(e.target&&e.target.closest('[data-a="schedulenotif"]')){if(typeof scheduleNotif==='function')scheduleNotif();return}
   const _schDel=e.target&&e.target.closest('[data-a="delsch"]');if(_schDel){if(typeof deleteNotifSchedule==='function')deleteNotifSchedule(_schDel.dataset.id);return}
+  const _schEditBtn=e.target&&e.target.closest('[data-a="editsch"]');if(_schEditBtn){_schEdit=_schEditBtn.dataset.id;_schEImg='';_schEImgDirty=false;try{renderSchedules();}catch(_){}return}
+  if(e.target&&e.target.closest('[data-a="cancelsch"]')){_schEdit=null;_schEImg='';_schEImgDirty=false;try{renderSchedules();}catch(_){}return}
+  const _schSave=e.target&&e.target.closest('[data-a="savesch"]');if(_schSave){if(typeof saveNotifSchedule==='function')saveNotifSchedule(_schSave.dataset.id);return}
   const ap=e.target.closest('[data-a="appr"],[data-a="rej"]');
   if(ap){decide(ap.dataset.id,ap.dataset.a==='appr');return}
   const t=e.target.closest('[data-t]');
@@ -820,6 +944,24 @@ $('admGo').addEventListener('click',login);
 $('admPass').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('admOut').addEventListener('click',logout);
 $('admRefresh').addEventListener('click',function(){var b=this;b.disabled=true;Promise.resolve(load()).finally(function(){setTimeout(function(){b.disabled=false;},400);});});
+var _nImgData='';
+function notifPaintImg(){
+  var p=$('nImgPrev');
+  if(p){
+    if(_nImgData){p.style.display='';p.innerHTML='<img src="'+_nImgData+'" alt="Imagem da notificação" style="max-width:100%;max-height:220px;border-radius:12px;border:1px solid var(--ln);display:block">';}
+    else{p.style.display='none';p.innerHTML='';}
+  }
+  var rm=$('nImgRm');if(rm)rm.style.display=_nImgData?'':'none';
+}
+function notifPickImg(file,cb){
+  try{resizePhoto(file,1400,0.85).then(function(u){cb(u||'');}).catch(function(){cb('');});}catch(e){cb('');}
+}
+try{
+  var _nImgEl=$('nImg');
+  if(_nImgEl)_nImgEl.addEventListener('change',function(){var f=(this.files||[])[0];if(!f)return;var el=this;notifPickImg(f,function(d){_nImgData=d||'';notifPaintImg();el.value='';});});
+  var _nImgRmEl=$('nImgRm');
+  if(_nImgRmEl)_nImgRmEl.addEventListener('click',function(){_nImgData='';notifPaintImg();});
+}catch(e){}
 async function sendNotif(){
   const target = ($('nTarget')||{}).value || 'ALL';
   const title  = ($('nTitle')||{}).value || '';
@@ -830,7 +972,7 @@ async function sendNotif(){
   if(btn){ btn.disabled=true; btn.textContent='A enviar...'; }
   if(res){ res.textContent='A enviar...'; res.style.color=''; }
   try{
-    const payload = JSON.stringify({target,title,message:msg, body:msg, text:msg});
+    const payload = JSON.stringify({target,title,message:msg, body:msg, text:msg, image:_nImgData||undefined});
     const opts = {method:'POST', headers:Object.assign({'Content-Type':'application/json'},ah()), body:payload};
     const r = await fetch('/api/v1/admin/notifications/send', opts);
     const j = await r.json().catch(()=>null);
@@ -842,6 +984,7 @@ async function sendNotif(){
     if(typeof toast==='function')toast('Notificação enviada ✓','ok');
     if($('nMsg')) $('nMsg').value='';
     if($('nTitle')) $('nTitle').value='';
+    _nImgData='';notifPaintImg();
     try{await loadNotifHistory();}catch(_){}
   }catch(e){
     if(res){ res.textContent='Erro: '+((e&&e.message)||e); res.style.color='#d92d4b'; }
@@ -852,6 +995,7 @@ async function sendNotif(){
 }
 function notifDayName(d){return ({0:'Domingo',1:'Segunda-feira',2:'Terça-feira',3:'Quarta-feira',4:'Quinta-feira',5:'Sexta-feira',6:'Sábado'})[Number(d)]||''}
 function notifTargetName(t){return t==='PASSENGERS'?'Passageiras':(t==='DRIVERS'?'Motoristas':'Todos')}
+var _SCH=[],_schEdit=null,_schEImg='',_schEImgDirty=false;
 async function loadNotifSchedules(){
   const box=$('nSchedules');
   if(!box)return;
@@ -859,21 +1003,89 @@ async function loadNotifSchedules(){
     const r=await fetch('/api/v1/admin/notifications/schedules',{headers:ah()});
     const j=await r.json().catch(()=>null);
     if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||'Falha ao carregar.');
-    const list=j.schedules||[];
-    if(!list.length){box.innerHTML='<p class="mut" style="font-size:13px">Ainda não há notificações programadas.</p>';return;}
-    box.innerHTML=list.map(function(s){
-      const times=(s.times||[]).join(' · ');
-      const hasTitle=!!(s.title&&s.title!=='LadiesGo!');
-      return '<div style="border:1px solid var(--ln);border-radius:12px;padding:12px;margin-top:8px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between">'
-        +'<div style="min-width:0"><b style="font-size:14px">'+esc(notifDayName(s.dayOfWeek))+' · '+esc(times)+'</b>'
-        +'<div class="mut" style="font-size:12.5px;margin-top:2px">'+esc(notifTargetName(s.target))+'</div>'
-        +(hasTitle?'<div style="font-weight:700;font-size:13px;margin-top:6px;overflow-wrap:anywhere">'+esc(s.title)+'</div>':'')
-        +'<div style="font-size:13px;margin-top:'+(hasTitle?'2px':'6px')+';overflow-wrap:anywhere">'+esc(s.body||'')+'</div></div>'
-        +'<button class="chip" data-a="delsch" data-id="'+esc(s.id)+'" style="height:36px;padding:0 12px;flex:none">Apagar</button>'
-        +'</div>';
-    }).join('');
+    _SCH=j.schedules||[];
+    renderSchedules();
   }catch(e){
     box.innerHTML='<p style="color:#d92d4b;font-size:13px">Erro: '+esc((e&&e.message)||e)+'</p>';
+  }
+}
+function renderSchedules(){
+  const box=$('nSchedules');
+  if(!box)return;
+  if(!_SCH.length){box.innerHTML='<p class="mut" style="font-size:13px">Ainda não há notificações programadas.</p>';return;}
+  box.innerHTML=_SCH.map(function(s){
+    if(_schEdit===s.id)return schEditHtml(s);
+    const times=(s.times||[]).join(' · ');
+    const hasTitle=!!(s.title&&s.title!=='LadiesGo!');
+    return '<div style="border:1px solid var(--ln);border-radius:12px;padding:12px;margin-top:8px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between">'
+      +'<div style="min-width:0"><b style="font-size:14px">'+esc(notifDayName(s.dayOfWeek))+' · '+esc(times)+'</b>'
+      +(s.enabled?'':' <span class="pill" style="background:#f1f5f9;color:#475569">Pausada</span>')
+      +'<div class="mut" style="font-size:12.5px;margin-top:2px">'+esc(notifTargetName(s.target))+'</div>'
+      +(hasTitle?'<div style="font-weight:700;font-size:13px;margin-top:6px;overflow-wrap:anywhere">'+esc(s.title)+'</div>':'')
+      +'<div style="font-size:13px;margin-top:'+(hasTitle?'2px':'6px')+';overflow-wrap:anywhere">'+esc(s.body||'')+'</div>'
+      +(s.image?'<img src="'+esc(s.image)+'" alt="" style="max-width:100%;max-height:140px;border-radius:10px;border:1px solid var(--ln);margin-top:8px;display:block">':'')
+      +'</div>'
+      +'<div style="display:flex;flex-direction:column;gap:6px;flex:none"><button class="chip" data-a="editsch" data-id="'+esc(s.id)+'" style="height:34px;padding:0 12px">Editar</button><button class="chip" data-a="delsch" data-id="'+esc(s.id)+'" style="height:34px;padding:0 12px">Apagar</button></div>'
+      +'</div>';
+  }).join('');
+  schEditWire();
+}
+function schEditHtml(s){
+  const days=[[1,'Segunda-feira'],[2,'Terça-feira'],[3,'Quarta-feira'],[4,'Quinta-feira'],[5,'Sexta-feira'],[6,'Sábado'],[0,'Domingo']];
+  const daySel=days.map(function(d){return '<option value="'+d[0]+'"'+(Number(s.dayOfWeek)===d[0]?' selected':'')+'>'+d[1]+'</option>';}).join('');
+  const tgSel=[['ALL','Para todos'],['PASSENGERS','Só passageiras'],['DRIVERS','Só motoristas']].map(function(t){return '<option value="'+t[0]+'"'+(String(s.target||'ALL')===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('');
+  const t0=(s.times||[])[0]||'';
+  const hasTitle=!!(s.title&&s.title!=='LadiesGo!');
+  return '<div style="border:1.5px solid #c9a7f5;border-radius:12px;padding:12px;margin-top:8px;background:#faf7ff">'
+    +'<b style="font-size:14px">Editar notificação programada</b>'
+    +'<div class="filters" style="margin-top:10px;align-items:center"><select id="schEDay" aria-label="Dia">'+daySel+'</select><select id="schETarget" aria-label="Destinatários">'+tgSel+'</select><input type="time" id="schETime" aria-label="Horário" value="'+esc(t0)+'" style="flex:0 0 120px;border:1.5px solid var(--ln);border-radius:10px;padding:9px 11px;font:inherit"></div>'
+    +'<input id="schETitle" placeholder="Título (opcional)" maxlength="80" autocomplete="off" value="'+esc(hasTitle?s.title:'')+'" style="width:100%;margin-top:8px;border:1.5px solid var(--ln);border-radius:10px;padding:9px 11px;font:inherit;font-size:16px">'
+    +'<textarea id="schEMsg" maxlength="500" placeholder="Mensagem..." style="width:100%;min-height:90px;margin-top:8px;border:1.5px solid var(--ln);border-radius:10px;padding:9px 11px;font:inherit;resize:vertical">'+esc(s.body||'')+'</textarea>'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><label class="chip" style="height:36px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer">🖼️ Imagem<input type="file" id="schEImgFile" accept="image/*" style="display:none"></label><button type="button" class="chip" id="schEImgRm" style="height:36px;padding:0 10px;display:none">Remover imagem</button><label class="mut" style="font-size:12.5px;display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="schEEnabled"'+(s.enabled?' checked':'')+'> Ativa</label></div>'
+    +'<div id="schEImgPrev" style="display:none;margin-top:6px"></div>'
+    +'<div style="display:flex;gap:8px;margin-top:10px"><button class="chip" data-a="savesch" data-id="'+esc(s.id)+'" style="height:38px;padding:0 16px">Guardar</button><button class="chip" data-a="cancelsch" style="height:38px;padding:0 14px">Cancelar</button><span id="schEMsgRes" class="mut" style="font-size:12.5px"></span></div>'
+    +'</div>';
+}
+function schEditWire(){
+  if(!_schEdit)return;
+  const s=(_SCH||[]).filter(function(x){return String(x.id)===String(_schEdit);})[0];
+  if(!s)return;
+  const pv=$('schEImgPrev'),rm=$('schEImgRm'),fi=$('schEImgFile');
+  const paint=function(){
+    const d=_schEImgDirty?_schEImg:String(s.image||'');
+    if(pv){pv.style.display=d?'':'none';pv.innerHTML=d?'<img src="'+esc(d)+'" alt="" style="max-width:100%;max-height:180px;border-radius:10px;border:1px solid var(--ln);display:block">':'';}
+    if(rm)rm.style.display=d?'':'none';
+  };
+  if(fi)fi.addEventListener('change',function(){const f=(this.files||[])[0];if(!f)return;const el=this;notifPickImg(f,function(d){_schEImg=d||'';_schEImgDirty=true;paint();el.value='';});});
+  if(rm)rm.addEventListener('click',function(){_schEImg='';_schEImgDirty=true;paint();});
+  paint();
+}
+async function saveNotifSchedule(id){
+  const s=(_SCH||[]).filter(function(x){return String(x.id)===String(id);})[0];
+  if(!s)return;
+  const res=$('schEMsgRes');
+  const day=Number((($('schEDay')||{}).value));
+  const target=($('schETarget')||{}).value||'ALL';
+  const time=String((($('schETime')||{}).value)||'').slice(0,5);
+  const title=String((($('schETitle')||{}).value)||'').trim();
+  const msg=String((($('schEMsg')||{}).value)||'').trim();
+  const enabled=!!(($('schEEnabled')||{}).checked);
+  if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)){if(res){res.textContent='Escolhe um horário válido.';res.style.color='#d92d4b';}return;}
+  if(!msg){if(res){res.textContent='Escreve a mensagem.';res.style.color='#d92d4b';}return;}
+  if(!Number.isInteger(day)||day<0||day>6){if(res){res.textContent='Escolhe o dia.';res.style.color='#d92d4b';}return;}
+  const payload={target:target,title:title,message:msg,dayOfWeek:day,times:[time],enabled:enabled};
+  if(_schEImgDirty)payload.image=_schEImg||'';
+  if(res){res.textContent='A guardar...';res.style.color='';}
+  try{
+    const r=await fetch('/api/v1/admin/notifications/schedules/'+encodeURIComponent(id),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(payload)});
+    const j=await r.json().catch(function(){return null;});
+    if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||('Falha ao guardar ('+r.status+').'));
+    _schEdit=null;_schEImg='';_schEImgDirty=false;
+    if(typeof toast==='function')toast('Notificação programada atualizada ✓','ok');
+    await loadNotifSchedules();
+  }catch(e){
+    if(res){res.textContent='Erro: '+((e&&e.message)||e);res.style.color='#d92d4b';}
+    if(typeof toast==='function')toast('Falhou a edição',false);
   }
 }
 function notifWhen(v){
@@ -917,11 +1129,18 @@ function addSchRow(time,title,msg){
   const row=document.createElement('div');
   row.className='nSchRow';
   row.style.cssText='border:1px solid var(--ln);border-radius:12px;padding:10px;background:#fff';
-  row.innerHTML='<div style="display:flex;gap:8px;align-items:center"><input type="time" class="nSchTime" aria-label="Horário" style="flex:0 0 105px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"><input type="text" class="nSchTitle" placeholder="Título (opcional)" maxlength="80" autocomplete="off" style="flex:1;min-width:110px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"><button type="button" class="chip" data-a="rmschrow" aria-label="Remover horário" style="height:38px;padding:0 10px;flex:none">✕</button></div><textarea class="nSchMsg" placeholder="Mensagem deste horário..." maxlength="500" style="width:100%;min-height:70px;margin-top:8px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;resize:vertical"></textarea>';
+  row.innerHTML='<div style="display:flex;gap:8px;align-items:center"><input type="time" class="nSchTime" aria-label="Horário" style="flex:0 0 105px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"><input type="text" class="nSchTitle" placeholder="Título (opcional)" maxlength="80" autocomplete="off" style="flex:1;min-width:110px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit"><button type="button" class="chip" data-a="rmschrow" aria-label="Remover horário" style="height:38px;padding:0 10px;flex:none">✕</button></div><textarea class="nSchMsg" placeholder="Mensagem deste horário..." maxlength="500" style="width:100%;min-height:70px;margin-top:8px;border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;resize:vertical"></textarea><div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><label class="chip" style="height:34px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer">🖼️ Imagem<input type="file" class="nSchImg" accept="image/*" style="display:none"></label><button type="button" class="chip nSchImgRm" style="height:34px;padding:0 10px;display:none">Remover imagem</button><span class="nSchImgName mut" style="font-size:12px">Imagem opcional</span></div><div class="nSchImgPrev" style="display:none;margin-top:6px"></div>';
   box.appendChild(row);
   const ti=row.querySelector('.nSchTime');if(ti&&time)ti.value=time;
   const tt=row.querySelector('.nSchTitle');if(tt&&title)tt.value=title;
   const tm=row.querySelector('.nSchMsg');if(tm&&msg)tm.value=msg;
+  try{
+    const fi=row.querySelector('.nSchImg'),rm=row.querySelector('.nSchImgRm'),pv=row.querySelector('.nSchImgPrev'),nm=row.querySelector('.nSchImgName');
+    const paint=function(){const d=row.dataset.image||'';if(pv){pv.style.display=d?'':'none';pv.innerHTML=d?'<img src="'+d+'" alt="" style="max-width:100%;max-height:160px;border-radius:10px;border:1px solid var(--ln);display:block">':'';}if(rm)rm.style.display=d?'':'none';if(nm)nm.textContent=d?'Imagem escolhida':'Imagem opcional';};
+    if(fi)fi.addEventListener('change',function(){const f=(this.files||[])[0];if(!f)return;const el=this;notifPickImg(f,function(d){row.dataset.image=d||'';paint();el.value='';});});
+    if(rm)rm.addEventListener('click',function(){row.dataset.image='';paint();});
+    paint();
+  }catch(e){}
   return row;
 }
 async function scheduleNotif(){
@@ -936,10 +1155,10 @@ async function scheduleNotif(){
     const title=String(((row.querySelector('.nSchTitle')||{}).value)||'').trim();
     const msg=String(((row.querySelector('.nSchMsg')||{}).value)||'').trim();
     if(!time)continue;
-    if(!msg){if(res){res.textContent='Escreve a mensagem do horário '+time+'.';res.style.color='#d92d4b';}return;}
+    if(!msg){if(title){if(res){res.textContent='Escreve a mensagem do horário '+time+'.';res.style.color='#d92d4b';}return;}continue;}
     if(seen[time]){if(res){res.textContent='Horário repetido: '+time+'.';res.style.color='#d92d4b';}return;}
     seen[time]=1;
-    items.push({time:time,title:title,message:msg});
+    items.push({time:time,title:title,message:msg,image:String(row.dataset.image||'')});
   }
   if(!items.length){if(res){res.textContent='Adiciona pelo menos um horário com mensagem.';res.style.color='#d92d4b';}return;}
   if(!Number.isInteger(day)||day<0||day>6){if(res){res.textContent='Escolhe o dia da semana.';res.style.color='#d92d4b';}return;}
@@ -948,14 +1167,14 @@ async function scheduleNotif(){
   const done=[];
   try{
     for(const it of items){
-      const r=await fetch('/api/v1/admin/notifications/schedules',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({target:target,title:it.title,message:it.message,dayOfWeek:day,times:[it.time]})});
+      const r=await fetch('/api/v1/admin/notifications/schedules',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({target:target,title:it.title,message:it.message,image:it.image||undefined,dayOfWeek:day,times:[it.time]})});
       const j=await r.json().catch(()=>null);
       if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||('Falha ao programar '+it.time+' ('+r.status+').'));
       done.push(it.time);
     }
     if(res){res.textContent='✓ '+done.length+' horário(s) programado(s) para '+notifDayName(day)+'.';res.style.color='#12a150';}
     if(typeof toast==='function')toast('Notificações programadas ✓','ok');
-    rows.forEach(function(row){const tt=row.querySelector('.nSchTitle');if(tt)tt.value='';const tm=row.querySelector('.nSchMsg');if(tm)tm.value='';});
+    rows.forEach(function(row){const tt=row.querySelector('.nSchTitle');if(tt)tt.value='';const tm=row.querySelector('.nSchMsg');if(tm)tm.value='';row.dataset.image='';const rm=row.querySelector('.nSchImgRm');if(rm)rm.style.display='none';const pv=row.querySelector('.nSchImgPrev');if(pv){pv.style.display='none';pv.innerHTML='';}const nm=row.querySelector('.nSchImgName');if(nm)nm.textContent='Imagem opcional';});
     await loadNotifSchedules();
     try{await loadNotifHistory();}catch(_){}
   }catch(e){

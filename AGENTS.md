@@ -324,6 +324,35 @@ A partir daqui **não voltar a apontar `API_URL` para a conta antiga** nem insta
 - Só depois de um build com token real é que os pushes acima chegam ao telemóvel. Sem token na BD, o servidor
   não tem para onde enviar (a motorista real não tem `fcmToken`).
 
+## Notificações com imagem + popup no mapa (2026-10-30)
+O admin pode anexar uma imagem a um aviso; no `/home` ela aparece **grande, num popup**, com o título
+por cima, a imagem ao centro e o texto por baixo (X ou "Fechar" para sair).
+
+- **A imagem nunca fica em base64 na D1.** O admin envia uma data URL, a API manda-a ao canal Telegram
+  (`tgSendPhoto`) e grava só o **`file_id`** na coluna `notifications.image` / `notification_schedules.image`
+  (migração `0019_notification_images.sql`). O `GET /api/v1/users/photo/:fileId` serve-a — o mesmo
+  caminho das fotos de perfil.
+- `notifImageStore()` aceita **data URL** (upload), **file_id** existente ou **URL http(s)**.
+  `notifImageUrl()`/`notifImageAbs()` devolvem sempre URL absoluto (dentro do pedido, e no cron, onde não há
+  `c.req.url` — daí a constante `API_PUBLIC_ORIGIN`).
+- Push Expo leva `data.imageUrl` + `richContent.image` (imagem na notificação do telemóvel, quando o SO deixa).
+- **`GET /api/v1/notifications/banner`** (autenticado) devolve **só** o aviso admin mais recente **com imagem**.
+  É o que o `/home` pede para o popup — 1 pedido pequeno em vez da lista de 50. Sem imagem → `{banner:null}`.
+- **Memória do popup:** ids já vistos em `localStorage.lg_bseen` (máx. 80). O popup abre 1,5 s depois de
+  carregar, ao voltar a `visible` e quando o WS `/notifications/live` manda `{t:'notif'}`.
+  Fechar marca como visto; recarregar não volta a mostrar.
+- **Programadas editáveis:** `PUT /api/v1/admin/notifications/schedules/:id` (título, mensagem, alvo, dia,
+  horários, imagem, `enabled`). Se `times` não mudar, o `lastRunKey` do slot é preservado (não repete o envio);
+  se mudar, só os horários novos são inseridos e os removidos apagados. Sem `image` no corpo, a imagem mantém-se;
+  `image:''` remove.
+- **UI (`webapp/admin.html`):** seletor de imagem no "Enviar agora" e em cada horário programado, lista de
+  programadas com **Editar/Cancelar/Guardar** e interruptor "Ativa". Os 3 horários pré-preenchidos (06:00/12:00/18:00)
+  **só são programados se tiverem mensagem** — linhas vazias são ignoradas (antes davam erro e obrigavam a apagar).
+- Teste ponta-a-ponta em staging: `%TEMP%\opencode\t-notif-images.js` (18/18 — envio com imagem, file_id → URL,
+  imagem servida 200, banner, criar/editar/remover imagem/listar/apagar programada, histórico, 401 sem sessão).
+- **Nunca** testar envios em produção: escreve em `notifications` de todas as contas reais e dispara push.
+  Para o popup, inserir **uma** linha para um utilizador de teste (e apagá-la no fim).
+
 ## App Store — build e submissão (2026-10-29)
 **O build iOS não é EAS.** É GitHub Actions (`.github/workflows/build-ios.yml`): `expo prebuild` + Xcode +
 fastlane (`mobile/fastlane/Fastfile`, lane `release`), que faz cert/sigh/build e `upload_to_testflight`.

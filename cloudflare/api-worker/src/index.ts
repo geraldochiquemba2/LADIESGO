@@ -1469,8 +1469,19 @@ app.get('/api/v1/notifications/live', async (c) => {
 app.get('/api/v1/notifications', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
-  const rows = await sql`SELECT id, title, body, type, "isRead", data, "createdAt" FROM notifications WHERE "userId" = ${user.sub} ORDER BY "createdAt" DESC LIMIT 50`;
-  return c.json({ notifications: (rows || []).map((r: any) => ({ id: r.id, title: r.title, body: r.body, type: r.type, read: !!Number(r.isRead || 0), data: r.data || null, createdAt: r.createdAt })) });
+  const rows = await sql`SELECT id, title, body, type, "isRead", data, image, "createdAt" FROM notifications WHERE "userId" = ${user.sub} ORDER BY "createdAt" DESC LIMIT 50`;
+  return c.json({ notifications: (rows || []).map((r: any) => ({ id: r.id, title: r.title, body: r.body, type: r.type, read: !!Number(r.isRead || 0), data: r.data || null, image: notifImageUrl(c, r.image), createdAt: r.createdAt })) });
+});
+// GET /api/v1/notifications/banner — último aviso com imagem (para o popup grande no mapa)
+app.get('/api/v1/notifications/banner', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const rows = await sql`SELECT id, title, body, image, "createdAt" FROM notifications
+    WHERE "userId" = ${user.sub} AND type = 'admin' AND image IS NOT NULL AND image <> ''
+    ORDER BY "createdAt" DESC LIMIT 1`;
+  const r: any = (rows || [])[0];
+  if (!r) return c.json({ banner: null });
+  return c.json({ banner: { id: r.id, title: r.title || '', body: r.body || '', image: notifImageUrl(c, r.image), createdAt: r.createdAt } });
 });
 app.get('/api/v1/notifications/unread-count', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
@@ -2110,6 +2121,35 @@ function adminMiddleware(c: any, next: any) {
   return requireAuth(c, () => requireAdmin(c, next));
 }
 
+// Imagem de notificação: aceita data URL (vai para o Telegram, a D1 guarda o file_id),
+// um file_id já existente, ou um URL http(s). Devolve o que fica na D1.
+async function notifImageStore(env: any, raw: any, caption: string): Promise<{ ok: boolean; value: string | null }> {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { ok: true, value: null };
+  if (/^data:image\//i.test(s)) {
+    const fileId = await tgSendPhoto(env, s, caption);
+    return fileId ? { ok: true, value: fileId } : { ok: false, value: null };
+  }
+  if (/^https?:\/\//i.test(s)) return { ok: true, value: s.slice(0, 500) };
+  if (/^[A-Za-z0-9_-]{20,256}$/.test(s)) return { ok: true, value: s };
+  return { ok: false, value: null };
+}
+function notifImageUrl(c: any, v: any): string | null {
+  if (v == null) return null;
+  const u = photoUrl(c, v);
+  return u || null;
+}
+// Origem pública da API (usada fora de um pedido, ex.: cron, para o push com imagem).
+const API_PUBLIC_ORIGIN = 'https://ladiesgo-api.rererererererere670.workers.dev';
+function notifImageAbs(v: any): string | null {
+  if (v == null) return null;
+  const s = String(v);
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (!/^[A-Za-z0-9_-]{20,256}$/.test(s)) return null;
+  return API_PUBLIC_ORIGIN + '/api/v1/users/photo/' + encodeURIComponent(s);
+}
+
 // POST /api/v1/admin/notifications/send — aviso no centro de notificações + push Expo
 app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
   const guard = writeGuard(c);
@@ -2119,6 +2159,13 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
   const title = (String(body?.title || '').trim() || 'LadiesGo!').slice(0, 80);
   const message = String(body?.message || body?.body || body?.text || '').trim().slice(0, 500);
   if (!message) return c.json({ ok: false, message: 'Mensagem obrigatória.' }, 400);
+  let imgFile: string | null = null;
+  if (String(body?.image || '').trim()) {
+    const st = await notifImageStore(c.env, body.image, 'LadiesGo · imagem de notificação');
+    if (!st.ok) return c.json({ ok: false, message: 'Não foi possível guardar a imagem. Tenta outra vez.' }, 502);
+    imgFile = st.value;
+  }
+  const imgAbs = notifImageUrl(c, imgFile);
   const target = String(body?.target || 'ALL').toUpperCase();
   const role = target === 'PASSENGERS' ? 'PASSENGER' : target === 'DRIVERS' ? 'DRIVER' : null;
   try {
@@ -2126,14 +2173,14 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
       ? await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`
       : await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
     if (!recipients.length) return c.json({ ok: true, sent: 0, pushed: 0 });
-    const data = JSON.stringify({ type: 'admin', target, source: 'manual' });
+    const data = JSON.stringify({ type: 'admin', target, source: 'manual', image: imgAbs || null });
     if (role) {
-      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
-        SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, image, "createdAt")
+        SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, ${imgFile}, NOW()
         FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`;
     } else {
-      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
-        SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, image, "createdAt")
+        SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, ${imgFile}, NOW()
         FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
     }
     // Aviso ao vivo (best-effort): quem tiver o WS aberto atualiza já.
@@ -2141,7 +2188,11 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
     const msgs = recipients
       .map((r: any) => String(r.fcmToken || ''))
       .filter((t: string) => t.indexOf('ExponentPushToken') === 0)
-      .map((to: string) => ({ to, sound: 'default', title, body: message, data: { type: 'admin' } }));
+      .map((to: string) => ({
+        to, sound: 'default', title, body: message,
+        data: { type: 'admin', imageUrl: imgAbs || null },
+        ...(imgAbs ? { richContent: { image: imgAbs } } : {}),
+      }));
     if (msgs.length) {
       const send = (async () => {
         for (let i = 0; i < msgs.length; i += 100) {
@@ -2154,7 +2205,7 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
       })();
       try { c.executionCtx.waitUntil(send); } catch { await send; }
     }
-    return c.json({ ok: true, sent: recipients.length, pushed: msgs.length });
+    return c.json({ ok: true, sent: recipients.length, pushed: msgs.length, image: imgAbs });
   } catch (e: any) {
     console.error('admin notification send error:', e);
     return c.json({ ok: false, message: 'Falha ao enviar notificação.' }, 500);
@@ -2162,20 +2213,22 @@ app.post('/api/v1/admin/notifications/send', adminMiddleware, async (c) => {
 });
 
 // Notificações semanais programadas. Horários em Africa/Luanda (UTC+1, sem DST).
-async function deliverScheduledNotification(env: any, sql: any, target: string, title: string, message: string, meta?: { scheduleId?: string; time?: string }) {
+async function deliverScheduledNotification(env: any, sql: any, target: string, title: string, message: string, meta?: { scheduleId?: string; time?: string; image?: string | null }) {
   const role = target === 'PASSENGERS' ? 'PASSENGER' : target === 'DRIVERS' ? 'DRIVER' : null;
   const recipients = role
     ? await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`
     : await sql`SELECT id, "fcmToken" FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
   if (!recipients.length) return { sent: 0, pushed: 0 };
-  const data = JSON.stringify({ type: 'admin', target, source: 'scheduled', scheduleId: meta?.scheduleId || null, time: meta?.time || null });
+  const imgFile = meta?.image ? String(meta.image) : null;
+  const imgAbs = notifImageAbs(imgFile);
+  const data = JSON.stringify({ type: 'admin', target, source: 'scheduled', scheduleId: meta?.scheduleId || null, time: meta?.time || null, image: imgAbs || null });
   if (role) {
-    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
-      SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, image, "createdAt")
+      SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, ${imgFile}, NOW()
       FROM users WHERE "isActive" = 1 AND role = ${role} LIMIT 5000`;
   } else {
-    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
-      SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, NOW()
+    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, image, "createdAt")
+      SELECT 'nt_' || lower(hex(randomblob(16))), id, ${title}, ${message}, 'admin', 0, ${data}, ${imgFile}, NOW()
       FROM users WHERE "isActive" = 1 AND role IN ('PASSENGER','DRIVER') LIMIT 5000`;
   }
   // Aviso ao vivo (o cron já corre fora do caminho crítico).
@@ -2183,7 +2236,11 @@ async function deliverScheduledNotification(env: any, sql: any, target: string, 
   const msgs = recipients
     .map((r: any) => String(r.fcmToken || ''))
     .filter((t: string) => t.indexOf('ExponentPushToken') === 0)
-    .map((to: string) => ({ to, sound: 'default', title, body: message, data: { type: 'admin' } }));
+    .map((to: string) => ({
+      to, sound: 'default', title, body: message,
+      data: { type: 'admin', imageUrl: imgAbs || null },
+      ...(imgAbs ? { richContent: { image: imgAbs } } : {}),
+    }));
   for (let i = 0; i < msgs.length; i += 100) {
     await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
@@ -2197,7 +2254,7 @@ async function deliverScheduledNotification(env: any, sql: any, target: string, 
 async function runNotificationSchedules(env: any) {
   try {
     const sql = neon(env.DB);
-    const rows = await sql`SELECT s.id AS "scheduleId", s.target, s.title, s.body, s."dayOfWeek",
+    const rows = await sql`SELECT s.id AS "scheduleId", s.target, s.title, s.body, s.image, s."dayOfWeek",
       sl.id AS "slotId", sl.time, sl."lastRunKey"
       FROM notification_schedules s
       JOIN notification_schedule_slots sl ON sl."scheduleId" = s.id
@@ -2225,7 +2282,7 @@ async function runNotificationSchedules(env: any) {
       if (!message) continue;
       const title = String(r.title || '').trim().slice(0, 80) || 'LadiesGo!';
       try {
-        await deliverScheduledNotification(env, sql, String(r.target || 'ALL'), title, message, { scheduleId: String(r.scheduleId), time: String(r.time) });
+        await deliverScheduledNotification(env, sql, String(r.target || 'ALL'), title, message, { scheduleId: String(r.scheduleId), time: String(r.time), image: r.image ? String(r.image) : null });
         console.log('scheduled notification sent', String(r.slotId), runKey);
       } catch (e: any) {
         console.error('scheduled notification delivery error:', String(r.slotId), e);
@@ -2238,7 +2295,7 @@ async function runNotificationSchedules(env: any) {
 
 app.get('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
-  const rows = await sql`SELECT s.id, s.target, s.title, s.body, s."dayOfWeek", s.enabled, s."createdAt",
+  const rows = await sql`SELECT s.id, s.target, s.title, s.body, s.image, s."dayOfWeek", s.enabled, s."createdAt",
     sl.time, sl."lastRunKey"
     FROM notification_schedules s
     LEFT JOIN notification_schedule_slots sl ON sl."scheduleId" = s.id
@@ -2248,7 +2305,7 @@ app.get('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => {
   for (const r of rows) {
     const id = String(r.id);
     if (!seen[id]) {
-      seen[id] = { id, target: r.target, title: r.title, body: r.body, dayOfWeek: Number(r.dayOfWeek || 0), enabled: !!Number(r.enabled || 0), createdAt: r.createdAt, times: [], lastRuns: {} };
+      seen[id] = { id, target: r.target, title: r.title, body: r.body, image: notifImageUrl(c, r.image), dayOfWeek: Number(r.dayOfWeek || 0), enabled: !!Number(r.enabled || 0), createdAt: r.createdAt, times: [], lastRuns: {} };
       out.push(seen[id]);
     }
     if (r.time) {
@@ -2276,6 +2333,7 @@ app.get('/api/v1/admin/notifications/history', adminMiddleware, async (c) => {
       source: String(d.source || 'manual'),
       scheduleId: d.scheduleId ? String(d.scheduleId) : null,
       time: d.time ? String(d.time) : null,
+      image: d.image ? String(d.image) : null,
     };
   });
   return c.json({ ok: true, history });
@@ -2297,10 +2355,16 @@ app.post('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => 
   const raw = Array.isArray(body?.times) ? body.times : [];
   const times = [...new Set(raw.map((x: any) => String(x || '').slice(0, 5)).filter((x: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x)))].sort().slice(0, 3);
   if (!times.length) return c.json({ ok: false, message: 'Escolhe pelo menos um horário.' }, 400);
+  let imgFile: string | null = null;
+  if (String(body?.image || '').trim()) {
+    const st = await notifImageStore(c.env, body.image, 'LadiesGo · imagem de notificação programada');
+    if (!st.ok) return c.json({ ok: false, message: 'Não foi possível guardar a imagem. Tenta outra vez.' }, 502);
+    imgFile = st.value;
+  }
   const id = 'ns_' + crypto.randomUUID().slice(0, 12);
   try {
-    await sql`INSERT INTO notification_schedules (id, target, title, body, "dayOfWeek", enabled, "createdAt", "updatedAt")
-      VALUES (${id}, ${target}, ${title}, ${message}, ${dayOfWeek}, 1, NOW(), NOW())`;
+    await sql`INSERT INTO notification_schedules (id, target, title, body, image, "dayOfWeek", enabled, "createdAt", "updatedAt")
+      VALUES (${id}, ${target}, ${title}, ${message}, ${imgFile}, ${dayOfWeek}, 1, NOW(), NOW())`;
     for (const time of times) {
       await sql`INSERT INTO notification_schedule_slots (id, "scheduleId", time, "createdAt")
         VALUES (${'nss_' + crypto.randomUUID().slice(0, 12)}, ${id}, ${time}, NOW())`;
@@ -2313,6 +2377,67 @@ app.post('/api/v1/admin/notifications/schedules', adminMiddleware, async (c) => 
     } catch {}
     console.error('admin notification schedule create error:', e);
     return c.json({ ok: false, message: 'Falha ao programar notificação.' }, 500);
+  }
+});
+
+app.put('/api/v1/admin/notifications/schedules/:id', adminMiddleware, async (c) => {
+  const guard = writeGuard(c);
+  if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const id = c.req.param('id');
+  const body: any = await c.req.json().catch(() => ({}));
+  const cur = await sql`SELECT id, target, title, body, image, "dayOfWeek", enabled FROM notification_schedules WHERE id = ${id} LIMIT 1`;
+  if (!cur.length) return c.json({ ok: false, message: 'Notificação programada não encontrada.' }, 404);
+  const row: any = cur[0];
+  const title = body?.title !== undefined ? (String(body.title || '').trim().slice(0, 80) || 'LadiesGo!') : String(row.title || 'LadiesGo!');
+  const hasMsg = body?.message !== undefined || body?.body !== undefined || body?.text !== undefined;
+  const message = hasMsg
+    ? String(body?.message != null ? body.message : (body?.body != null ? body.body : (body?.text != null ? body.text : ''))).trim().slice(0, 500)
+    : String(row.body || '');
+  if (!message) return c.json({ ok: false, message: 'Mensagem obrigatória.' }, 400);
+  const target = body?.target !== undefined
+    ? (['ALL', 'PASSENGERS', 'DRIVERS'].includes(String(body.target).toUpperCase()) ? String(body.target).toUpperCase() : 'ALL')
+    : String(row.target || 'ALL');
+  const dayOfWeek = body?.dayOfWeek !== undefined ? Number(body.dayOfWeek) : Number(row.dayOfWeek);
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) return c.json({ ok: false, message: 'Dia inválido.' }, 400);
+  const enabled = body?.enabled !== undefined ? (body.enabled ? 1 : 0) : Number(row.enabled || 0);
+  let imgFile: string | null = row.image == null ? null : String(row.image);
+  if (body?.image !== undefined) {
+    const rawImg = String(body.image == null ? '' : body.image).trim();
+    if (!rawImg) imgFile = null;
+    else {
+      const st = await notifImageStore(c.env, rawImg, 'LadiesGo · imagem de notificação programada');
+      if (!st.ok) return c.json({ ok: false, message: 'Não foi possível guardar a imagem. Tenta outra vez.' }, 502);
+      imgFile = st.value;
+    }
+  }
+  let times: string[] | null = null;
+  if (body?.times !== undefined) {
+    const raw = Array.isArray(body.times) ? body.times : [];
+    times = [...new Set(raw.map((x: any) => String(x || '').slice(0, 5)).filter((x: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x)))].sort().slice(0, 3);
+    if (!times.length) return c.json({ ok: false, message: 'Escolhe pelo menos um horário.' }, 400);
+  }
+  try {
+    await sql`UPDATE notification_schedules SET target = ${target}, title = ${title}, body = ${message}, image = ${imgFile},
+      "dayOfWeek" = ${dayOfWeek}, enabled = ${enabled}, "updatedAt" = NOW() WHERE id = ${id}`;
+    if (times) {
+      const existing = await sql`SELECT id, time FROM notification_schedule_slots WHERE "scheduleId" = ${id}`;
+      const keep: Record<string, string> = {};
+      for (const s of existing) keep[String(s.time)] = String(s.id);
+      const wanted = new Set(times);
+      for (const s of existing) {
+        if (!wanted.has(String(s.time))) await sql`DELETE FROM notification_schedule_slots WHERE id = ${String(s.id)}`;
+      }
+      for (const time of times) {
+        if (keep[time]) continue;
+        await sql`INSERT INTO notification_schedule_slots (id, "scheduleId", time, "createdAt")
+          VALUES (${'nss_' + crypto.randomUUID().slice(0, 12)}, ${id}, ${time}, NOW())`;
+      }
+    }
+    return c.json({ ok: true, id, times, image: notifImageUrl(c, imgFile) });
+  } catch (e: any) {
+    console.error('admin notification schedule update error:', e);
+    return c.json({ ok: false, message: 'Falha ao editar a notificação programada.' }, 500);
   }
 });
 
@@ -4511,6 +4636,11 @@ function premiumCarOut(r: any) {
     driverId: r.driver_id || null, driverName: r.driver_name || null, driverPhone: r.driver_phone || null,
     photo: r.photo || null, status: r.status, active: Number(r.active) === 1,
     activeReservations: r.active_res != null ? Number(r.active_res) : undefined,
+    reservation: r.res_id ? {
+      id: r.res_id, passengerName: r.res_name || null, passengerPhone: r.res_phone || null,
+      scheduledAt: r.res_scheduled_at || null, priceTotal: r.res_price_total != null ? Number(r.res_price_total) : null,
+      pickup: r.res_pickup || null, dest: r.res_dest || null, createdAt: r.res_created_at || null,
+    } : null,
     createdAt: r.created_at,
   };
 }
@@ -4535,26 +4665,123 @@ function premiumResOut(r: any) {
       year: r.year ?? r.car_year, plate: r.plate ?? r.car_plate, photo: r.photo ?? r.car_photo,
       pricePerKm: Number(r.price_per_km || 0), driverName: r.driver_name || null, driverPhone: r.driver_phone || null
     } : null,
+    queue: r.queue_n != null ? Number(r.queue_n) : undefined,
     createdAt: r.created_at
   };
 }
 
-// Expira reservas pendentes que passaram do horário marcado. A confirmação é
-// manual (pelo admin); por isso não há promoção de fila nem janela de 10 min.
+// Expira reservas pendentes cujo prazo de pagamento passou. O prazo só existe
+// para quem está em 1.º da fila (os restantes têm expires_at NULL). Ao expirar,
+// a fila do carro sobe e o novo 1.º ganha 10 minutos + aviso.
 // Throttle por isolate: o varrimento só corre a cada 30s (antes os endpoints
 // premium chamavam-no em TODA chamada — GET incluído). `force` é usado no
-// pagamento, para não aceitar uma reserva que já expirou. Só escreve se houver
-// mesmo algo a expirar (evita um UPDATE vazio a cada chamada).
+// POST/reserva e no cron, para não aceitar uma reserva que já expirou. Só
+// escreve se houver mesmo algo a expirar.
 let premiumSweepAt = 0;
-async function premiumExpire(sql: any, force = false) {
+// Janela de pagamento: só conta para quem está em 1.º da fila.
+const PRM_PAY_MS = 10 * 60 * 1000;
+// Avisa quem passou a ser o 1.º da fila: notificação no app + push. Só o 1.º
+// da fila vê os dados bancários (é ele que tem de pagar agora).
+async function premiumHeadNotify(sql: any, env: any, p: any, ctx: any = null) {
+  if (!p || !p.userId) return;
+  try {
+    await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+      VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${p.userId}, ${'\u00c9 a tua vez de pagar'},
+      ${'Chegou a tua vez na fila Premium. Tens 10 minutos para pagar \u2014 os dados banc\u00e1rios j\u00e1 est\u00e3o na tua reserva.'}, 'premium', 0, ${p.id}, NOW())`;
+    // O push não pode atrasar um GET (o premiumExpire corre também em leituras).
+    const send = pushToUser(sql, p.userId, '\ud83e\udd8b \u00c9 a tua vez de pagar',
+      'Chegou a tua vez na fila Premium. Tens 10 minutos para pagar \u2014 os dados banc\u00e1rios j\u00e1 est\u00e3o na reserva.',
+      { type: 'premium_head', reservationId: p.id });
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(send.catch(() => {}));
+    else await send;
+    if (env) notifPoke(env, String(p.userId));
+  } catch {}
+}
+// Renumera a fila do carro e acerta o prazo: quem chega a 1.º ganha os 10 min
+// agora; quem está à espera não tem contagem a correr.
+async function premiumAfterQueue(sql: any, env: any, carId: string, ctx: any = null) {
+  if (!carId) return;
+  try {
+    const rows = await sql`SELECT id, passenger_id, status, position, expires_at FROM premium_reservations WHERE car_id = ${carId} AND status IN ('pending','confirmed') ORDER BY created_at, rowid`;
+    const list = (rows || []) as any[];
+    const promoted = premiumPromoted(list);
+    for (let i = 0; i < list.length; i++) {
+      const pos = i + 1;
+      await sql`UPDATE premium_reservations SET position = ${pos} WHERE id = ${list[i].id} AND position <> ${pos}`;
+    }
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      if (String(r.status) !== 'pending') continue;
+      if (i === 0) {
+        // Prazo novo se nunca teve, se já passou, ou se é absurdo (linhas antigas
+        // gravavam aqui o dia da reserva — o prazo de pagamento são sempre 10 min,
+        // não depende do dia da viagem). Não empurra para a frente um prazo válido
+        // quando só saiu alguém de trás.
+        const cur = r.expires_at ? Date.parse(String(r.expires_at)) : NaN;
+        if (!r.expires_at || !Number.isFinite(cur) || cur <= Date.now() || cur > Date.now() + PRM_PAY_MS + 60000) {
+          await sql`UPDATE premium_reservations SET expires_at = ${new Date(Date.now() + PRM_PAY_MS).toISOString()} WHERE id = ${r.id} AND status = 'pending'`;
+        }
+      } else if (r.expires_at) {
+        await sql`UPDATE premium_reservations SET expires_at = NULL WHERE id = ${r.id} AND status = 'pending'`;
+      }
+    }
+    for (const p of promoted) await premiumHeadNotify(sql, env, p, ctx);
+  } catch {}
+}
+// Quem estava em 2.º e passa a 1.º (a reserva à frente expirou/cancelou).
+function premiumPromoted(rows: any[]) {
+  const out: any[] = [];
+  const first = (rows || [])[0];
+  if (first && Number(first.position || 0) !== 1 && String(first.status) === 'pending') {
+    out.push({ id: first.id, userId: first.passenger_id });
+  }
+  return out;
+}
+async function premiumExpire(sql: any, env: any = null, force = false, ctx: any = null) {
   const nowMs = Date.now();
   if (!force && nowMs - premiumSweepAt < 30000) return [];
   premiumSweepAt = nowMs;
   const now = new Date().toISOString();
-  const stale = await sql`SELECT id FROM premium_reservations WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} LIMIT 50`;
-  if (!stale.length) return [];
-  const exp = await sql`UPDATE premium_reservations SET status = 'expired' WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} RETURNING car_id`;
+  // Prazos absurdos (linhas antigas gravavam aqui o dia/hora da reserva) são
+  // corrigidos em vez de freados: o prazo de pagamento são sempre 10 minutos.
+  const far = new Date(nowMs + PRM_PAY_MS + 60000).toISOString();
+  const odd = (await sql`SELECT id, position, expires_at FROM premium_reservations
+    WHERE status = 'pending' AND expires_at IS NOT NULL AND (expires_at < ${now} OR expires_at > ${far}) LIMIT 50`) as any[];
+  if (!odd.length) return [];
+  const fresh = new Date(nowMs + PRM_PAY_MS).toISOString();
+  for (const r of odd) {
+    if (!(Date.parse(String(r.expires_at)) > Date.parse(far))) continue;
+    if (Number(r.position) === 1) {
+      await sql`UPDATE premium_reservations SET expires_at = ${fresh} WHERE id = ${r.id} AND status = 'pending'`;
+    } else {
+      await sql`UPDATE premium_reservations SET expires_at = NULL WHERE id = ${r.id} AND status = 'pending'`;
+    }
+  }
+  const exp = await sql`UPDATE premium_reservations SET status = 'expired' WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ${now} RETURNING id, car_id, passenger_id`;
+  // Quem deixou passar os 10 minutos tem de saber porque desapareceu a reserva.
+  for (const r of (exp || []) as any[]) {
+    if (!r.passenger_id) continue;
+    try {
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+        VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${r.passenger_id}, ${'Reserva Premium expirada'},
+        ${'O prazo de 10 minutos para pagar passou. A reserva saiu da fila e o lugar foi para a pr\u00f3xima passageira.'}, 'premium', 0, ${r.id}, NOW())`;
+      if (env) notifPoke(env, String(r.passenger_id));
+    } catch {}
+  }
+  const cars: string[] = Array.from(new Set(((exp || []) as any[]).map((r: any) => r.car_id).filter(Boolean))) as string[];
+  for (const carId of cars) await premiumAfterQueue(sql, env, carId, ctx);
   return exp || [];
+}
+// Dados bancários da operação (definidos pelo admin). Só o 1.º da fila os recebe.
+async function premiumPaymentGet(sql: any) {
+  try {
+    const rows = await sql`SELECT k, v FROM app_settings WHERE k LIKE 'premium.%'`;
+    const m: any = {};
+    for (const r of rows || []) m[String(r.k)] = r.v == null ? '' : String(r.v);
+    const out = { iban: m['premium.iban'] || '', expressCode: m['premium.express'] || '', holder: m['premium.holder'] || '', note: m['premium.note'] || '' };
+    if (!out.iban && !out.expressCode) return null;
+    return out;
+  } catch { return null; }
 }
 
 // ── ADMIN: frota premium ──────────────────────────────────────────────────
@@ -4562,10 +4789,17 @@ app.get('/api/v1/admin/premium/fleet', adminMiddleware, async (c) => {
   const sql = neon(c.env.DB);
   const rows = await sql`
     SELECT pf.*, u.name AS driver_name, u.phone AS driver_phone,
-      (SELECT COUNT(*) FROM premium_reservations pr WHERE pr.car_id = pf.id AND pr.status IN ('pending','confirmed')) AS active_res
+      (SELECT COUNT(*) FROM premium_reservations pr WHERE pr.car_id = pf.id AND pr.status IN ('pending','confirmed')) AS active_res,
+      r.id AS res_id, r.scheduled_at AS res_scheduled_at, r.price_total AS res_price_total,
+      r.pickup_name AS res_pickup, r.dest_name AS res_dest, r.created_at AS res_created_at,
+      ru.name AS res_name, ru.phone AS res_phone
     FROM premium_fleet pf
     LEFT JOIN drivers d ON d.id = pf.driver_id
     LEFT JOIN users u ON u.id = d."userId"
+    LEFT JOIN premium_reservations r ON r.id = (
+      SELECT pr.id FROM premium_reservations pr WHERE pr.car_id = pf.id AND pr.status = 'confirmed' ORDER BY pr.created_at DESC LIMIT 1
+    )
+    LEFT JOIN users ru ON ru.id = r.passenger_id
     ORDER BY pf.category, pf.sort, pf.created_at DESC`;
   return c.json({ cars: (rows || []).map(premiumCarOut) });
 });
@@ -4618,6 +4852,10 @@ app.put('/api/v1/admin/premium/fleet/:id', adminMiddleware, async (c) => {
   }
   let status = cur.status;
   if (b.status != null && ['available', 'unavailable', 'reserved'].includes(String(b.status))) status = String(b.status);
+  if (b.status != null && status !== cur.status && status !== 'reserved') {
+    const conf = await sql`SELECT id FROM premium_reservations WHERE car_id = ${id} AND status = 'confirmed' LIMIT 1`;
+    if (conf.length) return c.json({ message: 'Este carro tem uma reserva confirmada. Usa "Libertar" para o voltares a disponibilizar.' }, 409);
+  }
   const active = b.active != null ? (b.active ? 1 : 0) : cur.active;
   const photo = (typeof b.photo === 'string' && b.photo.startsWith('data:image')) ? b.photo.slice(0, 200000) : cur.photo;
   await sql`UPDATE premium_fleet SET category = ${category}, make = ${make}, model = ${model}, color = ${color}, year = ${year}, plate = ${plate}, price_per_km = ${pricePerKm}, driver_id = ${driverId}, photo = ${photo}, status = ${status}, active = ${active} WHERE id = ${id}`;
@@ -4657,12 +4895,26 @@ app.post('/api/v1/admin/premium/reservations/:id/confirm', adminMiddleware, asyn
   const carId = rows[0].car_id;
   const pid = rows[0].passenger_id;
   await sql`UPDATE premium_reservations SET status = 'confirmed' WHERE id = ${id} AND status = 'pending'`;
+  // Pago + confirmado: o carro fica indisponível (reservado) para as outras.
   await sql`UPDATE premium_fleet SET status = 'reserved' WHERE id = ${carId}`;
   try {
     if (pid) {
       await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
         VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${pid}, ${'Reserva Premium confirmada'}, ${'O teu carro premium está confirmado. Vê os detalhes no app.'}, 'premium', 0, ${id}, NOW())`;
       notifPokeSoon(c, String(pid));
+      await pushToUser(sql, String(pid), '\ud83e\udd8b Reserva Premium confirmada', 'O teu carro premium está confirmado. Vê os detalhes no app.', { type: 'premium_confirmed', reservationId: id });
+    }
+  } catch {}
+  // A fila desse carro deixa de fazer sentido: o carro está reservado.
+  try {
+    const rest = await sql`SELECT id, passenger_id FROM premium_reservations WHERE car_id = ${carId} AND status = 'pending' AND id <> ${id}`;
+    for (const q of rest || []) {
+      await sql`UPDATE premium_reservations SET status = 'cancelled', expires_at = NULL WHERE id = ${q.id} AND status = 'pending'`;
+      if (!q.passenger_id) continue;
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt")
+        VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${q.passenger_id}, ${'Carro Premium indisponível'}, ${'O carro que reservaste foi confirmado para outra passageira. Escolhe outro carro premium.'}, 'premium', 0, ${q.id}, NOW())`;
+      notifPokeSoon(c, String(q.passenger_id));
+      await pushToUser(sql, String(q.passenger_id), '\ud83d\ude97 Carro Premium indisponível', 'O carro que reservaste foi confirmado para outra passageira. Escolhe outro carro premium.', { type: 'premium', reservationId: q.id });
     }
   } catch {}
   return c.json({ ok: true, status: 'confirmed' });
@@ -4673,8 +4925,9 @@ app.post('/api/v1/admin/premium/reservations/:id/reject', adminMiddleware, async
   const guard = writeGuard(c); if (guard) return guard;
   const sql = neon(c.env.DB);
   const id = c.req.param('id');
-  const upd = await sql`UPDATE premium_reservations SET status = 'cancelled' WHERE id = ${id} AND status = 'pending' RETURNING id`;
+  const upd = await sql`UPDATE premium_reservations SET status = 'cancelled', expires_at = NULL WHERE id = ${id} AND status = 'pending' RETURNING id, car_id`;
   if (!upd.length) return c.json({ message: 'Reserva não encontrada ou já processada.' }, 404);
+  await premiumAfterQueue(sql, c.env, String((upd[0] as any).car_id || ''), (c as any).executionCtx);
   return c.json({ ok: true, status: 'cancelled' });
 });
 
@@ -4689,11 +4942,35 @@ app.get('/api/v1/admin/premium/reservations', adminMiddleware, async (c) => {
   return c.json({ reservations: (rows || []).map((r: any) => ({ ...premiumResOut(r), passengerName: r.passenger_name || null, passengerPhone: r.passenger_phone || null })) });
 });
 
+// ── ADMIN: dados bancários do Premium ────────────────────────────────────
+app.get('/api/v1/admin/premium/payment', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const pay = await premiumPaymentGet(sql);
+  return c.json({ payment: pay || { iban: '', expressCode: '', holder: '', note: '' } });
+});
+app.put('/api/v1/admin/premium/payment', adminMiddleware, async (c) => {
+  const guard = writeGuard(c); if (guard) return guard;
+  const sql = neon(c.env.DB);
+  const b = await c.req.json().catch(() => ({}));
+  const iban = String(b.iban || '').trim().slice(0, 60);
+  const expressCode = String(b.expressCode || '').trim().slice(0, 30);
+  const holder = String(b.holder || '').trim().slice(0, 60);
+  const note = String(b.note || '').trim().slice(0, 160);
+  const now = new Date().toISOString();
+  const pairs: [string, string][] = [['premium.iban', iban], ['premium.express', expressCode], ['premium.holder', holder], ['premium.note', note]];
+  for (const [k, v] of pairs) {
+    await sql`INSERT INTO app_settings (k, v, updated_at) VALUES (${k}, ${v}, ${now})
+      ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at`;
+  }
+  return c.json({ ok: true, payment: { iban, expressCode, holder, note } });
+});
+
 // ── PASSAGEIRA: catálogo premium ──────────────────────────────────────────
 app.get('/api/v1/premium/cars', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const rows = await sql`
-    SELECT pf.*, u.name AS driver_name, u.phone AS driver_phone
+    SELECT pf.*, u.name AS driver_name, u.phone AS driver_phone,
+      (SELECT COUNT(*) FROM premium_reservations pr WHERE pr.car_id = pf.id AND pr.status IN ('pending','confirmed')) AS queue_n
     FROM premium_fleet pf
     LEFT JOIN drivers d ON d.id = pf.driver_id
     LEFT JOIN users u ON u.id = d."userId"
@@ -4709,7 +4986,7 @@ app.get('/api/v1/premium/cars', requireAuth, async (c) => {
     if (g.pricePerKm === 0 || (pk > 0 && pk < g.pricePerKm)) g.pricePerKm = pk;
     if (r.status === 'available') {
       g.available++;
-      g.cars.push({ id: r.id, make: r.make, model: r.model, color: r.color, year: r.year, plate: r.plate, photo: r.photo || null, driverName: r.driver_name || null, pricePerKm: pk });
+      g.cars.push({ id: r.id, make: r.make, model: r.model, color: r.color, year: r.year, plate: r.plate, photo: r.photo || null, driverName: r.driver_name || null, pricePerKm: pk, queue: Number(r.queue_n || 0) });
     }
   }
   return c.json({ categories: Object.values(cats) });
@@ -4728,21 +5005,39 @@ app.post('/api/v1/premium/reservations', requireAuth, async (c) => {
   if (cr.status !== 'available') return c.json({ message: 'Este carro já não está disponível. Escolhe outro.' }, 409);
   const plat = Number(b.pickupLat), plng = Number(b.pickupLng), dlat = Number(b.destLat), dlng = Number(b.destLng);
   if (![plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) return c.json({ message: 'Indica o ponto de busca e o destino.' }, 400);
-  await premiumExpire(sql);
-  // Antecedência: a única aceite é 1 hora. A reserva fica pendente até ao
-  // horário marcado e só o admin a confirma (após o comprovante, fora da app).
+  // Varredura forçada: não deixar entrar na fila com o 1.º já morto (senão
+  // nascia em 2.º sem prazo e sem nunca ser promovida até ao sweep seguinte).
+  await premiumExpire(sql, c.env, true, (c as any).executionCtx);
+  // O carro pode ter sido reposto a 'available' no painel com uma reserva já
+  // confirmada — nesse caso o lugar está ocupado na mesma.
+  const busy = await sql`SELECT id FROM premium_reservations WHERE car_id = ${carId} AND status = 'confirmed' LIMIT 1`;
+  if (busy.length) return c.json({ message: 'Este carro já está reservado. Escolhe outro.' }, 409);
+  const dup = await sql`SELECT id FROM premium_reservations WHERE car_id = ${carId} AND passenger_id = ${user.sub} AND status IN ('pending','confirmed') LIMIT 1`;
+  if (dup.length) return c.json({ message: 'Já tens uma reserva para este carro.' }, 409);
+  // Antecedência: a única aceite é 1 hora. O prazo de pagamento são 10 minutos
+  // a contar de quando a reserva chega a 1.º da fila (não do dia marcado); só o
+  // admin a confirma, após o comprovante, fora da app.
   const schedMs = Date.parse(String(b.scheduledAt || ''));
   if (!Number.isFinite(schedMs)) return c.json({ message: 'Indica a data e a hora da reserva.' }, 400);
   if (schedMs < Date.now() + 60 * 60 * 1000) return c.json({ message: 'As reservas Premium exigem pelo menos 1 hora de antecedência.' }, 400);
   const scheduledIso = new Date(schedMs).toISOString();
   const km = Math.max(1, Math.round(havKm(plat, plng, dlat, dlng) * 10) / 10);
   const price = Math.max(1, Math.round(km * Number(cr.price_per_km || 0)));
-  const posRow = await sql`SELECT COUNT(*)::int AS n FROM premium_reservations WHERE car_id = ${carId} AND status IN ('pending','confirmed')`;
-  const position = Number(posRow[0]?.n || 0) + 1;
-  const expiresAt = scheduledIso;
+  // Janela de pagamento: 10 minutos, mas só a contar a partir do momento em que
+  // a reserva chega a 1.º da fila. Quem está à espera não tem prazo a correr:
+  // o prazo é-lhe aberto quando a reserva à frente sai (expira/cancela).
+  // A posição é calculada DENTRO do INSERT (um só statement) para que duas
+  // reservas no mesmo instante não fiquem as duas em 1.º lugar.
+  const expiresAtFirst = new Date(Date.now() + PRM_PAY_MS).toISOString();
   const id = 'pr_' + crypto.randomUUID().slice(0, 12);
   await sql`INSERT INTO premium_reservations (id, car_id, category, passenger_id, pickup_lat, pickup_lng, pickup_name, dest_lat, dest_lng, dest_name, scheduled_at, distance_km, price_total, position, status, expires_at, created_at)
-    VALUES (${id}, ${carId}, ${cr.category}, ${user.sub}, ${plat}, ${plng}, ${String(b.pickupName || '').slice(0, 120)}, ${dlat}, ${dlng}, ${String(b.destName || '').slice(0, 120)}, ${scheduledIso}, ${km}, ${price}, ${position}, 'pending', ${expiresAt}, NOW())`;
+    SELECT ${id}, ${carId}, ${cr.category}, ${user.sub}, ${plat}, ${plng}, ${String(b.pickupName || '').slice(0, 120)}, ${dlat}, ${dlng}, ${String(b.destName || '').slice(0, 120)}, ${scheduledIso}, ${km}, ${price},
+      COALESCE(MAX(position), 0) + 1, 'pending',
+      CASE WHEN COALESCE(MAX(position), 0) = 0 THEN ${expiresAtFirst} ELSE NULL END, NOW()
+    FROM premium_reservations WHERE car_id = ${carId} AND status IN ('pending','confirmed')`;
+  const mine = (await sql`SELECT position, expires_at FROM premium_reservations WHERE id = ${id} LIMIT 1`)[0] || {};
+  const position = Number(mine.position || 1);
+  const expiresAt = mine.expires_at || null;
   return c.json({ ok: true, reservation: { id, carId, category: cr.category, position, distanceKm: km, priceTotal: price, scheduledAt: scheduledIso, expiresAt, status: 'pending' } });
 });
 
@@ -4750,26 +5045,37 @@ app.post('/api/v1/premium/reservations', requireAuth, async (c) => {
 app.get('/api/v1/premium/reservations/mine', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
-  await premiumExpire(sql);
+  await premiumExpire(sql, c.env, false, (c as any).executionCtx);
   const rows = await sql`
-    SELECT pr.*, pf.make, pf.model, pf.color, pf.year, pf.plate, pf.price_per_km, pf.photo, u.name AS driver_name, u.phone AS driver_phone
+    SELECT pr.*, pf.make, pf.model, pf.color, pf.year, pf.plate, pf.price_per_km, pf.photo, u.name AS driver_name, u.phone AS driver_phone,
+      (SELECT COUNT(*) FROM premium_reservations pr2 WHERE pr2.car_id = pr.car_id AND pr2.status IN ('pending','confirmed')) AS queue_n
     FROM premium_reservations pr
     LEFT JOIN premium_fleet pf ON pf.id = pr.car_id
     LEFT JOIN drivers d ON d.id = pf.driver_id
     LEFT JOIN users u ON u.id = d."userId"
     WHERE pr.passenger_id = ${user.sub}
     ORDER BY pr.created_at DESC LIMIT 50`;
-  return c.json({ reservations: (rows || []).map(premiumResOut) });
+  const list = (rows || []) as any[];
+  // Dados bancários só para quem está em 1.º da fila (é o único que paga agora).
+  let pay: any = null;
+  if (list.some((r) => r.status === 'pending' && Number(r.position) === 1)) pay = await premiumPaymentGet(sql);
+  return c.json({
+    reservations: list.map((r) => {
+      const out = premiumResOut(r);
+      return (r.status === 'pending' && Number(r.position) === 1) ? { ...out, payment: pay } : out;
+    }),
+  });
 });
 
 // GET /api/v1/premium/reservations/:id — detalhe de uma reserva
 app.get('/api/v1/premium/reservations/:id', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
-  await premiumExpire(sql);
+  await premiumExpire(sql, c.env, false, (c as any).executionCtx);
   const id = c.req.param('id');
   const rows = await sql`
-    SELECT pr.*, pf.make AS car_make, pf.model AS car_model, pf.color AS car_color, pf.year AS car_year, pf.plate AS car_plate, pf.photo AS car_photo, pf.price_per_km, u.name AS driver_name, u.phone AS driver_phone
+    SELECT pr.*, pf.make AS car_make, pf.model AS car_model, pf.color AS car_color, pf.year AS car_year, pf.plate AS car_plate, pf.photo AS car_photo, pf.price_per_km, u.name AS driver_name, u.phone AS driver_phone,
+      (SELECT COUNT(*) FROM premium_reservations pr2 WHERE pr2.car_id = pr.car_id AND pr2.status IN ('pending','confirmed')) AS queue_n
     FROM premium_reservations pr
     LEFT JOIN premium_fleet pf ON pf.id = pr.car_id
     LEFT JOIN drivers d ON d.id = pf.driver_id
@@ -4778,7 +5084,10 @@ app.get('/api/v1/premium/reservations/:id', requireAuth, async (c) => {
   if (!rows.length) return c.json({ message: 'Reserva não encontrada.' }, 404);
   const r = rows[0];
   if (r.passenger_id !== user.sub && user.role !== 'ADMIN') return c.json({ message: 'Sem acesso a esta reserva.' }, 403);
-  return c.json({ reservation: premiumResOut(r) });
+  const out: any = premiumResOut(r);
+  // Dados bancários só para quem está em 1.º da fila e ainda a pagar.
+  if (r.status === 'pending' && Number(r.position) === 1) out.payment = await premiumPaymentGet(sql);
+  return c.json({ reservation: out });
 });
 
 // DELETE /api/v1/premium/reservations/:id — passageira cancela a sua reserva
@@ -4789,9 +5098,15 @@ app.delete('/api/v1/premium/reservations/:id', requireAuth, async (c) => {
   const id = c.req.param('id');
   const r = await sql`SELECT id, car_id, status FROM premium_reservations WHERE id = ${id} AND passenger_id = ${user.sub} LIMIT 1`;
   if (!r.length) return c.json({ message: 'Reserva não encontrada.' }, 404);
-  await sql`UPDATE premium_reservations SET status = 'cancelled' WHERE id = ${id}`;
-  if (r[0].status === 'confirmed') {
+  const st = String(r[0].status || '');
+  if (st !== 'pending' && st !== 'confirmed') return c.json({ message: 'Esta reserva já não pode ser cancelada.' }, 409);
+  const wasConfirmed = st === 'confirmed';
+  await sql`UPDATE premium_reservations SET status = 'cancelled', expires_at = NULL WHERE id = ${id} AND status IN ('pending','confirmed')`;
+  if (wasConfirmed) {
     await sql`UPDATE premium_fleet SET status = 'available' WHERE id = ${r[0].car_id} AND status = 'reserved'`;
+  } else {
+    // Saiu da fila: quem estava atrás sobe (e o novo 1.º ganha os 10 min agora).
+    await premiumAfterQueue(sql, c.env, String(r[0].car_id || ''), (c as any).executionCtx);
   }
   return c.json({ ok: true });
 });
@@ -4814,6 +5129,8 @@ async function purgeTripPoints(env: any) {
 export default {
   fetch: app.fetch,
   async scheduled(event: any, env: any, _ctx: any) {
+    // Fila Premium: expira o 1.º que não pagou e promove/avisa o seguinte.
+    try { await premiumExpire(neon(env.DB), env, true, _ctx); } catch {}
     await runNotificationSchedules(env);
     if (!event || event.cron === '17 3 * * *') {
       await purgeTripPoints(env);
