@@ -201,6 +201,9 @@ Sintoma: quem cancelava via a viagem terminar, mas o outro lado só descobria 10
   No browser: frame com `by`/`reason` em 484 ms (A) e 519 ms (B), banner correto no recetor e
   "Cancelaste a corrida" no ator. `arrived`/`in_progress`/`completed` passaram de 400 falso para 200
   (frames 275–636 ms).
+- **Banner antigo:** `pollTrip`/`pollMine` chamam `closeCancel()` quando recebem uma viagem ativa — o aviso
+  "Corrida cancelada…" de uma viagem anterior deixa de ficar por cima da viagem nova (prova no browser: banner
+  ligado por `showCancelBanner` desaparece no `poll*` seguinte, nos dois papéis e nos dois domínios).
 - Nota: `wrangler d1 execute --remote` continua a funcionar; a **API REST** da D1 com o token OAuth guardado
   devolve `7403` (o token não tem scope de D1). Para escritas por script usar **wrangler**.
 
