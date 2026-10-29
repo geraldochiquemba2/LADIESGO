@@ -13,6 +13,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../store';
 import { setUser, logout } from '../store/slices/authSlice';
 import { authApi } from '../services/api';
+import { socketService } from '../services/socket';
+import { driverGeoSocket } from '../services/driverGeoSocket';
 
 // Banner bloqueante: contas criadas pelo admin entram com a senha padrão e
 // têm de definir uma senha própria no primeiro login. Sem dismiss — só
@@ -53,7 +55,11 @@ export default function PasswordBanner() {
   const quit = () => {
     Alert.alert('Sair', 'Queres terminar a sessão?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sair', style: 'destructive', onPress: () => dispatch(logout()) },
+      { text: 'Sair', style: 'destructive', onPress: () => {
+        driverGeoSocket.stop();
+        socketService.logout();
+        dispatch(logout());
+      } },
     ]);
   };
 

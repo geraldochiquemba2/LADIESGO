@@ -81,6 +81,15 @@ export default function PassengerHomeScreen({ navigation }: any) {
 
   // Live drivers + trip requests via WebSocket
   useEffect(() => {
+    const onDriversSnapshot = (list: { driverId: string; lat: number; lng: number; heading: number }[]) => {
+      dispatch(setNearbyDrivers((list ?? []).map((d) => ({
+        id: d.driverId,
+        currentLat: d.lat,
+        currentLng: d.lng,
+        heading: d.heading,
+      }))));
+    };
+
     socketService.connect().then(async () => {
       // ── Drivers ──────────────────────────────────────────────────
       socketService.emit('join:public-drivers', {});
@@ -112,6 +121,9 @@ export default function PassengerHomeScreen({ navigation }: any) {
         });
       });
 
+      // Full list from the WS frame — replaces the previous set (removals included)
+      socketService.on('public:drivers-snapshot', onDriversSnapshot);
+
       // ── Pending trip requests ────────────────────────────────────
       socketService.emit('join:public-requests', {});
 
@@ -136,8 +148,9 @@ export default function PassengerHomeScreen({ navigation }: any) {
       });
     }).catch(() => {});
 
-    // Fallback REST refresh every 60s
+    // Fallback REST refresh — only while the nearby WS is not open
     const id = setInterval(async () => {
+      if (socketService.isNearbyWsOpen()) return;
       if (!location) return;
       try {
         const res = await driversApi.getNearby(location.latitude, location.longitude);
@@ -148,6 +161,7 @@ export default function PassengerHomeScreen({ navigation }: any) {
     return () => {
       clearInterval(id);
       socketService.off('public:driver-location');
+      socketService.off('public:drivers-snapshot', onDriversSnapshot);
       socketService.off('public:requests-snapshot');
       socketService.off('public:trip-requested');
       socketService.off('public:trip-removed');

@@ -414,11 +414,15 @@ class RealtimeService {
   }
 
   // ── Mapa público (mapa) ───────────────────────────────────────────
+  isNearbyWsOpen(): boolean {
+    return this.nearbyWs?.readyState === 1;
+  }
+
   private startDriversPoll(): void {
     if (this.driversTimer) return;
     const tick = async () => {
       // WS aberto → não faz fetch (o polling é só fallback).
-      if (this.nearbyWs && this.nearbyWs.readyState === 1) return;
+      if (this.isNearbyWsOpen()) return;
       const c = this.lastLocation || DEFAULT_CENTER;
       try {
         const res = await fetch(`${API}/drivers/nearby?lat=${c.lat}&lng=${c.lng}`);
@@ -432,21 +436,25 @@ class RealtimeService {
     this.connectNearbyWs();
   }
 
-  /** Despacha public:driver-location para cada motorista (WS ou polling). */
+  /** Despacha public:driver-location para cada motorista + o snapshot completo (WS ou polling). */
   private emitNearbyDrivers(list: any[]): void {
     if (!Array.isArray(list)) return;
+    const snapshot: { driverId: string; lat: number; lng: number; heading: number }[] = [];
     for (const d of list) {
       const lat = Number(d?.currentLat ?? d?.lat);
       const lng = Number(d?.currentLng ?? d?.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
       const h = d?.h != null ? Number(d.h) : -1;
-      this.dispatch('public:driver-location', {
+      const driver = {
         driverId: String(d?.id),
         lat,
         lng,
         heading: Number.isFinite(h) ? h : -1,
-      });
+      };
+      snapshot.push(driver);
+      this.dispatch('public:driver-location', driver);
     }
+    this.dispatch('public:drivers-snapshot', snapshot);
   }
 
   /** WS do mapa: /drivers/nearby-live (frames {t:'nearby', drivers, ts}). */

@@ -12,6 +12,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { logout } from '../../store/slices/authSlice';
 import { AppDispatch } from '../../store';
+import { socketService } from '../../services/socket';
+import { driverGeoSocket } from '../../services/driverGeoSocket';
 
 export default function SettingsScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
@@ -25,7 +27,11 @@ export default function SettingsScreen({ navigation }: any) {
       {
         text: 'Logout',
         style: 'destructive',
-        onPress: () => dispatch(logout()),
+        onPress: () => {
+          driverGeoSocket.stop();
+          socketService.logout();
+          dispatch(logout());
+        },
       },
     ]);
   };

@@ -12,6 +12,8 @@ import { driversApi } from '../../services/api';
 import { useDispatch } from 'react-redux';
 import { logout } from '../../store/slices/authSlice';
 import { AppDispatch } from '../../store';
+import { socketService } from '../../services/socket';
+import { driverGeoSocket } from '../../services/driverGeoSocket';
 
 type Status = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 
@@ -144,7 +146,11 @@ export default function PendingApprovalScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.logoutBtn}
-              onPress={() => dispatch(logout())}
+              onPress={() => {
+                driverGeoSocket.stop();
+                socketService.logout();
+                dispatch(logout());
+              }}
             >
               <Text style={styles.logoutText}>Logout</Text>
             </TouchableOpacity>

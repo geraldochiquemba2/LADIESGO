@@ -34,15 +34,18 @@ Todos os WS levam o JWT por query (`?token=<JWT>`, `encodeURIComponent`); sem to
 
 ## Canal `nearby-live` (mapa público)
 - `nearbyWs` em `socket.ts` → `wss://<api>/api/v1/drivers/nearby-live?token=<JWT>`.
-- Frame: `{t:'nearby', drivers:[{id, lat, lng, h}]}` → despacha `public:driver-location` com
-  `{ driverId, lat, lng, heading }` (o `h` ausente vira `-1`).
+- Frame: `{t:'nearby', drivers:[{id, lat, lng, h}]}` → despacha `public:driver-location` por motorista com
+  `{ driverId, lat, lng, heading }` (o `h` ausente vira `-1`) **e** `public:drivers-snapshot` com a lista
+  completa normalizada (`[{driverId, lat, lng, heading}]`, remoções incluídas). O polling também emite o snapshot.
 - Sem JWT: lê `accessToken` do `AsyncStorage` e reconecta; entretanto o polling cobre.
 - Backoff de reconexão: `3000 ms × tentativas`, limitado a 30 s (reset no `onopen`).
 - Fallback: polling de 15 s a `GET /drivers/nearby?lat&lng`; **salta o `fetch`** quando
-  `nearbyWs.readyState === 1`. O primeiro tick corre logo ao ligar.
-- A HomeScreen da passageira ainda faz um `GET /drivers/nearby` inicial e outro a cada **60 s** para
-  `setNearbyDrivers` — é independente do polling de 15 s do `socket.ts`.
+  `socketService.isNearbyWsOpen()` (`nearbyWs.readyState === 1`). O primeiro tick corre logo ao ligar.
+- A HomeScreen da passageira faz um `GET /drivers/nearby` inicial (pinta o mapa de imediato) e um intervalo
+  de **60 s** só como fallback: salta o pedido quando `socketService.isNearbyWsOpen()`. Com o WS aberto não
+  há pedidos; `setNearbyDrivers` é alimentado pelo `public:drivers-snapshot`.
 - Fecho: `socketService.off('public:driver-location')` sem callback limpa o timer **e** fecha o `nearbyWs`.
+  A HomeScreen desinscreve o snapshot com `off('public:drivers-snapshot', handler)` (handler nomeado).
 
 ## Regra de quota
 - **WS primeiro, polling só de fallback**, e o fallback salta o pedido quando o socket está aberto.
@@ -57,9 +60,9 @@ Todos os WS levam o JWT por query (`?token=<JWT>`, `encodeURIComponent`); sem to
   que não existe sem dependências).
 - Validação possível de um ficheiro isolado:
   `npx --yes esbuild src/services/socket.ts --loader:.ts=ts --outfile=<tmp>` (compila; avisa só do `tsconfig`).
-- **`socketService.logout()` é código morto:** nenhuma action/ecrã o chama (o `logout` do Redux em `authSlice`
-  não o invoca). Ao sair da conta, os sockets só fecham quando os handlers do mapa/pedidos são removidos
-  (`off('public:driver-location')`, `off('public:requests-snapshot')`).
+- **Logout:** os handlers de UI que fazem `dispatch(logout())` (`ProfileScreen`, `SettingsScreen`,
+  `PasswordBanner`, `PendingApprovalScreen`) chamam primeiro `driverGeoSocket.stop()` e
+  `socketService.logout()` — este último limpa o token e fecha todos os canais (`disconnect()`).
 - **`public:trip-requested` / `public:trip-removed`** são subscritos nas duas HomeScreen mas o `socket.ts`
   nunca os despacha — a lista de pedidos só muda no snapshot seguinte.
 - A HomeScreen da passageira volta a correr o efeito quando `location` muda; o `off(...)` sem callback limpa

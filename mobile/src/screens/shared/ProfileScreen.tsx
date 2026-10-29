@@ -16,6 +16,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../store';
 import { logout, setUser } from '../../store/slices/authSlice';
 import { usersApi } from '../../services/api';
+import { socketService } from '../../services/socket';
+import { driverGeoSocket } from '../../services/driverGeoSocket';
 
 export default function ProfileScreen() {
   const dispatch = useDispatch<AppDispatch>();
@@ -83,7 +85,11 @@ export default function ProfileScreen() {
       {
         text: 'Logout',
         style: 'destructive',
-        onPress: () => dispatch(logout()),
+        onPress: () => {
+          driverGeoSocket.stop();
+          socketService.logout();
+          dispatch(logout());
+        },
       },
     ]);
   };
@@ -245,6 +251,8 @@ export default function ProfileScreen() {
                         try {
                           await usersApi.deleteMe();
                         } catch {}
+                        driverGeoSocket.stop();
+                        socketService.logout();
                         dispatch(logout());
                       },
                     },
