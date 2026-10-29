@@ -306,11 +306,42 @@ so tem comandos `opencode`.
   (`loadtest/firetest.mjs`, `loadtest/ws-storm.mjs`, `loadtest/k6/ladiesgo.js`), ~2000 contas de teste.
 - **Outra conta — 100.000 escritas/dia na D1 (erro 7500):** causado por **reimportar a BD
   inteira repetidamente** durante uma migração (cada import completo reinsere os 23.345 registos de `places`).
+- **Conta `rerere…` — 100.000 escritas/dia na D1 (erro 7500), 2026-10-28 21:57 UTC:** a própria migração
+  da BD para a conta nova. Medição e causa exata em "Custo real de um import completo" abaixo.
 
 Regras para nao repetir:
 - **Nunca** correr `loadtest/` contra producao nem contra a conta que serve a API. Usar staging/2a conta.
-- **Nunca** reimportar a BD toda em ciclo; importar so o que mudou. Um import completo ~23k escritas e o teto diario e 100k.
+- **Nunca** reimportar a BD toda em ciclo; importar so o que mudou. **Um import completo custa ~117.000 linhas
+  escritas** (medido em 2026-10-28, não 23k) — sozinho estoura o teto diário de 100.000. Ver abaixo.
 - Preferir `wrangler d1 migrations apply` (incremental) a reimportar o dump completo.
+
+### Custo real de um import completo (medido 2026-10-28)
+`wrangler d1 execute --remote --file=…` usa o endpoint `/import` da D1, e o "rows written" conta
+**linhas + entradas de índice** — por isso é ~5× maior do que o número de linhas das tabelas.
+
+| O que correu (hora 21:00Z, a hora da migração) | rows written |
+|---|---|
+| 13 imports pequenos, tabela a tabela (21:55:30–21:57:12) | ~7.078 |
+| **1 import completo — 73 queries, 1,22 s** (21:57:19) | **116.798** |
+| tráfego normal da app no resto da hora | ~175 |
+| **total da hora** | **124.051 = 124% do teto** |
+
+- O import grande leu 46.835 linhas e deu 71.648 `changes`. `places` tem 23.345 linhas, mas o total escrito
+  é ~117k porque cada INSERT também escreve os índices.
+- Antes dele houve **5 tentativas falhadas** (21:49–21:53, sem resumo de execução) — as retentativas somam.
+- Depois das 21:57 UTC o dia ficou sem escritas: 22:00Z teve 41 linhas e 23:00Z **zero**; as leituras
+  continuaram (73k nessa hora). A app ficou ~2 h só de leitura até ao reset das 00:00 UTC.
+- **Um import completo = o dia inteiro.** Nunca repetir o import "para ver se passou"; ver a quota antes.
+
+### Ver a quota da conta (antes de qualquer import)
+O wrangler não tem comando de quota; usar a GraphQL Analytics API com o token OAuth do wrangler
+(`~/.wrangler/config/default.toml` → `oauth_token`) e o `accountTag` `016a8f9ed58a5cd10e9be697944905f0`:
+- **Workers:** `workersInvocationsAdaptive { sum { requests errors subrequests } dimensions { scriptName } }`
+- **D1:** `d1AnalyticsAdaptiveGroups { sum { rowsRead rowsWritten readQueries writeQueries } dimensions { datetime databaseId } }`
+
+Script pronto: `%TEMP%\opencode\cf-quota.mjs` (hoje/24h por script e por BD) e `cf-d1-hourly.mjs` (hora a hora).
+**Nota:** a API de *billing/subscriptions* devolve **403** com este token (sem scope de billing) — não dá para
+confirmar o plano por API, só pelo dashboard.
 
 ## Tokens de login (cuidado com o use-account.ps1)
 **Conta oficial:** `rerere…` — token em `~/.wrangler/config/default.rerere670account.toml`.
