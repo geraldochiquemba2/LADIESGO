@@ -451,7 +451,7 @@ async function decide(id,ok){
 }
 function catEx(mult){const m=parseFloat(String(mult).replace(',','.'));if(!Number.isFinite(m))return'—';return '≈ '+fmt(Math.max(900,Math.round((500+400*1+70*3)*m/100)*100))+' Kz';}
 function renderCats(){
-  try{if(document.activeElement&&$('cats')&&$('cats').contains(document.activeElement))return;}catch(e){}
+  try{var _ae=document.activeElement;if(_ae&&/^(INPUT|SELECT|TEXTAREA)$/.test(_ae.tagName)&&$('cats')&&$('cats').contains(_ae))return;}catch(e){}
   $('cats').innerHTML=CATS.map(x=>'<tr'+(x.active===false?' style="opacity:.6"':'')+'><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" oninput="document.getElementById(\'ce_'+esc(x.code||'')+'\').textContent=catEx(this.value)" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td class="mut" id="ce_'+esc(x.code||'')+'">'+catEx(x.mult)+'<br><span class="mut sm">1 km × '+esc(x.mult||'')+'</span></td><td>'+(x.active===false?'<span style="color:#d92d4b;font-weight:700">Inativa</span>':'<span style="color:#12a150;font-weight:700">Ativa</span>')+'</td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button> <button class="chip" data-a="togglecat" data-id="'+esc(x.code||'')+'" data-st="'+(x.active===false?'1':'0')+'">'+(x.active===false?'Ativar':'Desativar')+'</button> <button class="chip" data-a="delcat" data-id="'+esc(x.code||'')+'">Apagar</button></td></tr>').join('')||'<tr><td colspan="7" class="mut">Sem categorias.</td></tr>';
 }
 async function addCat(){
@@ -487,7 +487,7 @@ async function toggleCat(code,st){
     const r=await fetch('/api/v1/admin/categories/'+encodeURIComponent(code),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify({active:on})});
     const j=await r.json().catch(()=>null);
     if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
-    toast(on?'Categoria ativada ✓':'Categoria desativada ✓','ok');load();
+    toast(on?'Categoria ativada ✓':'Categoria desativada ✓','ok');try{if(document.activeElement)document.activeElement.blur();}catch(e){}load();
   }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Erro: '+((e&&e.message)||e),false);}
 }
 async function delCat(code){
@@ -497,7 +497,7 @@ async function delCat(code){
     const r=await fetch('/api/v1/admin/categories/'+encodeURIComponent(code),{method:'DELETE',headers:ah()});
     const j=await r.json().catch(()=>null);
     if(!r.ok)throw new Error((j&&j.message)||'Falhou.');
-    toast('Categoria apagada ✓','ok');load();
+    toast('Categoria apagada ✓','ok');try{if(document.activeElement)document.activeElement.blur();}catch(e){}load();
   }catch(e){if(m){m.textContent='Erro: '+((e&&e.message)||e);m.style.color='#d92d4b';}toast('Erro: '+((e&&e.message)||e),false);}
 }
 function renderUsers(){
