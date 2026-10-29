@@ -206,6 +206,68 @@ Sintoma: quem cancelava via a viagem terminar, mas o outro lado só descobria 10
   ligado por `showCancelBanner` desaparece no `poll*` seguinte, nos dois papéis e nos dois domínios).
 - Nota: `wrangler d1 execute --remote` continua a funcionar; a **API REST** da D1 com o token OAuth guardado
   devolve `7403` (o token não tem scope de D1). Para escritas por script usar **wrangler**.
+  *(Depois de renovar o login do wrangler a API REST volta a funcionar; em 2026-10-29 o `delete`/`insert` por
+  REST passou a devolver 200 — ver a nota de tokens.)*
+
+## Push — um só ponto de envio e eventos completos (2026-10-29)
+**Sintoma:** a app não mandava notificações. Havia 3 problemas independentes.
+
+1. **Sem push nos eventos principais.** Só existia push em: novo pedido (`pushTripToDriver(s)`), chegou
+   (`pushPaxArrived`), chat e toca-toca do `TripRinger`. Aceitar, cancelar e concluir **não** avisavam nada.
+2. **Tokens mortos nunca eram apagados.** Os envios iam direitos ao Expo e a resposta (que diz
+   `DeviceNotRegistered`) era ignorada; o token velho ficava na BD para sempre a falhar em silêncio.
+3. **Causa nativa (a que impede mesmo o token de existir):** `mobile/app.json` nunca teve o plugin
+   `expo-notifications`. Desde o **SDK 53** o plugin é obrigatório: sem ele o iOS não ganha o entitlement
+   `aps-environment` e o `getExpoPushTokenAsync()` falha dentro de um `catch {}` (silêncio total). No Android
+   falta o `google-services.json` (nunca existiu no repo) → também não há token. Ver "Pendente" abaixo.
+
+**Servidor (feito, deployado e provado):**
+- `expoSend(sql, msgs)` é o **único** sítio que fala com `https://exp.host/--/api/v2/push/send`. Lê os
+  *tickets* da resposta e, para cada `error` com `details.error === 'DeviceNotRegistered'`, faz
+  `UPDATE users SET "fcmToken" = NULL` — o token morto sai da BD e o próximo login regista um novo.
+- `pushToUser(sql, userId, title, body, data)` e `tripOtherUserId(sql, tripId, meId)` (o outro lado da viagem).
+- Passaram a usar `expoSend`: `pushPaxArrived`, o push de chat, `pushTripToDriver`, `pushTripToDrivers` e o
+  alarme do `TripRinger`. **Não há mais `fetch(...push/send)` espalhados** — ao acrescentar pushes usar estes
+  helpers (senão volta a não haver poda de tokens).
+- Eventos novos, todos com `data.tripId` e `type`:
+  | Onde | Para quem | Título |
+  |---|---|---|
+  | `PUT /trips/:id/accept` | passageira | 🦋 Motorista a caminho! (com o 1.º nome da motorista) |
+  | `POST /trips/:id/status` `accepted` | passageira | 🦋 Motorista a caminho! |
+  | `PUT /trips/:id/cancel` | o outro lado | Corrida cancelada pela motorista/passageira (+ `Motivo: …`) |
+  | `POST /trips/:id/status` `cancelled` | o outro lado | idem, com o motivo do corpo |
+  | `PUT /trips/:id/complete` | passageira | 🦋 Viagem concluída (convite a avaliar) |
+  | `POST /trips/:id/status` `completed` | passageira | 🦋 Viagem concluída |
+  - Os pushes de estado vão em `c.executionCtx.waitUntil(...)`: não atrasam a resposta HTTP.
+  - `arrived` continua a sair de `pushPaxArrived` (chamado no ramo `DRIVER_ARRIVED`) — não duplicar.
+  - `in_progress` **não** manda push de propósito (a passageira está no carro com a app aberta).
+
+**Como testar sem tocar em telemóveis reais:** pôr `fcmToken = 'ExponentPushToken[FAKEtest000000000000]'`
+no utilizador de teste, provocar o evento e confirmar que o token fica `NULL`. O Expo responde sempre
+`{"status":"error","details":{"error":"DeviceNotRegistered"}}` a tokens falsos (prova de que o envio saiu e a
+poda correu). Script pronto: `%TEMP%\opencode\t-push.mjs` (regista motorista+passageira, exercita aceite/
+cancelamento nos dois sentidos/chegou/iniciou/concluiu e limpa no fim).
+- **Atenção no `POST /trips/:id/status` `accepted`:** o corpo leva `driverId` = **userId** da motorista
+  (`driverIdFor()` procura `drivers."userId"`), não o id da linha `drivers`. Com o id da linha devolve
+  `403 {"message":"Só motoristas."}`.
+- **Nunca** limpar dados de teste com `DELETE ... WHERE "passengerId" NOT IN (SELECT id FROM users)`:
+  isso apaga viagens históricas de contas já eliminadas. Apagar só por `name LIKE 'ZZ%'` / `id LIKE 'drvtest-%'`.
+  (Aconteceu em 2026-10-29: 15 viagens apagadas e repostas com
+  `wrangler d1 time-travel restore ladiesgo --timestamp=…` — o Time Travel da D1 funciona como rede de segurança.)
+
+**Prova (2026-10-29, produção, token falso, dados de teste apagados no fim):** aceite por `/status` 200 e por
+`PUT /accept` 200 com token → `NULL`; cancelamento motorista→passageira e passageira→motorista com token →
+`NULL` dos dois lados; `arrived` → `NULL`; `completed` → `NULL`; `in_progress` sem push (token fica, correto).
+Base no fim: 25 users / 119 trips / 1 motorista, 0 vestígios `ZZ%`/`drvtest-%`.
+
+**Pendente (só o dono consegue resolver):**
+- **iOS:** juntar `"expo-notifications"` a `plugins` no `mobile/app.json` e **reconstruir** (build nativo novo —
+  mudar `App.tsx`/`app.json` não chega com deploy de HTML). A App ID `com.ladiesgo.app` tem de ter a capability
+  **Push Notifications** ativa no portal Apple, senão o `sigh(force: true)` do Fastfile falha.
+- **Android:** obter o `google-services.json` do projeto Firebase `com.ladiesgo.app`, guardá-lo em
+  `mobile/` (fora do git) e apontar `android.googleServicesFile` no `app.json`.
+- Só depois de um build com token real é que os pushes acima chegam ao telemóvel. Sem token na BD, o servidor
+  não tem para onde enviar (a motorista real não tem `fcmToken`).
 
 ## Quota / pedidos
 - Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).

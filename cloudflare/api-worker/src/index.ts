@@ -977,15 +977,57 @@ async function geoPushToTrip(env: any, userId: string, lat: number, lng: number,
     await notifyTripPushGps(env, tripId, lat, lng, userId, h);
   } catch {}
 }
+// ─── PUSH (Expo) ────────────────────────────────────────────────────────────
+// Um único ponto de envio: manda para o Expo Push Service e apaga da BD os
+// tokens que o Expo diz estarem mortos (`DeviceNotRegistered`) — antes os
+// tokens velhos ficavam para sempre e o envio falhava em silêncio.
+async function expoSend(sql: any, msgs: any[]): Promise<void> {
+  const list = (msgs || []).filter((m: any) => m && m.to);
+  if (!list.length) return;
+  try {
+    const r = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(list),
+    });
+    const j: any = await r.json().catch(() => null);
+    const tickets: any[] = Array.isArray(j?.data) ? j.data : [];
+    for (let i = 0; i < tickets.length; i++) {
+      const t = tickets[i];
+      if (t && t.status === 'error' && t.details && t.details.error === 'DeviceNotRegistered' && list[i] && list[i].to) {
+        try { await sql`UPDATE users SET "fcmToken" = NULL, "updatedAt" = NOW() WHERE "fcmToken" = ${String(list[i].to)}`; } catch {}
+      }
+    }
+  } catch {}
+}
+// Push a UM utilizador (não faz nada se não tiver token Expo).
+async function pushToUser(sql: any, userId: string | null, title: string, body: string, data?: any): Promise<void> {
+  if (!userId) return;
+  try {
+    const u = await sql`SELECT "fcmToken" FROM users WHERE id = ${userId} LIMIT 1`;
+    const tok = u[0]?.fcmToken;
+    if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
+    await expoSend(sql, [{ to: String(tok), sound: 'default', title, body, data: data || {} }]);
+  } catch {}
+}
+// O outro lado da viagem (quem NÃO é `meId`): passageira ou motorista.
+async function tripOtherUserId(sql: any, tripId: string, meId: string): Promise<string | null> {
+  try {
+    const r = await sql`SELECT t."passengerId", d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${tripId} LIMIT 1`;
+    if (!r.length) return null;
+    const pax = r[0].passengerId ? String(r[0].passengerId) : null;
+    const drv = r[0].driverUserId ? String(r[0].driverUserId) : null;
+    if (pax && pax !== meId) return pax;
+    if (drv && drv !== meId) return drv;
+  } catch {}
+  return null;
+}
 async function pushPaxArrived(env: any, tripId: string) {
   try {
     const sql = neon(env.DB);
     const rows = await sql`SELECT "passengerId" FROM trips WHERE id = ${tripId} LIMIT 1`;
     if (!rows.length) return;
-    const u = await sql`SELECT "fcmToken" FROM users WHERE id = ${rows[0].passengerId} LIMIT 1`;
-    const tok = u[0]?.fcmToken;
-    if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
-    await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: tok, sound: 'default', title: '🦋 A tua motorista chegou!', body: 'Dita o teu código de segurança para começar a viagem.', data: { tripId, type: 'arrived' } }]) });
+    await pushToUser(sql, rows[0].passengerId ? String(rows[0].passengerId) : null, '🦋 A tua motorista chegou!', 'Dita o teu código de segurança para começar a viagem.', { tripId, type: 'arrived' });
   } catch {}
 }
 // ─── RequestsHub: feed de pedidos por WebSocket-hibernação (server push) ───
@@ -1232,6 +1274,12 @@ app.put('/api/v1/trips/:id/accept', requireAuth, async (c) => {
   const rows = await sql`UPDATE trips SET "driverId" = ${did}, status = 'ACCEPTED', "acceptedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${id} AND status = 'REQUESTED' RETURNING *`;
   if (!rows.length) return c.json({ message: 'Viagem indisponível.' }, 400);
   pushStatus(c, id, 'ACCEPTED');
+  // Push (app fechada): a passageira sabe que a motorista aceitou.
+  try {
+    const dn = await sql`SELECT u.name FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${did} LIMIT 1`;
+    const nm = String(dn[0]?.name || '').trim().split(' ')[0] || 'A tua motorista';
+    c.executionCtx.waitUntil(pushToUser(sql, rows[0].passengerId ? String(rows[0].passengerId) : null, '🦋 Motorista a caminho!', `${nm} aceitou a viagem e está a caminho.`, { tripId: id, type: 'accepted' }));
+  } catch {}
   hubPoke(c);
   return c.json(rows[0]);
 });
@@ -1323,6 +1371,8 @@ app.put('/api/v1/trips/:id/complete', requireAuth, async (c) => {
   if (rows[0].driverId) await sql`UPDATE drivers SET "totalTrips" = "totalTrips" + 1, "totalEarnings" = "totalEarnings" + ${Number(rows[0].finalFare || rows[0].fareEstimate || 0) * 0.8} WHERE id = ${rows[0].driverId}`;
   await applyCommission(sql, rows[0].driverId, rows[0].finalFare || rows[0].fareEstimate, id);
   pushStatus(c, id, 'COMPLETED');
+  // Push (app fechada): viagem terminou e pode avaliar.
+  try { c.executionCtx.waitUntil(pushToUser(sql, rows[0].passengerId ? String(rows[0].passengerId) : null, '🦋 Viagem concluída', 'Obrigada por viajar com a LadiesGo! Podes avaliar a motorista.', { tripId: id, type: 'completed' })); } catch {}
   return c.json(rows[0]);
 });
 app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
@@ -1332,6 +1382,13 @@ app.put('/api/v1/trips/:id/cancel', requireAuth, async (c) => {
   const rows = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = ${String(reason || '').slice(0, 80)}, "updatedAt" = NOW() WHERE id = ${c.req.param('id')} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') RETURNING *`;
   if (!rows.length) return c.json({ message: 'Transição inválida.' }, 400);
   pushStatus(c, c.req.param('id'), 'CANCELLED', { by: String((user as any).role || '').toLowerCase() === 'driver' ? 'driver' : 'passenger', reason: String(reason || '').slice(0, 80) });
+  // Push (app fechada): o outro lado sabe que a viagem foi cancelada.
+  try {
+    const isDrv = String((user as any).role || '').toLowerCase() === 'driver';
+    const other = await tripOtherUserId(sql, c.req.param('id'), user.sub);
+    const why = String(reason || '').slice(0, 80);
+    if (other) c.executionCtx.waitUntil(pushToUser(sql, other, isDrv ? 'Corrida cancelada pela motorista' : 'Corrida cancelada pela passageira', why ? `Motivo: ${why}` : 'A viagem foi cancelada.', { tripId: c.req.param('id'), type: 'cancelled' }));
+  } catch {}
   try { await hubBroadcast(c.env); } catch {}
   return c.json(rows[0]);
 });
@@ -1703,10 +1760,7 @@ app.post('/api/v1/trips/:id/chat', requireAuth, async (c) => {
         other = t[0].passengerId;
       }
       if (!other || other === user.sub) return;
-      const u = await sql`SELECT "fcmToken" FROM users WHERE id = ${other} LIMIT 1`;
-      const tok = u[0]?.fcmToken;
-      if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
-      await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: tok, sound: 'default', title: '💬 Nova mensagem — LadiesGo!', body: clean.slice(0, 120), data: { tripId: id, type: 'chat' } }]) });
+      await pushToUser(sql, other, '💬 Nova mensagem — LadiesGo!', clean.slice(0, 120), { tripId: id, type: 'chat' });
     } catch {}
   })());
   return c.json({ ok: true });
@@ -2851,7 +2905,7 @@ async function pushTripToDriver(sql: any, driverId: string, tripId: string, titl
     const r = await sql`SELECT u."fcmToken" FROM drivers d JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} AND NOT EXISTS (SELECT 1 FROM trips t2 WHERE t2."driverId" = d.id AND t2.status IN ('ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')) LIMIT 1`;
     const tok = r[0]?.fcmToken;
     if (!tok || String(tok).indexOf('ExponentPushToken') !== 0) return;
-    await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: tok, sound: 'default', title, body, data: { tripId, type: 'new-trip' } }]) });
+    await expoSend(sql, [{ to: String(tok), sound: 'default', title, body, data: { tripId, type: 'new-trip' } }]);
   } catch {}
 }
 // Avança a oferta se expirou (lazy, em cada sondagem). Devolve a linha fresca.
@@ -3043,6 +3097,21 @@ app.post('/api/v1/trips/:id/status', requireAuth, async (c) => {
       if (!r.length) return c.json({ message: 'Transição inválida.' }, 400);
     }
     pushStatus(c, id, neonSt, neonSt === 'CANCELLED' ? { by: String((b as any).by || '').toLowerCase() === 'driver' ? 'driver' : 'passenger', reason: String((b as any).reason || '').slice(0, 80) } : undefined);
+    // Push (app fechada) do fluxo web: o outro lado tem de saber sem abrir a app.
+    try {
+      const actor: any = c.get('user') || {};
+      const other = await tripOtherUserId(sql, id, String(actor.sub || ''));
+      const paxId = t && t.passengerId ? String(t.passengerId) : null;
+      const why = String((b as any).reason || '').slice(0, 80);
+      if (neonSt === 'ACCEPTED' && paxId) {
+        c.executionCtx.waitUntil(pushToUser(sql, paxId, '🦋 Motorista a caminho!', 'A tua motorista aceitou a viagem e está a caminho.', { tripId: id, type: 'accepted' }));
+      } else if (neonSt === 'CANCELLED' && other) {
+        const isDrv = String((b as any).by || '').toLowerCase() === 'driver';
+        c.executionCtx.waitUntil(pushToUser(sql, other, isDrv ? 'Corrida cancelada pela motorista' : 'Corrida cancelada pela passageira', why ? `Motivo: ${why}` : 'A viagem foi cancelada.', { tripId: id, type: 'cancelled' }));
+      } else if (neonSt === 'COMPLETED' && paxId) {
+        c.executionCtx.waitUntil(pushToUser(sql, paxId, '🦋 Viagem concluída', 'Obrigada por viajar com a LadiesGo! Podes avaliar a motorista.', { tripId: id, type: 'completed' }));
+      }
+    } catch {}
     if (neonSt === 'DRIVER_ARRIVED') { try { c.executionCtx.waitUntil(pushPaxArrived(c.env, id)); } catch {} }
     if (neonSt === 'ACCEPTED' || neonSt === 'CANCELLED') { try { await hubBroadcast(c.env); } catch {} }
     return c.json({ ok: true, status: st });
@@ -3160,7 +3229,7 @@ async function pushTripToDrivers(sql: any, tripId: string, pickupName: string, d
     const toks = cands.filter((r: any) => !catName || !Array.isArray(r.cats) || !r.cats.length || r.cats.map((x: any) => String(x)).indexOf(catName) >= 0);
     const body = `${pickupName} → ${destN}${stopsN ? ` · +${stopsN} paragem${stopsN > 1 ? 'ns' : ''}` : ''} · ${fare} Kz`;
     const msgs = toks.map((r: any) => ({ to: r.fcmToken, sound: 'default', title, body, data: { tripId, type: 'new-trip' } })).filter((m: any) => m.to);
-    if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
+    if (msgs.length) await expoSend(sql, msgs);
   } catch {}
 }
 
@@ -3273,7 +3342,7 @@ export class TripRinger {
             body: `Tens ${openN} pedido${openN > 1 ? 's' : ''} à espera · abre a app`,
             data: { type: 'pending-summary' },
           })).filter((m: any) => m.to);
-          if (msgs.length) await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msgs) });
+          if (msgs.length) await expoSend(sql, msgs);
         } catch {}
         await this.state.storage.put('sent', sent + 1);
       }
