@@ -347,5 +347,10 @@ em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).
 - Notas da conta `isabelcanjamba62` (em espera/desativada). **Não publicar nessa conta.**
 - **Rate limiting HTTP:** 100 req/min por IP em `/api/*` (sliding window, em memória por isolate). `/ping`, `/api/v1/health` e `/api/v1/auth/guest` estão isentos.
 - **Backdoor admin removido:** `999999999` / `1234567890` não entra mais como ADMIN. Qualquer admin deve existir na BD com `role='ADMIN'` e autenticar normalmente.
+  - **CORRECÇÃO (verificado 2026-10-29): isto NÃO é verdade em produção.** `POST /api/v1/auth/login` ainda tem o
+    ramo de backdoor (em `src/index.ts`, ~linha 301): com `999999999` + `1234567890` (aceita também `+244…`/`244…`)
+    procura/cria o utilizador e força `role = 'ADMIN'`. **Fica assim por decisão do dono (2026-10-29)** — é um
+    risco aceite e consciente, para ter acesso de emergência. Não "corrigir" sem ele pedir; quem souber estes dois
+    valores tem controlo total da app. O resto desta nota descreve o estado pretendido, não o real.
 - **Variáveis:** `RATE_LIMIT_MAX=100`, `RATE_LIMIT_WINDOW_MS=60000` no `wrangler.toml` do Worker/API.
 - **Smoke test:** `GET /api/v1/health` deve retornar 200; `POST /api/v1/auth/login` com `999999999` deve retornar 401 (backdoor removido).
