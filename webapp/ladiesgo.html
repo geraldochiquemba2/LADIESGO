@@ -75,16 +75,18 @@
   @keyframes mf{to{transform:translate(var(--dx),var(--dy)) rotate(var(--r));opacity:0}}
   .mini .wa,.mini .wb{transform-box:fill-box;animation:fp .18s infinite alternate}.mini .wa{transform-origin:100% 50%}.mini .wb{transform-origin:0 50%}@keyframes fp{to{transform:scaleX(.3)}}
   @media(max-width:820px){
+    nav{padding:12px 4.5vw}nav b{font-size:17px;gap:6px}nav svg{width:22px}nav a{font-size:12px;padding:7px 13px}
     .beat{top:14vh;left:6vw;width:88vw;transform:translateY(-10px)}.beat.on{transform:none}
-    .beat h2{font-size:24px;line-height:1.1;margin-bottom:6px}.beat p{font-size:13px;line-height:1.4}
-    .beat i{font-size:11px;margin-bottom:6px}
-    .phone{right:50%;top:auto;bottom:64px;height:38vh;height:38dvh;width:auto;max-width:72vw;transform:translateX(50%) rotate(0);padding:7px 5px;border-radius:26px}
-    #taxi{width:120px;bottom:8px}
-    .sh{padding:8px 10px calc(8px + env(safe-area-inset-bottom));min-height:0;max-height:55%;overflow-y:auto}
-    .sh h3{font-size:15px;margin-bottom:4px}
-    .fld{padding:8px;font-size:12px}
-    .row{font-size:11.5px;gap:8px}.row small{font-size:10.5px}
-    .av{width:32px;height:32px;font-size:11px}
+    .beat h2{font-size:21px;line-height:1.12;margin-bottom:6px}.beat p{font-size:12px;line-height:1.42}
+    .beat i{font-size:10px;letter-spacing:.06em;margin-bottom:6px}
+    .phone{right:50%;top:auto;bottom:60px;height:36vh;height:36dvh;width:auto;max-width:70vw;transform:translateX(50%) rotate(0);padding:6px 4px;border-radius:24px}
+    #taxi{width:110px;bottom:8px}
+    .sh{padding:7px 9px calc(7px + env(safe-area-inset-bottom));min-height:0;max-height:55%;overflow-y:auto;border-radius:18px 18px 0 0}
+    .sh h3{font-size:13.5px;margin-bottom:4px}
+    .fld{padding:7px;font-size:11px;border-radius:10px}
+    .row{font-size:11px;gap:7px}.row small{font-size:10px}
+    .av{width:28px;height:28px;font-size:10px}
+    .okk{font-size:11px;margin-bottom:5px}.st{font-size:13px;letter-spacing:1px}
     .dots{display:none}.hint{display:none}.moon{left:80vw;width:40px;height:40px}.city{height:30vh;bottom:56px}
     .road{height:52px}.story{height:100vh;height:100dvh}
   }
@@ -150,7 +152,7 @@ const stars='<span class="st">★★★★★</span>';
 const SH=[
  ()=>`<div><h3 class="serif">Boa noite, Beatriz.</h3><div class="fld"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.6-4.6"/></svg><span id="ty"></span><i class="caret"></i></div></div>`,
  a=>a?`<div class="row"><div class="av">AS</div><div><b>A Ana aceitou o teu pedido</b><small>Yaris roxo · LDG-247 · ★ 4,92</small></div></div><div class="row" style="margin-top:12px"><span class="live"></span><span>Mariana acompanha a viagem</span></div>`:`<div><h3 class="serif">A escolher alguém de confiança…</h3><small style="color:#6c6680">Só motoristas mulheres verificadas</small><div class="ld"><b></b></div></div>`,
- ()=>`<div><h3 class="serif">Em viagem com a Ana</h3><div class="row"><span class="live"></span><span>Mariana acompanha em tempo real</span></div><div class="row" style="margin-top:10px"><b style="font-size:26px" id="eta">9</b><small style="margin:0">min até chegares</small></div></div>`,
+ ()=>`<div><h3 class="serif">Em viagem com a Ana</h3><div class="row"><span class="live"></span><span>Mariana acompanha em tempo real</span></div><div class="row" style="margin-top:10px"><b style="font-size:19px" id="eta">9</b><small style="margin:0">min até chegares</small></div></div>`,
  ()=>`<div><h3 class="serif">Chegaste bem.</h3><div class="okk">✓ A Mariana já foi avisada</div>${stars}</div>`];
 function sheet(k,h){if(k!==key){key=k;$('#sh').innerHTML=h}}
 
