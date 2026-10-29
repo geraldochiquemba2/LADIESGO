@@ -16,6 +16,13 @@ on:
       - 'mobile/fastlane/**'
       - 'mobile/app.json'
 
+# Um build iOS de cada vez. Dois em paralelo correm `sigh(force: true)` sobre o
+# mesmo App ID e um revoga o perfil de provisionamento do outro (o build falha
+# na assinatura). Com cancel-in-progress, um push novo mata o build anterior.
+concurrency:
+  group: ios-build
+  cancel-in-progress: true
+
 jobs:
   build-submit:
     runs-on: macos-latest
