@@ -275,6 +275,12 @@ O último build iOS instalado é o **#11 (19/10, commit `7ca72d5`)**, que tem de
 - **Corolário: copiar tokens da D1 antiga para a nova não resolve nada** — o que lá existe já cá está. Escrever
   tokens novos só os pode criar um build que aponte à API nova (`API_URL` da rerere, build ≥ #12).
 
+**Resolvido (2026-10-29, 12:03 Lisboa):** instalado o build **#13** (plugin `expo-notifications` + `API_URL` da
+rerere), a Maria Gaspar passou a ter `fcmToken` na D1 nova (`tem_token: 1`, `push_diagnostics` **vazio** — o token
+foi obtido à primeira). Base: 25 users / 120 trips / 1 motorista / 3 tokens. A assinatura do build passou com o
+plugin, o que confirma que a capability **Push Notifications** está activa na App ID `com.ladiesgo.app`.
+A partir daqui **não voltar a apontar `API_URL` para a conta antiga** nem instalar builds anteriores ao #12.
+
 **Pendente (só o dono consegue resolver):**
 - **iOS:** juntar `"expo-notifications"` a `plugins` no `mobile/app.json` e **reconstruir** (build nativo novo —
   mudar `App.tsx`/`app.json` não chega com deploy de HTML). A App ID `com.ladiesgo.app` tem de ter a capability
