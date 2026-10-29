@@ -37,6 +37,40 @@ Instruções para agentes que trabalham neste repositório.
 - A D1 **não aceita** `BEGIN TRANSACTION` nem statements > ~100 KB num ficheiro de importação
   (fotos base64 grandes têm de ir em ficheiros separados ou a `NULL`).
 
+## `places` — coordenadas corrigidas contra a Yango (2026-10-29)
+**A tabela `places` NÃO é uma base da Yango** — o comentário da migração `0006_places.sql` está errado.
+É um extracto OSM mal convertido: 0 linhas têm os tipos `organization`/`address` da Yango. Não substituir
+a tabela por uma extracção da Yango (licença/ToS e todas as categorias ficariam "Organization", porque
+`placeCat()` só sabe mapear os `type` do OSM).
+
+- **Bug corrigido:** o ISPTEC (id 5683) apontava para o INSUTEC, em Samba, **5 128 m** ao lado. Causa:
+  `localPlaces()` devolve a linha local e `if (local.length >= 1)` **curto-circuita** o Photon/Nominatim,
+  portanto uma linha local errada bloqueia o geocoder externo que acertaria.
+- **Auditoria** (`scripts/audit-places.mjs`, 9 877 POIs, autocomplete público da Yango a 2,4 req/s):
+  `ok` 2 892 (≤150 m) · `corrigir` **139** (aplicadas) · `sinalizar` 6 403 · `ausente` 443. 13 duplicados apagados.
+- **Três guardas** (sem elas seriam 346 correções, muitas erradas):
+  - **irmãos** — o mesmo nome noutra linha nossa a >1 km é filial/cadeia: não se corrige
+    (`Banco BIC Angola` ×27, `Recauchutagem` ×26, `Zumba` ×13). A guarda de cadeia *da resposta* não apanha
+    isto porque a Yango só devolve a filial mais próxima (máx. 7). 346 → 184.
+  - **corroboração** — desvio >2 km (`--safe`) só passa se outro sítio nosso estiver a ≤250 m (`--proof`) do
+    destino com nome parecido ≥0,6. Trava `seven`, `Lavanderia`, `Viana`; deixa passar o ISPTEC (a linha
+    `ISPTC` já está a 61 m do sítio certo). 184 → 139. **Só o ISPTEC tem desvio >2 km.**
+  - **duplicados** — só se apaga com nome exatamente igual **e** coordenadas a **4 casas** (~11 m).
+    Com 3 casas (~110 m) apagavam-se entradas distintas do mesmo sítio.
+- **Cache:** a pesquisa guarda a resposta **7 dias** em `caches.default` por datacenter
+  (`places:v12:<q>:<lat>,<lng>`). Corrigir a D1 **não chega** — é preciso subir a chave e fazer deploy.
+  Passou a `places:v13` (commit `7b95f75`). **Ao mexer em `places`, subir sempre esta chave.**
+- **Aplicado em produção (2026-10-29):** 139 UPDATEs + 13 DELETEs = **721 linhas escritas**; `places` e
+  `places_fts` 23 345 → **23 332**; `integrity-check` do FTS passa. Verificação: 131/139 na coordenada certa
+  e as 8 restantes são os duplicados que o próprio lote apagou. `/api/places/search?q=isptec` devolve
+  **Talatona**; amostra de 25 correções, todas a **0 m**. Time Travel de rollback:
+  `0000000a-00000064-00005113-e4fb9ec0f269c6029fa7d3d8f781e772`.
+- **`--report`** regenera `.sql`/`.csv` a partir do `.jsonl` sem rede. O `.jsonl` passou também a ser
+  reescrito com as decisões **já filtradas** — antes guardava a decisão bruta e quem o lesse via correções
+  (ex.: id 8, `Viana`, `seven`) que nunca foram escritas.
+- **Fase 2 (por fazer):** as 6 403 `sinalizar` precisam de revisão humana; adições devem vir de
+  **OSM/Overpass** (ODbL), não da Yango.
+
 ## Migração de conta (2026-10-28) — estado
 - A API e a base de dados foram **migradas da conta legada `fddsfds45` para a `rerere…`**.
 - **Base de dados:** D1 `ladiesgo` na rerere (`fab720b7…`), já com os dados migrados da BD antiga
