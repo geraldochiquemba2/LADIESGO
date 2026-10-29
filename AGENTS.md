@@ -174,6 +174,7 @@ Sintomas reportados: ao desligar num lado, o outro demorava a fechar; e a voz ti
 - Prova (2026-10-29, browser real, 2 origens diferentes, áudio sintético): offer entregue em ~1 s, `pend`=9,
   `accept` → `active` nos dois lados, `iceConnectionState/connectionState = connected`, `inbound-rtp` a subir
   (bytes 48 KB → 62 KB em 3 s, `audioLevel 1`), 6 candidatos `relay`. Desligar: outro lado `idle` no 1.º poll.
+- **Confirmado em telemóvel real pelo dono (2026-10-29):** motorista→passageira a ligar e a falar nos dois sentidos.
 - Prova (2026-10-29, produção, browser real em `/home`): `end` pelo WS chegou ao outro socket em **249 ms**,
   ou seja **240 ms antes** de o POST terminar (489 ms); 5/5 entregas 194–267 ms; `ping→pong` ~200 ms.
   Staging: 188–507 ms. Dados de teste apagados da D1 no fim (prod 25 users / 116 trips).
