@@ -788,6 +788,9 @@ Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
      candidates,log}`; `POST /api/v1/debug/cron/sweep` só staging + `DEBUG_KEY` (404 fora).
    - **Ligar só depois de rever o log:** 1 `INSERT … ON CONFLICT` em `system_flags`
      (`key='stale_guard', value='on'`), sem deploy.
+   - **ESTADO (2026-10-30, 11:55Z): LIGADO** — `stale_guard='on'` em produção, por decisão do dono.
+     Antes de ligar: 0 viagens ativas e 0 candidatas (nada fechou à primeira hora). Para parar:
+     `value='off'` (ou `'shadow'` para voltar a auditar). Não é preciso deploy.
    - Prova: **46/46** em staging (`%TEMP%\opencode\t-stale-guard.mjs`), staging a zero no fim;
      produção: `/health` 200, `/admin/stale-guard` 401 sem sessão, modo `shadow`, 0 candidatas.
 

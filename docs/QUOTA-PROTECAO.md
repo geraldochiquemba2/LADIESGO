@@ -149,7 +149,7 @@ transição de estado, o que for mais recente. `updatedAt` sozinho não serve: a
 | Valor | Efeito |
 |---|---|
 | ausente / `shadow` (**default**) | só regista as candidatas em `stale_guard_log` — **não fecha nada** |
-| `on` | fecha |
+| `on` | fecha (**estado em produção desde 2026-10-30**) |
 | `off` | não faz nada |
 
 Erro de D1 a ler a flag → `off` (nunca fecha por causa de um erro de leitura). Ligar/desligar é
