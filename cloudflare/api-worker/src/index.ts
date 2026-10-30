@@ -5053,7 +5053,7 @@ app.get('/api/v1/premium/reservations/mine', requireAuth, async (c) => {
     LEFT JOIN premium_fleet pf ON pf.id = pr.car_id
     LEFT JOIN drivers d ON d.id = pf.driver_id
     LEFT JOIN users u ON u.id = d."userId"
-    WHERE pr.passenger_id = ${user.sub}
+    WHERE pr.passenger_id = ${user.sub} AND pr.status IN ('pending','confirmed')
     ORDER BY pr.created_at DESC LIMIT 50`;
   const list = (rows || []) as any[];
   // Dados bancários só para quem está em 1.º da fila (é o único que paga agora).

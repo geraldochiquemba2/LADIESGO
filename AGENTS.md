@@ -361,6 +361,51 @@ por cima, a imagem ao centro e o texto por baixo (X ou "Fechar" para sair).
 - **Nunca** testar envios em produção: escreve em `notifications` de todas as contas reais e dispara push.
   Para o popup, inserir **uma** linha para um utilizador de teste (e apagá-la no fim).
 
+## Reserva Premium — libertar o carro fecha a reserva (2026-10-30)
+Quando o admin carrega em **Libertar** (`POST /api/v1/admin/premium/fleet/:id/release`), a reserva passa a
+`completed` e **desaparece da lista da passageira** ("As minhas reservas premium").
+
+- **API:** `GET /api/v1/premium/reservations/mine` filtra
+  `WHERE pr.passenger_id = … AND pr.status IN ('pending','confirmed')` (antes devolvia tudo, incluindo
+  `completed`/`cancelled`, e a lista mostrava reservas já fechadas).
+- **Cliente (`webapp/ladiesgo-home.html`, `renderPremiumMine`):** só desenha `pending`/`confirmed`
+  (pendentes já expiradas também saem). O detalhe (`renderPremiumDetail`) reencaminha para a lista com
+  mensagem em `completed` ("Reserva concluída — o carro foi libertado.") e `cancelled`.
+- O selo `dPremiumN` já usava `prmActive()` (ignora `completed`), por isso fica consistente.
+- O carro volta a `available` com `reservadoPor: null` no painel do admin.
+- Provado em staging (`%TEMP%\opencode\t-premium-release.mjs`): mine 1 `pending` → 1 `confirmed` → **0**
+  depois de libertar; detalhe devolve `completed`; carro `available`/`reservadoPor: null`.
+
+## Menus laterais — ordem por papel (2026-10-30)
+O drawer é **um só** (`#drawer`); o papel decide o que aparece.
+
+- **Passageira:** Perfil · Partida Compartilhada · Reserva · Segurança · Contactos · Guardar destinos ·
+  Histórico · Voltar ao início · Eliminar conta · Sair.
+- **Motorista:** Perfil · Minhas viagens compartilhadas · Segurança · **Viatura** · Carteira · Contactos ·
+  Histórico · Voltar ao início · Eliminar conta · Sair, e por baixo **As minhas categorias**
+  (Económico/Conforto/Kids!, de `/api/v1/categories`).
+- **"Viatura" é singular** — no item do menu **e** no título do ecrã (`data-a="cars"`).
+- **A motorista não tem "Guardar destinos":** `#dAddPlace` fica `display:none` para `role==='DRIVER'` no
+  handler do `#ham` **e** no sync de papel; o `data-a="addplace"` tem guarda de clique (`if(role==='DRIVER')return`).
+  (Antes, um `#ham` que não corresse o handler deixava o item visível — testar sempre com
+  `document.getElementById('ham').click()` dentro de `evaluate`, porque `#lgPermBar` (`z-index:100001`)
+  tapa o botão e o `click('#ham')` do Playwright faz timeout.)
+- **"Minhas Partidas" centrado:** `.sheet>.pwbox{margin-left:auto;margin-right:auto}`. Medido no browser:
+  sheet 414 / card 380 / folgas 17–17 px, com "+ Anunciar Partida", "Nenhuma partida anunciada." e "Fechar".
+
+## Anunciar Partida — escolha de pontos igual à reserva (2026-10-30)
+O formulário "Anunciar Partida" ("Ponto de partida / Onde estás?" e "Destino") usa **o mesmo picker** da
+reserva Premium, não o antigo `sharedPickBar`.
+
+- `prmPickOnMap(field, target)` com `_prmTarget = 'prm' | 'shared'`; `sharedPickOnMap(f)` chama
+  `prmPickOnMap(f,'shared')`.
+- Títulos: `shared` → "Escolher ponto de partida"/"Escolher destino"; `prm` → "Escolher ponto de busca (X)"/"Escolher destino (Y)".
+- Nome do sítio por `/api/zone` (ex.: "Cazenga Popular") e sugestões por `/api/places/search` (ex.: ISPTEC).
+- `prmPickConfirm()` escreve `_sharedOrigin`/`_sharedDest` e volta ao formulário (`renderSharedCreate`);
+  `prmPickCancel()` volta limpo. `prmPickEnd()` repõe `_prmTarget='prm'` (a reserva Premium não muda).
+- Provado no browser (`https://ladiesgo.pages.dev`): barra certa nos dois campos, ISPTEC escolhido e gravado
+  em `_sharedOrigin` (lat/lng), cancelar devolve o formulário com o campo vazio, picker Premium intacto.
+
 ## App Store — build e submissão (2026-10-29)
 **O build iOS não é EAS.** É GitHub Actions (`.github/workflows/build-ios.yml`): `expo prebuild` + Xcode +
 fastlane (`mobile/fastlane/Fastfile`, lane `release`), que faz cert/sigh/build e `upload_to_testflight`.
