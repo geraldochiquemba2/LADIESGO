@@ -983,8 +983,11 @@ arquivado/desativado e não houve incidente do GitHub relevante (só Issues+Page
   devolve `{ok, level, worst, alerted, shed}`. Nunca lança: erro → `{ error }`.
 - **Segredo necessário:** `CF_ANALYTICS_TOKEN` (**Account Analytics: Read** + **D1: Edit**).
   Sem ele é **no-op silencioso** (`{skipped:'sem CF_ANALYTICS_TOKEN'}`) — nunca parte a app.
-  O token OAuth do wrangler local **não serve para criar API tokens** (`/user/tokens`,
-  `/accounts/:id/tokens` → 403 `9109`); tem de ser criado no dashboard pelo dono.
+  O token OAuth do wrangler local **não serve**: não consegue criar API tokens (`/user/tokens`,
+  `/accounts/:id/tokens` → 403 `9109`) e **expira em horas** — a 30/10 às 17:10 a GraphQL já
+  devolvia `{"code":10000,"message":"Authentication error"}` com o token que funcionara às 16:39,
+  mesmo com a API REST a aceitá-lo; só voltou depois de `wrangler whoami` o renovar. Tem de ser um
+  **API token** criado no dashboard pelo dono.
   Meter com `wrangler secret put CF_ANALYTICS_TOKEN` (prod) e `--env staging` (staging).
 - `CF_ACCOUNT_ID = "016a8f9ed58a5cd10e9be697944905f0"` acrescentado a `[vars]` e `[env.staging.vars]`.
 

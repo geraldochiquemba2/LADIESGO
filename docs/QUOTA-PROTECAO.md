@@ -86,7 +86,10 @@ Por isso a vigilância passou para o cron por minuto que o Worker **já tem** (`
   para sempre.
 - Alerta no Telegram (`TG_BOT_TOKEN`/`TG_CHAT_ID`, anti-spam de 6 h).
 - **Precisa do segredo `CF_ANALYTICS_TOKEN`** (Account Analytics: Read + D1: Edit) no Worker, em
-  produção **e** em staging. Sem ele é no-op silencioso (nunca parte a app).
+  produção **e** em staging. Sem ele é no-op silencioso (nunca parte a app). Tem de ser um **API
+  token** do dashboard: o token OAuth do wrangler expira em horas (a 30/10 a GraphQL deixou de o
+  aceitar ~30 min depois de funcionar, e só voltou com `wrangler whoami`) e não consegue criar
+  tokens (`403 9109`).
 
 ```
 GET  /api/v1/admin/quota          # último estado guardado (ADMIN)
