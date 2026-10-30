@@ -1002,6 +1002,12 @@ Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
    - **`.github/workflows/quota-watch.yml`** corre de 3 em 3 h, alerta no Telegram e **falha**
      a partir de CRÍTICO (o GitHub manda email). Precisa do segredo `CLOUDFLARE_API_TOKEN`
      (+ `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`); sem token, salta sem falhar.
+     **Estado a 30/10 (medido pela API pública do GitHub): 0 execuções** — o ficheiro entrou na
+     `main` às 10:48Z e os slots das 12:00Z e 15:00Z não criaram run nenhum (o `keep-alive` também
+     parou a 13/10, mas esse foi desativado à mão). Não há `gh` nesta máquina: **só o dono** pode
+     correr GitHub → Actions → "quota-watch (plano Free)" → *Run workflow* e confirmar que o
+     segredo existe (Settings → Secrets and variables → Actions). Se o run manual passar mas o
+     agendado não arrancar, é config de Actions do repositório, não do script.
    - `scripts/monitor-writes.mjs` está **descontinuado** (media com `SELECT COUNT(*) FROM places`
      — lia 23 k linhas por chamada — e procurava uma tabela `_write_metrics` inexistente, dando
      "0 escritas" falso). Fica só como atalho para o `quota-watch`.
