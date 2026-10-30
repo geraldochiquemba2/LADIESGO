@@ -695,10 +695,14 @@ app.get('/api/v1/ratings/mine', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   try {
-    const did = await driverIdFor(sql, user.sub);
-    const rows = did
-      ? await sql`SELECT r.score, r.comment, r."createdAt", u.name AS "raterName" FROM ratings r JOIN trips t ON t.id = r."tripId" LEFT JOIN users u ON u.id = r."raterId" WHERE t."driverId" = ${did} ORDER BY r."createdAt" DESC LIMIT 30`
-      : await sql`SELECT r.score, r.comment, r."createdAt", u.name AS "raterName" FROM ratings r LEFT JOIN users u ON u.id = r."raterId" WHERE r."ratedId" = ${user.sub} ORDER BY r."createdAt" DESC LIMIT 30`;
+    // (2026-10-30) Mesma fonte que o /trips/:id: `ratings."ratedId"` é o userId de
+    // quem RECEBEU a nota e tem índice (`ratings_rated_idx`). A versão antiga
+    // filtrava por `trips."driverId"` e somava também as notas que a motorista deu
+    // às passageiras — dava uma média diferente da que a passageira vê.
+    // Medido em produção (motorista real, 17 avaliações): 131 → 35 linhas lidas,
+    // lista exactamente igual (mesmo hash de score+data) e sem temp B-tree.
+    // `driverIdFor()` sai do caminho: −1 leitura.
+    const rows = await sql`SELECT r.score, r.comment, r."createdAt", u.name AS "raterName" FROM ratings r LEFT JOIN users u ON u.id = r."raterId" WHERE r."ratedId" = ${user.sub} ORDER BY r."createdAt" DESC LIMIT 30`;
     const scores = rows.map((x: any) => Number(x.score) || 0).filter((s: number) => s > 0);
     const avg = scores.length ? Math.round((scores.reduce((a: number, s: number) => a + s, 0) / scores.length) * 10) / 10 : 5;
     return c.json({ ratings: rows, avg, count: rows.length });
@@ -1525,7 +1529,7 @@ app.post('/api/v1/ratings', requireAuth, async (c) => {
       }
     } catch {}
     await sql`INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt") VALUES (${String((b as any).tripId) + ':' + user.sub}, ${String((b as any).tripId)}, ${user.sub}, ${rated}, ${Number((b as any).score || 5)}, ${String((b as any).comment || '').slice(0, 500)}, NOW()) ON CONFLICT (id) DO NOTHING`;
-    // (2026-10-30) webDriverInfo guarda a nota 120 s em cache; invalida-a para a
+    // (2026-10-30) webDriverInfo guarda a nota 600 s em cache; invalida-a para a
     // avaliação nova aparecer já. É 1 DELETE de memória, 0 escritas na D1.
     if (_drvId) drvRatingCache.delete(_drvId);
   } catch (e) { console.error('ratings insert error:', e); }
@@ -3096,12 +3100,19 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
   };
 }
 
-// Nota da motorista: o `AVG(ratings.score) JOIN trips` custa 24–121 linhas lidas em
-// CADA chamada de /trips/:id e o resultado só muda quando alguém avalia (raro).
-// Cache de 120 s por isolate → ~112 chamadas/viagem passam a ~2–3 queries.
+// Nota da motorista: 2 cortes medidos em produção (2026-10-30), sem mudar o valor
+// devolvido (4,411764705882353 / n=17 na motorista real, antes e depois):
+//  1. a query deixou de fazer JOIN com `trips`. `ratings."ratedId"` já guarda o
+//     userId de quem RECEBEU a nota (o POST /ratings deriva-a do lado de quem
+//     avalia) e tem índice próprio (`ratings_rated_idx`). Plano:
+//     `SEARCH ratings USING INDEX ratings_rated_idx (ratedId=?)`.
+//     97 → 18 linhas lidas. De caminho corrige-se uma imprecisão do JOIN: ele
+//     também somava as notas que a motorista deu às passageiras.
+//  2. TTL 120 s → 600 s: 30 execuções/h por motorista/isolate → 6.
+//     O POST /ratings apaga a entrada, por isso a nota nova aparece já.
 // (Não se usa `drivers.rating` directamente porque o POST /ratings não a mantém.)
 const drvRatingCache = new Map<string, { a: number; at: number }>();
-const DRV_RATING_TTL_MS = 120_000;
+const DRV_RATING_TTL_MS = 600_000;
 
 // `pre` = linha de /api/v1/trips/:id já com os JOIN de drivers + users feitos.
 // Com ele não há nenhuma query aqui: poupa-se 1 round-trip e a leitura de 1 linha.
@@ -3134,8 +3145,11 @@ async function webDriverInfo(c: any, sql: any, driverId: string | null, pre?: an
     if (hit && Date.now() - hit.at < DRV_RATING_TTL_MS) {
       avg = hit.a;
     } else {
-      const ar = await sql`SELECT COALESCE(AVG(rt.score), 0)::float AS a, COUNT(*)::int AS n FROM ratings rt JOIN trips t ON t.id = rt."tripId" WHERE t."driverId" = ${driverId}`;
-      if (ar[0] && Number(ar[0].n) > 0) avg = Math.round(Number(ar[0].a) * 10) / 10;
+      const rated = String(r.userId || '');
+      if (rated) {
+        const ar = await sql`SELECT COALESCE(AVG(score), 0)::float AS a, COUNT(*)::int AS n FROM ratings WHERE "ratedId" = ${rated}`;
+        if (ar[0] && Number(ar[0].n) > 0) avg = Math.round(Number(ar[0].a) * 10) / 10;
+      }
       if (drvRatingCache.size > 500) drvRatingCache.clear();
       drvRatingCache.set(key, { a: avg, at: Date.now() });
     }

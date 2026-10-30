@@ -797,6 +797,49 @@ A migração foi corrida **duas vezes** em staging (a primeira versão tinha um 
 para a repetir: `DELETE FROM d1_migrations WHERE name='0023_trips_read_indexes.sql'` e voltar a aplicar.
 Custo da migração: **0 linhas lidas** (são `CREATE INDEX`), e o staging ficou a zero no fim (176 linhas apagadas).
 
+### 8. Quinta vaga (2026-10-30) — nota da motorista sem `JOIN` (P3)
+
+**O problema.** A nota que a passageira vê a seguir à motorista (`driver.rating` em `GET /api/v1/trips/:id`)
+vinha de uma média calculada a cada chamada:
+
+```sql
+SELECT AVG(rt.score), COUNT(*) FROM ratings rt JOIN trips t ON t.id = rt."tripId"
+ WHERE t."driverId" = ?          -- 97 linhas lidas (motorista real, produção)
+```
+
+Havia cache de **120 s** por isolate, mas o resultado só muda quando alguém avalia.
+
+**A correção (2 alterações, nenhuma migração).**
+
+1. **Fonte da verdade:** `ratings."ratedId"` já guarda o **userId de quem RECEBEU** a nota (o
+   `POST /ratings` deriva-a do lado de quem avalia — o webapp só envia `{tripId, score, comment}`), e
+   tem índice próprio desde a `0011` (`ratings_rated_idx`). A query passa a ser
+   `SELECT AVG(score), COUNT(*) FROM ratings WHERE "ratedId" = ?` →
+   `SEARCH ratings USING INDEX ratings_rated_idx (ratedId=?)`, **97 → 18 linhas**.
+   O mesmo em `GET /api/v1/ratings/mine` (havia dois ramos, `driverIdFor()` + `JOIN` no ramo da
+   motorista): **131 → 35 linhas**, plano sem `USE TEMP B-TREE` e `driverIdFor()` sai do caminho (−1 leitura).
+   - **Correção de um erro antigo de graça:** o `JOIN` por `trips."driverId"` somava à média da motorista
+     **todas** as avaliações das viagens dela — incluindo as que **ela deu** às passageiras. Provado em
+     staging: 3 notas recebidas (5,4,3) + 1 nota dada pela motorista (1) → query antiga `3,67 (n=6)`,
+     nova `4,0 (n=3)`.
+2. **TTL 120 s → 600 s** (`DRV_RATING_TTL_MS`): 30 execuções/h por motorista e isolate → **6**. O
+   `POST /ratings` continua a apagar a entrada em cache (`drvRatingCache.delete`), por isso a nota nova
+   aparece já.
+
+**Prova de equivalência (produção, só `SELECT`).** Para a motorista real os dois `SELECT` devolvem o mesmo valor
+(`4,411764705882353`, `n=17`) — `IGUAL=true`; o mesmo para a lista de `/ratings/mine` (17 linhas, **mesmo hash**
+de `score+data`). Invariantes verificadas: 0 avaliações com `ratedId` igual a um `drivers.id`, e as 5 + 2 linhas
+"anómalas" são avaliações de viagens/utilizadores **já apagados** (`tripId` inexistente, `ratedId=''`), que
+nenhuma das duas versões conta.
+
+**Ensaio em staging** (`%TEMP%\opencode\p3-staging2.mjs`, **6/6**, staging a zero no fim, ~55 escritas):
+`/trips/:id?view=web` → `driver.rating: 4`; `/ratings/mine` → `avg 4,5 / count 2`; sem sessão → **401**;
+`/health` 200; e as duas `SELECT` a mostrarem 4,0 (nova) contra 3,67 (antiga).
+
+**Em produção (2026-10-30):** API `c9780c53-f34d-47f6-bcb8-81a10f478fd6`; smoke só de `GET` **8/8** —
+`/trips/:id?view=web` devolve `driver.rating = 4,4` (exactamente o valor de antes), `totalTrips 17`,
+`/ratings/mine` 200, sem sessão 401, `/trips/history` 200 com 30, `/trips/active` 200 `null`.
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -860,14 +903,18 @@ Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da Gr
   118–120/h (cron 60/h + um cliente).
 - **A 3,56 M/dia de 29/10 tinha uma parte grande de auditoria do próprio assistente** (15:00–20:00Z = 2,64 M em
   6 h com 3 000 pedidos/h). Ao ler a quota, separar sempre uso real de trabalho de teste.
-- **O que sobra por operação** (`meta.rows_read`, medido): `places/search` 3→2 399 · `/trips/history` 153 ·
-  `AVG` do `webDriverInfo` 97 (cache 120 s) · `/ratings/pending` 83 · `/trips/active` 5–6 (era 78/65).
+- **O que sobra por operação** (`meta.rows_read`, medido): `places/search` 3→2 399 · `/trips/history` 153 →
+  90/120/22 (ver vagas 4 e 7) · `AVG` do `webDriverInfo` **18** (era 97; cache 600 s — ver vaga 8) ·
+  `ratings/mine` **35** (era 131) · `/ratings/pending` 83 → **11** · `/trips/active` 5–6 (era 78/65).
 - **DO:** `geo:global` 938 pedidos / 7 776 linhas de storage em 26 h por causa do `storage.list({prefix:'p:'})`
   no `load()` — **cresce com o número de motoristas** e as chaves nunca são apagadas (só no `walletBlocked`).
-- **Pendente de decisão do dono** (nada aplicado): P1 `LIMIT 800→120` no `localPlaces` — **medido e recusado
-  a 30/10** (ver "O que foi medido e NÃO se fez"), P3 TTL do `AVG` 120→600 s, P4 `INDEXED BY` no
-  `/ratings/pending` — **feito na migração `0023`**, P5 1 `JOIN` no `/trips/history` — **feito na migração
-  `0023`** (319→90), P6 `softResync` respeitar `liveSkipPoll('nearby')` (−112 pedidos/h), P7 snapshot do `DriverGeo`.
+- **Pendente de decisão do dono:** P1 `LIMIT 800→120` no `localPlaces` — **medido e recusado a 30/10**
+  (ver "O que foi medido e NÃO se fez"); P3 nota da motorista — **FEITO a 30/10** (ver "8. Quinta vaga",
+  97→18 linhas e TTL 600 s); P4 `INDEXED BY` no `/ratings/pending` — **feito na migração `0023`**;
+  P5 1 `JOIN` no `/trips/history` — **feito na migração `0023`** (319→90);
+  P6 `softResync` respeitar `liveSkipPoll('nearby')` (−112 pedidos/h) — **o único que resta que corta
+  *pedidos***, e é 1 linha no cliente (levar no próximo deploy do `webapp/`); P7 snapshot do `DriverGeo`
+  — só quando houver >~20 motoristas.
 
 ## Proteção da quota — 4 anéis (2026-10-30)
 Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:

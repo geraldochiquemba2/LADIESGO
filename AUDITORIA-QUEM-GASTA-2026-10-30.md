@@ -157,13 +157,21 @@ Duração: 0,07 GB-s por viagem (Hibernation API a funcionar) — 26 h deram 0,6
 |---|---|---|---|
 | **P1** | `localPlaces`: subquery `LIMIT 800→120`, exterior `400→60`; subir a chave `places:v14→v15` | `kilamba` 2 399 → ~350 (**−85 %** no pior caso) | relevância de prefixos largos (a app mostra 5–6; o `ORDER BY` por distância continua dentro dos 120 melhores por bm25) |
 | **P2** | 4 caixas de pesquisa passarem a `lgPlaceFetch` (cache 10 min) | menos **pedidos** em teclas repetidas (a D1 já é poupada pelo cache de 7 dias) | nenhum |
-| **P3** | `webDriverInfo`: TTL 120 s → 600 s | 97 linhas × 30/h → 6/h ≈ **−5 k/dia** | nota da motorista até 10 min desactualizada (o `POST /ratings` invalida a cache) |
+| **P3** | `webDriverInfo`: TTL 120 s → 600 s **+ tirar o `JOIN`** (ver nota abaixo) | 97 → **18** linhas e 30/h → 6/h | nota da motorista até 10 min desactualizada (o `POST /ratings` invalida a cache) |
 | **P4** | `/ratings/pending`: `INDEXED BY trips_passenger_idx`/`_driver_idx` por papel | 83 → 0–1 | nenhum (mesma resposta) |
 | **P5** | `/trips/history`: um só `JOIN` | 153 → ~60 | nenhum |
 | **P6** | `softResync` respeitar `liveSkipPoll('nearby')` | −112 pedidos/h por app de passageira aberta | mapa de carros actualiza pelo WS (já existe) |
 | **P7** | `DriverGeo.load`: chave única `snapshot` em vez de `list({prefix:'p:'})`, e apagar chaves com `ts` > 18 min | custo deixa de crescer com o nº de motoristas | 1 migração de storage no DO (inócuo; o `pos` repovoa no 1.º ping) |
 
 **Ordem recomendada:** P1 (o único sítio que ainda lê milhares) → P3+P4+P5 (uma tarde, tudo de resposta idêntica) → P6 (pedidos) → P7 (só quando houver mais de ~20 motoristas).
+
+> **Estado a 30/10:** **P3 FEITO** (em produção, API `c9780c53`) — e melhor do que o estimado:
+> a média deixou de fazer `JOIN` com `trips` e passou a ler `ratings."ratedId"` (índice
+> `ratings_rated_idx`), **97 → 18 linhas**; TTL 600 s. `GET /ratings/mine` passou à mesma fonte
+> (**131 → 35 linhas**). Detalhe e provas em `AGENTS.md` → "8. Quinta vaga".
+> **P4/P5 FEITOS** na migração `0023`. **P1 medido e recusado** (perde qualidade nas pesquisas mais
+> usadas de Luanda por ~0,3 % de quota). **Resta o P6** (pedidos, 1 linha no cliente) e o P7.
+
 
 ---
 

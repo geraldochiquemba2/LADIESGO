@@ -106,7 +106,9 @@ As escritas opcionais continuam a ser travadas localmente pelo `budget.ts` (`wri
 - `places` pesquisa só por FTS5 (o `LIKE '%…%'` sem índice foi apagado): 23 332 → 3–39 linhas
   por pesquisa; cache de 7 dias em `caches.default` (chave `places:v14`).
 - `GET /trips/:id` numa só query (4 linhas em vez de 2+2+1+97); nota da motorista em cache de
-  120 s; `webDriverInfo` sem query quando há `LEFT JOIN`.
+  600 s e sem `JOIN` (`ratings."ratedId"` + `ratings_rated_idx`): **97 → 18 linhas**;
+  `webDriverInfo` sem query quando há `LEFT JOIN`. `GET /ratings/mine` passou a usar a mesma
+  fonte: **131 → 35 linhas**.
 - `GET /trips/active` com `INDEXED BY trips_status_idx` (78 → 5 linhas).
 - Polling só como rede de segurança com o WebSocket aberto (60 s), backoff exponencial nos 5
   WebSockets, `trip_points` a cada 180 s, `geoPushToTrip` com throttle de 9 s.
