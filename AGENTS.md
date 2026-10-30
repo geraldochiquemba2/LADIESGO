@@ -807,6 +807,19 @@ Tirar o cast (ou usar `CAST(x AS REAL)`) para medir à mão. O `translate()` tam
 produção" só porque falhou no `wrangler d1 execute`.**
 
 ### O que foi medido e NÃO se fez (para não repetir a análise)
+- **`localPlaces` — pool do FTS `LIMIT 800 → 120` (P1 da auditoria de 30/10): medido e RECUSADO.**
+  O custo é **linear no pool, ≈3 linhas lidas por candidato** (`kilamba`: 800→**2 399**, 400→1 199, 200→599,
+  120→359, 60→179), o que mostra que o `ORDER BY rank` **não** lê todos os documentos que casam — o pool é o
+  único travão. Mas baixar o pool degrada exactamente as pesquisas em que ele custa: com 120, `kilamba` perde
+  `Bloco D/G/F/Q/U/S/V` e passa a mostrar `Lubrificantes`/`Recauchutagem`/`Iraque`; `rua`, `viana`, `talatona`,
+  `maianga` também mudam. Mesmo a **400** os distritos perdem coisas (`kilamba` → sem `Bloco G/F`;
+  `viana` → sem `Viana mor` nem `Paragem de táxi da vila de Viana`). A 400 ficam **iguais** `zango`, `cazenga`,
+  `escola`, `banco`, `sambizanga`, `kilamba bloco`; a 200 até `banco` perde agências (BIR, BFA, BDA).
+  **O ganho seria residual**: essas respostas vivem **7 dias** em `caches.default` por datacenter, portanto o
+  varrimento paga-se ~1×/semana por pesquisa distinta (~17 k linhas/dia mesmo com 50 distritos novos por dia =
+  **0,3 %** do teto). Trocar as pesquisas mais usadas de Luanda (`kilamba`, `viana`, `talatona`) por 0,3 % de
+  quota é mau negócio. **Fica o 800. Não voltar a propor sem medir a qualidade do top-15.**
+  Medição: `%TEMP%\opencode\pool.mjs` (custo por pool) e `quality.mjs` (top-15 com o pós-processamento da API).
 - **Migração `0021` (índices parciais + `DROP INDEX trips_pending_idx`): abandonada.** Contagens de produção:
   `trips`=**121**, `notifications`=**315**, `drivers`=**1**, `ratings`=**24**, `trip_points`=**1.290**,
   `chat_messages`=**14**, `call_signals`=**425**, `users`=**26**. Só `places` (23.332) é grande. Índices extra
@@ -851,9 +864,10 @@ Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da Gr
   `AVG` do `webDriverInfo` 97 (cache 120 s) · `/ratings/pending` 83 · `/trips/active` 5–6 (era 78/65).
 - **DO:** `geo:global` 938 pedidos / 7 776 linhas de storage em 26 h por causa do `storage.list({prefix:'p:'})`
   no `load()` — **cresce com o número de motoristas** e as chaves nunca são apagadas (só no `walletBlocked`).
-- **Pendente de decisão do dono** (nada aplicado): P1 `LIMIT 800→120` no `localPlaces` (+ chave `places:v15`),
-  P3 TTL do `AVG` 120→600 s, P4 `INDEXED BY` no `/ratings/pending`, P5 1 `JOIN` no `/trips/history`,
-  P6 `softResync` respeitar `liveSkipPoll('nearby')` (−112 pedidos/h), P7 snapshot do `DriverGeo`.
+- **Pendente de decisão do dono** (nada aplicado): P1 `LIMIT 800→120` no `localPlaces` — **medido e recusado
+  a 30/10** (ver "O que foi medido e NÃO se fez"), P3 TTL do `AVG` 120→600 s, P4 `INDEXED BY` no
+  `/ratings/pending` — **feito na migração `0023`**, P5 1 `JOIN` no `/trips/history` — **feito na migração
+  `0023`** (319→90), P6 `softResync` respeitar `liveSkipPoll('nearby')` (−112 pedidos/h), P7 snapshot do `DriverGeo`.
 
 ## Proteção da quota — 4 anéis (2026-10-30)
 Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
