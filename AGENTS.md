@@ -726,6 +726,77 @@ produção, com resultados idênticos. **Zero escritas extra** e **zero migraç�
   **401**, com sessão **200** (`null`, não há viagem ativa) em 493 ms; `/health` 200. Medição prévia das
   queries exactas com `meta.rows_read`: PAX `78 → 5`, DRV `65 → 6`, guardas `78 → 5`.
 
+### 7. Quarta vaga (2026-10-30) — índices do Histórico e das avaliações (migração `0023`)
+
+**O problema.** As duas queries "normais" mais caras da API (medido com `meta.rows_read` em produção):
+
+| Query | Antes | Causa |
+|---|---|---|
+| `GET /api/v1/trips/history` (LIMIT 30) | **319** linhas | `ORDER BY "createdAt" DESC` sobre `WHERE "passengerId"=?` → `USE TEMP B-TREE FOR ORDER BY`, a ler **todas** as viagens da pessoa (76) |
+| `GET /api/v1/trips/history` (LIMIT 8, **shed nível 2**) | **319** | o corte era **cosmético**: lia exactamente as mesmas 319 |
+| `GET /api/v1/trips/history` da motorista | **315** | idem via `"driverId"` |
+| `GET /api/v1/ratings/pending` (LIMIT 5) | **83** | `status='COMPLETED'` + `passengerId` + `ORDER BY "completedAt"` |
+
+**A correção — migração `0023_trips_read_indexes.sql`** (só índices; **nenhuma alteração de código/JS**,
+o planeador escolhe-os sozinho):
+
+| Índice | Serve | Custo de escrita |
+|---|---|---|
+| `trips_pax_created_idx ("passengerId","createdAt")` | histórico da passageira | +1 no `INSERT` (todas as viagens têm passageira) |
+| `trips_drv_created_idx ("driverId","createdAt") WHERE "driverId" IS NOT NULL` | histórico da motorista | +1 só quando o motorista aceita |
+| `trips_completed_pax_idx ("passengerId","completedAt") WHERE status='COMPLETED'` | `/ratings/pending` | +1 só na transição para `COMPLETED` |
+
+Depois de criar os novos, apagam-se os dois antigos que ficaram **redundantes** (são prefixos dos novos):
+`DROP INDEX trips_passenger_idx` e `DROP INDEX trips_driver_idx`. Assim o custo líquido é **+1 escrita por
+viagem**, não +3.
+
+- **Porque não um índice `(status, "passengerId", …)` completo para as avaliações:** custava **+1 escrita em
+  `ACCEPTED` e em `IN_PROGRESS`** (ciclo 12 → 17 medido em staging). A versão **parcial** (`WHERE status='COMPLETED'`)
+  custa só no `COMPLETED` → ciclo **12 → 13** (medido com REQUESTED→ACCEPTED→IN_PROGRESS→COMPLETED:
+  INSERT 5, ACCEPTED 3, IN_PROGRESS 2, COMPLETED 3).
+- **A troca compensa ao câmbio do plano Free** (5 M leituras / 100 k escritas = **50:1**): +1 escrita ≈ 50
+  leituras equivalentes, e cada abertura do Histórico poupa **229** (LIMIT 30) a **297** (LIMIT 8).
+- **Não apagar `trips_status_idx`** — é usado por `INDEXED BY` em `/trips/active` e `/trips/request`;
+  se desaparecer, essas queries falham com `no such index` (ver secção 6).
+
+**Medido em produção (`ladiesgo`, 121 viagens), antes → depois:**
+
+| Query | Antes | Depois | Ganho |
+|---|---|---|---|
+| history pax LIMIT 30 | 319 | **90** | −72 % |
+| history pax LIMIT 8 | 319 | **22** | −93 % |
+| history drv LIMIT 30 | 315 | **120** | −62 % |
+| ratings/pending (pax) | 83 | **11** | −87 % |
+| ratings/pending (drv) | 34 | 34 | — (ramo já usava `INDEXED BY`, não mudou) |
+| trips/active (pax) | 5 | 5 | — (continua com `trips_status_idx`) |
+
+- **Plano novo:** `SEARCH t USING INDEX trips_pax_created_idx (passengerId=?)` + `SEARCH u/dd/du USING INDEX
+  sqlite_autoindex_*` e **sem** `USE TEMP B-TREE`. Nas avaliações:
+  `SEARCH t USING INDEX trips_completed_pax_idx (passengerId=?)` + `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`
+  (sobre poucas linhas, porque o índice resolve `status` e `passengerId`).
+- **Resultado idêntico (prova de correção):** para as 3 queries, a lista de ids com o índice novo é **igual**
+  à da varredura forçada (`NOT INDEXED`) — `IGUAL=true`. Índices de `trips` em produção: 6 → **7**
+  (`idx_trips_otp`, `sqlite_autoindex_trips_1`, `trips_pax_created_idx`, `trips_drv_created_idx`,
+  `trips_completed_pax_idx`, `trips_pending_idx`, `trips_status_idx`).
+
+**Anel 2 da proteção da quota passou a valer mesmo** (`docs/QUOTA-PROTECAO.md`): com
+`system_flags.quota_shed='2'` o `/trips/history` devolve 8 em vez de 30 **e lê 22 em vez de 319**. Provado em
+staging por HTTP (D1 de staging com as 121 viagens carregadas de produção): `quota_shed='0'` → **30 viagens**,
+`'2'` → **8 viagens**, de volta a `'0'` → **30** (o nível tem TTL de 60 s por isolate, é preciso esperar).
+Antes desta migração o nível 2 baixava a resposta mas **não** as leituras.
+
+**Verificação funcional:** staging `6/6` por HTTP (`/health`, login, `POST /trips/request-web`,
+`/trips/active`, `/trips/history?passengerId=…` com os campos do contrato `dest`/`fare`/`status`/`other`/`ts`,
+`/ratings/pending`, `/trips/:id?view=web`, `/notifications`). Produção (só `GET`s): `/health` 200,
+`/trips/history` 200 com **30** viagens, `/ratings/pending` 200, `/trips/active` 200 `null`.
+*Atenção:* `/trips/history` **ignora** a sessão e usa o `?passengerId=`/`?driverId=` da query string — sem
+esses parâmetros devolve 0 viagens (foi a única falha do 1.º ensaio do teste, 4/6 → 6/6).
+
+**Aplicado em produção em 2026-10-30** (`wrangler d1 migrations apply ladiesgo --remote`, 6 comandos, `✅`).
+A migração foi corrida **duas vezes** em staging (a primeira versão tinha um índice `(status,…)` completo);
+para a repetir: `DELETE FROM d1_migrations WHERE name='0023_trips_read_indexes.sql'` e voltar a aplicar.
+Custo da migração: **0 linhas lidas** (são `CREATE INDEX`), e o staging ficou a zero no fim (176 linhas apagadas).
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -801,7 +872,8 @@ Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
 2. **Degradar antes do muro (conta, não isolate):** migração **`0021_system_flags.sql`** cria
    `system_flags`; `--apply-shed` escreve `quota_shed` = 0/1/2. O Worker lê-o em `src/shed.ts`
    (1 linha/isolate/60 s) e: **1** → `/api/places/search` deixa de consultar `places_fts`
-   (cache + Photon/Nominatim); **2** → `/trips/history` devolve 8 em vez de 30. Nível 0/normal,
+   (cache + Photon/Nominatim); **2** → `/trips/history` devolve 8 em vez de 30 (e, desde a migração `0023`,
+   lê 22 linhas em vez de 319). Nível 0/normal,
    tabela ausente ou D1 em baixo → nada corta (nunca parte a app). `/health` mostra `shed`.
 3. **Não gastar:** os cortes das vagas 1–3 (FTS-only em `places`, 1 query por viagem,
    `INDEXED BY trips_status_idx`, caches, backoff dos WS, `trip_points` 180 s).

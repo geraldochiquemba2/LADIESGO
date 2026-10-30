@@ -13,7 +13,7 @@ e o primeiro que dispara segura os outros.
    ┌─ 2. DEGRADAR (a app antes do muro) ───────────────────────────────────┐
    │ Worker lê o nível (1 linha/isolate/60 s) e corta o que é caro:        │
    │   1 → pesquisa de lugares deixa de varrer a D1                       │
-   │   2 → histórico devolve 8 viagens em vez de 30                       │
+   │   2 → histórico devolve 8 (lê 22 linhas, era 319)                    │
    │ budget.ts → 503 `Retry-After` nas escritas opcionais a partir de 90%  │
    └───────────────────────────────┬───────────────────────────────────────┘
    ┌─ 3. NÃO GASTAR (desenho) ─────▼───────────────────────────────────────┐
@@ -88,7 +88,7 @@ Sem `CLOUDFLARE_API_TOKEN` o workflow termina com um aviso e não falha.
 |---|---|---|
 | `0` | < 85% | nada |
 | `1` | ≥ 85% (ALTO) | `/api/places/search` vai a cache e a Photon/Nominatim; **não** consulta `places_fts` |
-| `2` | ≥ 92% (CRÍTICO) | + `/trips/history` devolve 8 viagens em vez de 30 |
+| `2` | ≥ 92% (CRÍTICO) | + `/trips/history` devolve 8 viagens em vez de 30 (**e lê 22 em vez de 319** desde a migração `0023`) |
 
 - O nível é lido **1×/60 s por isolate** (`src/shed.ts`, cache em memória; 1 linha lida) — custo
   desprezável em troca de parar de gastar antes de 100%.
