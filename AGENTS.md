@@ -757,6 +757,33 @@ produção" só porque falhou no `wrangler d1 execute`.**
   `SEARCH ... trips_passenger_idx` + `USE TEMP B-TREE FOR ORDER BY` a ler as 76. Além disso partiria as
   viagens agendadas (`status='REQUESTED'` + `scheduledAt` no futuro).
 
+## Quem gasta a quota — atribuição ao minuto (2026-10-30)
+Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da GraphQL Analytics (só D1 de produção).
+
+- **98,5 % das leituras de hoje vieram de 45 minutos** (424 545 de 430 840 linhas, 00:00Z–13:25Z); os outros
+  **759 minutos** somam **6 295** linhas. A hora **04:00Z sozinha** valeu **346 162** (80 % do dia).
+- **Cada pico é um múltiplo inteiro de 23 332 = o tamanho de `places`** (186 908 = 8,01×; 23 375 = 1,00×).
+  Nenhuma outra tabela chega perto (`trips` 121, `notifications` 315) — é a assinatura de uma **varredura
+  completa de `places`**, feita pelo 3.º passo `norm LIKE '%termo%'` de `localPlaces()`, **removido às 08:21Z**
+  (commit `c515d18`). E o cliente manda **1 pedido por tecla** em `#qs`(L113), `sharedPlaceInput`(L961),
+  `sharedPickSearch`(L971) e `prmPick`(L1499) — só `#q`/`#oq` usam `lgPlaceFetch`. Ou seja: **escrever
+  "kilamba" = 7 varreduras = 163 324 linhas = 3,3 % do tecto diário; 214 pesquisas = os 5 M do dia.**
+- **Piso de repouso medido (sem ninguém): 120–741 linhas/hora e ~100–120 pedidos/hora** → 3–18 k linhas e
+  2,4–2,9 k pedidos por dia. **O cron por minuto NÃO é problema** — a ideia antiga de "65 linhas/min ⇒ 93,6 k/dia"
+  vinha de uma janela com trabalho de teste a decorrer.
+- **Depois do corte (11:00/12:00/13:00Z): 502 · 126 · 631 linhas por hora** → **~10 k/dia (0,2 %)** de uso real.
+  O modelo do cliente bate certo com o medido: **parada no `/home` ≈ 119 pedidos/h**, e o piso noturno medido é
+  118–120/h (cron 60/h + um cliente).
+- **A 3,56 M/dia de 29/10 tinha uma parte grande de auditoria do próprio assistente** (15:00–20:00Z = 2,64 M em
+  6 h com 3 000 pedidos/h). Ao ler a quota, separar sempre uso real de trabalho de teste.
+- **O que sobra por operação** (`meta.rows_read`, medido): `places/search` 3→2 399 · `/trips/history` 153 ·
+  `AVG` do `webDriverInfo` 97 (cache 120 s) · `/ratings/pending` 83 · `/trips/active` 5–6 (era 78/65).
+- **DO:** `geo:global` 938 pedidos / 7 776 linhas de storage em 26 h por causa do `storage.list({prefix:'p:'})`
+  no `load()` — **cresce com o número de motoristas** e as chaves nunca são apagadas (só no `walletBlocked`).
+- **Pendente de decisão do dono** (nada aplicado): P1 `LIMIT 800→120` no `localPlaces` (+ chave `places:v15`),
+  P3 TTL do `AVG` 120→600 s, P4 `INDEXED BY` no `/ratings/pending`, P5 1 `JOIN` no `/trips/history`,
+  P6 `softResync` respeitar `liveSkipPoll('nearby')` (−112 pedidos/h), P7 snapshot do `DriverGeo`.
+
 ## Proteção da quota — 4 anéis (2026-10-30)
 Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
 
