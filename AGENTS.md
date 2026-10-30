@@ -341,6 +341,14 @@ por cima, a imagem ao centro e o texto por baixo (X ou "Fechar" para sair).
 - **Memória do popup:** ids já vistos em `localStorage.lg_bseen` (máx. 80). O popup abre 1,5 s depois de
   carregar, ao voltar a `visible` e quando o WS `/notifications/live` manda `{t:'notif'}`.
   Fechar marca como visto; recarregar não volta a mostrar.
+- **Desenho do popup (2026-10-30):** sem cartão branco e **sem botão "Fechar"** — só o **X** no canto
+  superior direito (fecha também tocando no fundo escuro). Título, imagem e descrição **centrados**, texto
+  branco sobre o fundo escuro. `z-index:100002` para o X não ficar por baixo da barra de permissões
+  (`#lgPermBar`, `100001`).
+- **Bandeira do destino (2026-10-30):** `destMk` só é desenhada com o fluxo de reserva aberto
+  (`ph==='opt'` + `selDone`) ou com viagem ativa; `show('home')` remove-a. Antes, ao voltar do segundo plano
+  (ou ao atualizar o GPS) com um rascunho antigo em `lg_ddraft` (`sel:1`), `focusOriginDest()` redesenhava a
+  bandeira no `home` sem a passageira ter marcado destino.
 - **Programadas editáveis:** `PUT /api/v1/admin/notifications/schedules/:id` (título, mensagem, alvo, dia,
   horários, imagem, `enabled`). Se `times` não mudar, o `lastRunKey` do slot é preservado (não repete o envio);
   se mudar, só os horários novos são inseridos e os removidos apagados. Sem `image` no corpo, a imagem mantém-se;
