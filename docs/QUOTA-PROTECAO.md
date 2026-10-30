@@ -307,6 +307,22 @@ o que subiu (o relatório mostra por script e por base, e a projecção hora a h
 - **Produção** (`ladiesgo-api` `6da29130`): `/health` 200 (`shed:0`); `/admin/quota` **401** sem
   sessão e **200** com sessão (`configured:false` enquanto não houver `CF_ANALYTICS_TOKEN`,
   `quota_shed:"0"`); `/debug/quota/alert` e `/debug/geo/stats` **404** com sessão de admin.
-- **Pendente (só o dono):** criar o API token (Account Analytics: Read + D1: Edit) e meter com
-  `wrangler secret put CF_ANALYTICS_TOKEN` (prod e `--env staging`). Sem ele o anel 1 dentro do
-  Worker não mede — e o `quota_shed` fica onde estiver (hoje `0`).
+
+### Vigilante LIGADO (30/10, 17:26Z)
+
+Provado depois de instalar `CF_ANALYTICS_TOKEN` nos dois Workers, por HTTP:
+
+| | Produção | Staging |
+|---|---|---|
+| `GET /admin/quota` | `configured:true` · `quota_shed:"0"` | `configured:true` |
+| `POST /admin/quota/check` | `{ok:true, level:0, levelName:"OK", worst:{key:"reads", used:545089, max:5000000, pct:0.1090189}, alerted:false, shed:0}` | o mesmo (`pct` igual, a conta é a mesma) |
+| `quota_watch` gravado | `updatedAt 17:26:23` | `updatedAt 17:26:25` |
+| `/health` | 200 · `shed:0` | 200 · `shed:0` |
+
+Ou seja: leitura da GraphQL, níveis, Telegram, escrita do `quota_shed` e a rota de check funcionam.
+
+> **O token instalado a 30/10 é temporário.** É o OAuth do `wrangler login` (device flow) e
+> **expira às 18:25Z**. Depois disso o cron devolve `{error: graphql 401}`, não escreve, não corta e
+> `/health` fica 200; o sinal de que morreu é o `quota_watch.updatedAt` parado. **Trocar por um API
+> token** (Account Analytics: Read; `D1: Edit` só para `--apply-shed` por CLI) com
+> `wrangler secret put CF_ANALYTICS_TOKEN` (e `--env staging`) — sem deploy, a corrida seguinte mede.

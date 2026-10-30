@@ -1011,10 +1011,23 @@ restos `t=0/u=0`).
 meter o segredo, `quota_shed:"0"`), `/debug/quota/alert` e `/debug/geo/stats` **404** com sessão
 de admin (o gate de staging funciona).
 
-> **Pendente (só o dono):** criar o API token (Account Analytics: Read + D1: Edit) e meter com
-> `wrangler secret put CF_ANALYTICS_TOKEN` (prod **e** `--env staging`). Até lá o vigilante dentro
-> do Worker não mede nada (e é isso que se vê em `/admin/quota`: `configured:false`). O workflow do
-> GitHub fica só para `workflow_dispatch` manual.
+**LIGADO em produção e staging (2026-10-30, 17:26Z).** `/health` 200 `shed:0`; `/admin/quota` →
+`configured:true`; `POST /admin/quota/check` → `{ok:true, level:0, levelName:"OK",
+worst:{key:"reads", used:545089, max:5000000, pct:0.1090189}, alerted:false, shed:0}` e
+`quota_watch` gravado (`updatedAt 17:26:23`); o mesmo em staging (`updatedAt 17:26:25`). Ou seja:
+a leitura da GraphQL, os níveis, o Telegram, o `quota_shed` e a rota de check funcionam todos com
+o mesmo token.
+
+> **O token que está lá agora é TEMPORÁRIO.** É o OAuth do `wrangler login` (device flow, 30 scopes,
+> **expira às 18:25Z** do dia 30/10) — serviu para provar a cadeia toda ponta-a-ponta hoje.
+> Quando expirar, o cron das 21:00Z passa a devolver `{error:"graphql: … 401"}`: **não escreve nada,
+> não corta nada, `/health` continua 200** (`configured` fica `true` porque só testa a presença do
+> segredo — a prova de que o token morreu é o `quota_watch.updatedAt` parado).
+> **Falta só o dono trocar** por um **API token** (Account Analytics: Read; `D1: Edit` só se quiser
+> `--apply-shed` por CLI), criado no dashboard:
+> `wrangler secret put CF_ANALYTICS_TOKEN` (prod) e `--env staging`. Sem deploy, sem mais nada:
+> o `secret put` cria versão nova e a corrida seguinte volta a medir.
+> O workflow do GitHub fica só para `workflow_dispatch` manual.
 
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
