@@ -511,7 +511,7 @@ Estado das versões iOS:
   Revogar e criar outra com papel **App Manager**, actualizando `mobile/eas.json` (linhas 42–44).
 
 ## Quota / pedidos
-- Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object a 20:1).
+- Cada pedido HTTP ao Worker conta 1; cada **ligação** WebSocket conta 1, mas as **mensagens** WebSocket **não** contam como pedidos do Worker (contam no Durable Object: **1:1 na métrica e 20:1 na facturação** — medido a 2026-10-30, ver "13. Décima vaga").
 - O webapp usa **WebSocket primeiro** com polling de fallback (`pollTrip` 8s), por isso o uso real fica bem abaixo da quota.
 
 ## Limites do plano Free (decorar)
@@ -1098,6 +1098,67 @@ trabalho de teste**, não o cliente. Todo o custo por utilizador está **dentro 
 > **Armadilha de deploy:** `webapp/wrangler.jsonc` diz `"name": "taxiapp-web"`. Correr
 > `wrangler deploy` dentro de `webapp/` **cria um Worker novo chamado `taxiapp-web`** (aconteceu e foi
 > apagado). O Worker estático tem de ser sempre `wrangler deploy --name ladiesgo`.
+
+### 13. Décima vaga (2026-10-30) — espelho a 60 s, pontos a 600 s e o rácio REAL das mensagens WS
+
+Objectivo: fechar o "2×" da nona vaga com números medidos, não modelados. Relatório:
+`docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §8.
+
+**1. As mensagens WebSocket contam 1:1 na métrica e 20:1 na facturação (medido, não estimado).**
+- Ensaio controlado: **100 mensagens** num WS de viagem → **102 pedidos** no minuto desse objeto. A
+  métrica `durableObjectsInvocationsAdaptiveGroups.requests` reflecte **uso real** (1:1).
+- A quota/facturação aplica **20:1** às mensagens recebidas. Docs
+  (`developers.cloudflare.com/durable-objects/platform/pricing`): *"For compute requests billing-only,
+  a 20:1 ratio is applied to incoming WebSocket messages […] **The 20:1 ratio does not affect Durable
+  Object metrics and analytics, which reflect actual usage.**"*
+- **Regra ao medir:** `pedidos facturados = HTTP + mensagens/20`. Ler a métrica de DO sem descontar as
+  mensagens **inflaciona** o custo por viagem (~30 "pedidos" que valem 1,5).
+- Não confundir com os **pedidos ao Worker**: as mensagens WS não passam pelo Worker (só a ligação).
+
+**2. O espelho `geoSet` dentro do `TripPush.onGps` era o maior gasto escondido — cortado para 60 s + ≥40 m.**
+- Viagem real em staging com a cadência do cliente (trip WS 1 fix/15 s + `live-geo` 1 fix/30 s), 5 min
+  com **90 s parada**: `geo:global` fazia **21 pedidos** (10 mensagens + 10 espelhos + 1 ligação) →
+  passou a **16** (10 mensagens + **5** espelhos + 1). O teto é `MIRROR_MIN_MS = 60_000` **e**
+  `MIRROR_MIN_M = 40`: um carro parado (semaforo, fila, à espera da passageira) não tem posição nova
+  para escrever. O espelho é a **3.ª via** — com a app em primeiro plano o mesmo fix já vai pelo WS
+  `drivers/live-geo`, e com esse socket caído o fallback REST `/drivers/position` (1/60 s) também
+  escreve na DriverGeo.
+- `GEO_PUSH_MIN_MS` 20 s → **30 s** (= o intervalo de redesenho do recetor, `onGpsPush` 30 s ou 150 m;
+  nenhum frame é descartado).
+
+**3. `persistPoint` tinha um bug de raiz: o gate NUNCA valeu.**
+- O DO da viagem **hiberna e é recriado** entre fixes; `this.lastPointAt` voltava a 0 a cada arranque.
+  Provado em staging: 3 fixes em 35 s → **3 pontos** (o gate de 180 s era decorativo).
+- Passou a **600 s** e o gate vive no **storage do próprio DO** (`lastPointAt`: 1 leitura por fix,
+  1 escrita só quando grava um ponto — orçamento de storage do DO, não da D1). Mesmo ensaio: **1 ponto**.
+- **Não subir para 900 s**: a guarda de viagens esquecidas usa o último `trip_points` como sinal de vida
+  e fecha um `ACCEPTED` sem GPS há >20 min; a 900 s a margem cai para 5 min (e o backoff de erro de D1
+  de 300 s podia dar falso positivo).
+
+**Medido (staging, viagem completa com ciclo `arrived`→`in_progress`→`completed`):**
+| | antes | depois |
+|---|---|---|
+| `trip:<id>` (métrica) | 30 | 27 |
+| `geo:global` (métrica) | 21 | 16 |
+| **total DO facturado / 5 min** | **26,5** | **18,5** |
+| escritas D1 (incl. criar as 2 contas de teste) | 33 | 38 |
+
+**Por viagem de 15 min (extrapolado do ensaio, perfil com ~15 % parado):**
+
+| Recurso | antes | depois | Viagens/dia (tecto Free) |
+|---|---|---|---|
+| Pedidos DO facturados | ≈109 | **≈54** | **≈1 850** |
+| Escritas D1 | ≈48 | **≈34** | ≈2 940 |
+| Pedidos Worker | ≈25 | ≈20 | ≈5 000 |
+
+⇒ **≈900 → ≈1 850 viagens/dia (2,0×)**. Volta a travar nos **pedidos às DO** (espelho 13 + `geoPushToTrip`
+30 dos 54). **Recusado** subir o `geoPushToTrip` para 60 s: pouparia 15 pedidos/viagem mas o mapa da
+passageira saltaria ~1 km de cada vez a 50 km/h.
+
+**Publicado:** API produção **`28f87bf1-4ae4-4bcf-907e-c992b2201a5c`**, staging `445b439b-4685-459a-b4d8-5ddbb36e3b54`.
+Smoke de produção só de `GET` **12/12**; base intacta (26 users / 121 trips / 1 motorista / 315
+notifications / 0 `ZZ %`); staging a zero.
+Scripts: `%TEMP%\opencode\m-ride-cost.mjs` (custo de uma viagem) e `m-ws-ratio.mjs` (rácio das mensagens).
 
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,

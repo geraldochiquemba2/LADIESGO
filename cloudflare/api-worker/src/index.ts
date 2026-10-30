@@ -1081,7 +1081,11 @@ async function notifyTripPushGps(env: any, tripId: string, lat: number, lng: num
 //   não há leituras extra na D1.
 //   (Testado com atalho por movimento a 150 m: poupava só 21% em estrada, por
 //   isso foi retirado — a garantia de 2× vale para qualquer perfil de condução.)
-const GEO_PUSH_MIN_MS = 20_000;
+// 2026-10-30 (2.º corte da nona vaga): 20 s -> 30 s. 30 s e EXACTAMENTE o
+// intervalo de redesenho do recetor (onGpsPush: 30 s ou 150 m), por isso
+// nenhum frame e descartado; 45 -> 30 pedidos por viagem de 15 min.
+// (Os "20 s" do comentario acima sao historicos.)
+const GEO_PUSH_MIN_MS = 30_000;
 const geoPushAt = new Map<string, number>();
 async function geoPushToTrip(env: any, userId: string, lat: number, lng: number, noTripPush?: boolean, h?: number | null) {
   if (noTripPush) return;
@@ -3779,6 +3783,20 @@ export class TripRinger {
 // escritas Neon de estado continuam exclusivas do REST existente.
 const PUSH_GPS_MIN_MS = 10_000;
 const PUSH_STATUS_TTL_MS = 60_000;
+// Espelho do fix na DriverGeo global, feito dentro do DO da viagem (onGps).
+// Cada espelho e um `fetch` ao DO `geo:global` = 1 pedido, e com a app em
+// primeiro plano o MESMO fix ja vai pelo WS `drivers/live-geo` (geoPresence);
+// quando esse socket cai, o fallback REST `/drivers/position` (1/60 s) tambem
+// escreve na DriverGeo. Ou seja: o espelho e uma 3.a via, de seguranca.
+// A 15 s (intervalo do cliente) eram ~60 pedidos por viagem de 15 min, o maior
+// gasto escondido do modelo de capacidade. Medido a 30/10 (staging, viagem
+// real de 5 min com a cadencia do cliente): 30 pedidos ao DO da viagem + 21 ao
+// geo:global. 60 s + "so se o carro andou >=40 m" corta o espelho para ~1/3:
+// o polling da passageira com WS aberto e de 120 s, o link publico recebe a
+// posicao pelo proprio TripPush (broadcastTag 'pub'), e um carro parado nao
+// tem posicao nova para escrever.
+const MIRROR_MIN_MS = 60_000;
+const MIRROR_MIN_M = 40;
 function normH(v: any): number | null {
   if (v == null || v === '') return null;
   const n = Number(v);
@@ -4086,7 +4104,18 @@ export class TripPush {
       // passageira (/trips/:id?view=web) e o link de partilha (/trips/public).
       // Sem isto ficavam presos a posi����es antigas enquanto o WS ia fresco.
       // noTripPush: o fix jǭ foi entregue por este WS �?" nǜo volta ao TripPush.
-      try { const _gp = geoSet(this.env, { userId: String(att.uid || ''), lat: la, lng: lo, h: hh, noTripPush: true }); try { this.state.waitUntil(_gp); } catch { } } catch {}
+      // 2026-10-30: espelho com teto de 60 s + guarda de movimento (MIRROR_MIN_MS /
+      // MIRROR_MIN_M). Era 1 por fix (o cliente manda 1/15 s) = ~60 pedidos por
+      // viagem ao DO `geo:global`, o maior gasto escondido do modelo de capacidade.
+      // Um carro parado (fila, semaforo, a espera da passageira) nao tem posicao
+      // nova para escrever: 40 m e acima do ruido do GPS.
+      const _movedM = att.lastMirrorLat == null ? 1e9 : havKm(Number(att.lastMirrorLat), Number(att.lastMirrorLng), la, lo) * 1000;
+      if (now - Number(att.lastMirrorAt || 0) >= MIRROR_MIN_MS && _movedM >= MIRROR_MIN_M) {
+        att.lastMirrorAt = now;
+        att.lastMirrorLat = la;
+        att.lastMirrorLng = lo;
+        try { const _gp = geoSet(this.env, { userId: String(att.uid || ''), lat: la, lng: lo, h: hh, noTripPush: true }); try { this.state.waitUntil(_gp); } catch { } } catch {}
+      }
       await this.refreshStatus(false);
       try { this.state.waitUntil(this.persistPoint(la, lo, Number(m?.acc))); } catch { this.persistPoint(la, lo, Number(m?.acc)).catch(() => {}); }
       // A motorista é monitorizada do início ao fim da viagem, por isso a sua
@@ -4144,23 +4173,37 @@ export class TripPush {
       this.pushEta();
     }
   }
-  // Histórico de auditoria: 1 ponto/180s por viagem ativa. Não bloqueia o WS
+  // Histórico de auditoria: 1 ponto/600s por viagem ativa. Não bloqueia o WS
   // (waitUntil) e não substitui a posição viva, que continua só em memória.
-  // 60s -> 180s (2026-10-30): o rasto é histórico, não serve para desenhar o
-  // mapa ao vivo; 180s poupa 2/3 das escritas em `trip_points` (3 tabelas de
-  // índice cada INSERT) sem perda visível. Uma viagem de 15 min passa de ~15
-  // para ~5 pontos.
+  // 60s -> 180s -> 600s (2026-10-30): o rasto é histórico, não serve para
+  // desenhar o mapa ao vivo. Cada INSERT custa 4 linhas escritas (linha + 3
+  // índices), por isso 600s corta 12 escritas por viagem de 15 min (~5 -> ~2
+  // pontos). NÃO subir para 900s: a guarda de viagens esquecidas usa o último
+  // ponto de `trip_points` como sinal de vida e fecha um `ACCEPTED` sem GPS há
+  // >20 min — a 900s a margem cairia para 5 min (e o backoff de erro de D1 de
+  // 300s podia dar um falso positivo).
+  // O gate TEM de ser durável: o DO da viagem hiberna e é re-criado entre fixes
+  // (provado em staging a 2026-10-30: 3 fixes em 35 s -> 3 pontos, porque
+  // `this.lastPointAt` voltava a 0 a cada arranque). Passa a viver no storage
+  // do próprio DO (`lastPointAt`, 1 leitura por fix, 1 escrita só quando grava
+  // um ponto) — orçamento separado do da D1.
   async persistPoint(lat: number, lng: number, accuracy?: number) {
     try {
       const st = String(this.status || '');
       if (st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return;
       const now = Date.now();
-      if (now - this.lastPointAt < 180000) return;
+      let last = this.lastPointAt;
+      try {
+        const v = Number(await this.state.storage.get('lastPointAt'));
+        if (Number.isFinite(v) && v > last) last = v;
+      } catch {}
+      if (now - last < 600000) return;
       if (this.pointsOff && now - this.pointsErrAt < 300000) return;
-      this.lastPointAt = now;
       let tripId = this.tripId;
       if (!tripId) { try { tripId = await this.state.storage.get('tripId'); } catch {} }
       if (!tripId) { this.lastPointAt = 0; return; }
+      this.lastPointAt = now;
+      try { await this.state.storage.put('lastPointAt', now); } catch {}
       const sql = neon(this.env.DB);
       const acc = Number(accuracy);
       await sql`INSERT INTO trip_points (id, "tripId", lat, lng, accuracy, ts) VALUES (${crypto.randomUUID()}, ${String(tripId)}, ${lat}, ${lng}, ${Number.isFinite(acc) ? acc : null}, ${now})`;

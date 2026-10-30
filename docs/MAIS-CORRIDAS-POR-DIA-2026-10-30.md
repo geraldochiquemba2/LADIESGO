@@ -163,3 +163,80 @@ Ordem de grandeza (preços públicos 2026, dominado pela **duração de DO**):
 5. **E** (`trip_points` no SQLite do DO) — estrutural, para quando a D1 voltar a ser o gargalo.
 
 Com A+B+C: **≈2 000 → ≈2 780 viagens/dia (+36 %)**, sem sair do Free e sem perder funcionalidade.
+
+---
+
+## 8. MEDIDO — as duas dúvidas do §5 respondidas, e o corte aplicado (2026-10-30)
+
+### 8.1 Rácio das mensagens de WebSocket: 1:1 na **métrica**, 20:1 na **facturação**
+
+Prova controlada (staging, `%TEMP%\opencode\m-ws-ratio.mjs`): **100 mensagens** enviadas a um WS de
+viagem → o minuto somou **102 pedidos** no objeto (2 = a ligação). Ou seja, a métrica
+`durableObjectsInvocationsAdaptiveGroups.requests` conta **cada mensagem a 1:1** — é "uso real", como
+diz a documentação.
+
+Mas a quota/facturação **não** usa esse número:
+
+> "For compute requests billing-only, a **20:1 ratio is applied to incoming WebSocket messages** […]
+> 100 WebSocket incoming messages would be charged as 5 requests for billing purposes. **The 20:1 ratio
+> does not affect Durable Object metrics and analytics, which reflect actual usage.**"
+> — developers.cloudflare.com/durable-objects/platform/pricing
+
+**Consequência prática:** ao ler a quota de DO, `pedidos facturados = HTTP + mensagens/20`. Sem isto,
+uma viagem parece gastar 47 pedidos quando gasta ~18. O "≈49 pedidos/viagem" do modelo do §3 estava
+por isso a **somar mensagens como se fossem pedidos HTTP** — a favor da segurança, mas inflacionado.
+
+### 8.2 O espelho `geoSet` dispara em produção? Sim, e era o maior termo
+
+Viagem real em staging com a **cadência do cliente** (trip WS 1 fix/15 s + `live-geo` 1 fix/30 s),
+5 min de condução com **90 s parada** no ponto de recolha, ciclo completo
+(`%TEMP%\opencode\m-ride-cost.mjs`), medido por objeto na GraphQL:
+
+| Versão | `trip:<id>` | `geo:global` | hubs | **Total métrica** | **Facturado** |
+|---|---|---|---|---|---|
+| espelho 30 s (1.ª versão) | 30 | 21 | 4 | 55 | **26,5** |
+| espelho **60 s + ≥40 m** | 27 | 16 | 4 | 47 | **18,5** |
+
+- No `geo:global` as 16 "requests" são **10 mensagens** do `live-geo` + **5 espelhos** + 1 ligação. A
+  30 s eram 10 espelhos. O teto de 60 s com guarda de movimento **reduziu o espelho a metade** numa
+  viagem em que 30 % do tempo foi parada — e a zero durante a paragem (um carro parado não tem posição
+  nova para escrever).
+- No `trip:<id>` as 27 são 20 mensagens + 2 ligações + 4 notificações de estado + ~1 `geoPushToTrip`.
+
+### 8.3 `trip_points`: 1 ponto numa viagem de 5 min, e o gate agora é durável
+
+- **Bug encontrado:** o gate de 180 s (e o de 60 s antes dele) **nunca valeu** — o DO da viagem hiberna
+  e é recriado entre fixes, e `this.lastPointAt` voltava a 0 a cada arranque. Provado em staging: 3
+  fixes em 35 s → **3 pontos**. Passou a viver no storage do próprio DO (`lastPointAt`, 1 leitura por
+  fix, 1 escrita só quando grava um ponto). Mesmo ensaio: **1 ponto**.
+- Viagem de 5 min: **1 linha** em `trip_points` (4 escritas). A 60 s seriam 5 linhas (20 escritas).
+- Escolheu-se **600 s, não 900 s**: a guarda de viagens esquecidas fecha um `ACCEPTED` sem GPS há
+  >20 min usando o último ponto como sinal de vida; a 900 s a margem cairia para 5 min.
+
+### 8.4 Custo final por viagem de 15 min (medido + extrapolado do ensaio)
+
+| Recurso | Antes (espelho 1/fix, geoPush 20 s, pontos 180 s) | Depois (espelho 60 s+40 m, geoPush 30 s, pontos 600 s) | Viagens/dia |
+|---|---|---|---|
+| Pedidos DO facturados | ≈109 | **≈54** | **≈1 850** |
+| Escritas D1 | ≈48 | **≈34** (33–38 medidos, incl. contas de teste) | ≈2 940 |
+| Pedidos Worker | ≈25 | ≈20 | ≈5 000 |
+
+⇒ **≈900 → ≈1 850 viagens/dia (2,0×)**, sem sair do Free. O que trava primeiro passou a ser, de novo,
+os **pedidos às DO** (o espelho e o `geoPushToTrip` a 30 s valem 45 dos 54).
+
+### 8.5 Publicado
+
+- API produção **`28f87bf1-4ae4-4bcf-907e-c992b2201a5c`**; staging `445b439b-4685-459a-b4d8-5ddbb36e3b54`.
+- Smoke de produção (só `GET`): **12/12** — `/health` (`shed:0`), `/boot` (6 chaves, 3 categorias,
+  410 ms), `/trips/active` `null`, `/drivers/nearby`, `/admin/quota`, `Cache-Control` em
+  `/categories` e `/turn/ice`, `/debug/geo/stats` **404** (gate de staging).
+- Base de produção intacta: **26 users / 121 trips / 1 motorista / 315 notifications / 0 `ZZ %`**.
+  Staging a zero (0 viagens, 0 motoristas, 0 `ZZ %`).
+
+### 8.6 O que sobra (não feito de propósito)
+
+- **`geoPushToTrip` 30 s → 60 s:** pouparia 15 pedidos/viagem (≈2 500 viagens/dia), mas o mapa da
+  passageira passaria a saltar ~1 km de cada vez a 50 km/h. **Recusado.**
+- **`PUSH_GPS_MIN_MS` 15 s (item D do §7):** as mensagens custam 1/20 do que se pensava; o ganho real
+  é ~1 pedido por viagem. **Não vale o risco.**
+- **Espelho a 120 s:** +190 viagens/dia, mas a posição no polling sem WS ficaria 2 min velha. **Não.**
