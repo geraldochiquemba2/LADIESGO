@@ -714,6 +714,9 @@ produção, com resultados idênticos. **Zero escritas extra** e **zero migraç�
   sem viagem → 200 `null`; pedido novo → `/trips/active` devolve a viagem com os **43 campos** da tabela
   (`passengerId`/`status`/`pickupAddress`/`rideType` intactos); 2.º pedido substitui o 1.º (guarda);
   motorista aceita → o ramo `JOIN drivers` devolve a viagem `ACCEPTED`; a passageira vê a mesma.
+- **Em produção (2026-10-30):** API `88985d51-c305-40a3-bb1d-7cd5b6c02df6`. `GET /trips/active` sem token
+  **401**, com sessão **200** (`null`, não há viagem ativa) em 493 ms; `/health` 200. Medição prévia das
+  queries exactas com `meta.rows_read`: PAX `78 → 5`, DRV `65 → 6`, guardas `78 → 5`.
 
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
