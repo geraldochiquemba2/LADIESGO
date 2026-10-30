@@ -593,6 +593,35 @@ Worker estático `6bcd9f6f…`).
 - **`walletData()`** — cache de 60 s + dedupe de pedido em curso (`__walletC`/`__walletP`).
 - **`paintWBadge`** 120 s → **600 s**; **`sharedNotifPoll`** 30 s → **60 s**.
 
+### 4. Segunda vaga (2026-10-30, por deployar) — leituras por viagem
+Relatório: `AUDITORIA-FREE-PLANO-2026-10-30.md`. Tudo abaixo está **editado e validado**
+(`wrangler deploy --dry-run` 324,29 KiB; 22/22 blocos `<script>` do `/home` passam `vm.Script`) mas **ainda
+não foi publicado** — falta o deploy da API e do Pages/Worker estático.
+
+- **`GET /api/v1/trips/:id` passou a ler tudo numa query.** Antes o `?view=web` fazia 4 idas à D1
+  (viagem + `webDriverInfo` + `users` da passageira + `catMaps`) e o polling mobile fazia 2. Agora é 1 query com
+  `LEFT JOIN` sobre chaves primárias (1 linha por JOIN), duas variantes escolhidas por `view`:
+  **web 4 linhas** (era 2+2+1) e **mobile 3 linhas** (era 2+1). Medido em produção com `meta.rows_read`
+  (viagem `f01dbab4…`): web `2+2+1+97 → 4`, mobile `2+1 → 3`. O caminho mobile **não** lê `rating`/carro/`users`
+  da motorista — só posição + dados da passageira.
+- **`webDriverInfo(c, sql, driverId, pre)`** — com `pre` (a linha do JOIN) já não faz query nenhuma; sem ela
+  mantém o comportamento antigo (usado noutros sítios).
+- **Nota da motorista em cache de 120 s** (`drvRatingCache`, `DRV_RATING_TTL_MS`): o
+  `AVG(ratings.score) JOIN trips` lê **97 linhas** e o valor só muda quando alguém avalia. O `POST /ratings`
+  invalida a entrada (`drvRatingCache.delete`), por isso a nota nova aparece já. **Não** se usa `drivers.rating`
+  directamente: essa coluna nunca é atualizada pelo `POST /ratings`.
+- **`GET /api/v1/drivers/wallet/status`** (novo) devolve só `{blocked}` — **1 linha**. O `loadDrvBlocked` do
+  webapp usava `/drivers/wallet` (2 queries, ~31 linhas, a cada 30 s) só para saber o bloqueio; mantém fallback
+  para `/drivers/wallet` se vir 404 (builds antigos da app).
+- **`PUSH_STATUS_TTL_MS` 15 s → 60 s** e o frame `state` do `TripPush` passou a `refreshStatus(false)` — cada
+  `state` forçava uma leitura à D1 mesmo com o estado fresco. O push de transição continua imediato.
+- **Cliente — o polling só é rede de segurança quando o WebSocket está aberto:** `liveSkipPoll('pt'|'pm'|'pi', …)`
+  passa a levar a janela: **60 s** com o socket aberto, **8 s** (`pt`)/**30 s** (`pm`/`pi`) sem socket. As duas
+  ocorrências do antigo `'pt8'` foram unificadas na chave `'pt'` (antes o `tripTimer` e o `pollTrip` de arranque
+  usavam chaves diferentes e pollavam em paralelo).
+- **`softResync`** usa as mesmas janelas dinâmicas e só chama `pollCars()` com a página visível.
+- **`__callLoop` ocioso com viagem: 2 000 → 10 000 ms** (o WS `calls` já cobre o sinal).
+
 ### O que foi medido e NÃO se fez (para não repetir a análise)
 - **Migração `0021` (índices parciais + `DROP INDEX trips_pending_idx`): abandonada.** Contagens de produção:
   `trips`=**121**, `notifications`=**315**, `drivers`=**1**, `ratings`=**24**, `trip_points`=**1.290**,

@@ -519,6 +519,22 @@ app.put('/api/v1/drivers/toggle-online', requireAuth, async (c) => {
   if (!rows.length) return c.json({ message: 'Motorista não registada.' }, 404);
   return c.json({ isOnline: !!rows[0].isOnline });
 });
+// GET /api/v1/drivers/wallet/status — SÓ o bloqueio da carteira (1 linha lida).
+// (2026-10-30) O cliente chamava /drivers/wallet (2 queries, ~31 linhas, check a cada
+// 30 s) só para saber se está bloqueado. Este devolve o mínimo e é o que o
+// loadDrvBlocked do webapp usa agora.
+app.get('/api/v1/drivers/wallet/status', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  try {
+    const u = await sql`SELECT "walletBlocked" FROM users WHERE id = ${user.sub} LIMIT 1`;
+    if (!u.length) return c.json({ message: 'Conta não encontrada.' }, 404);
+    return c.json({ blocked: !!Number(u[0].walletBlocked || 0) });
+  } catch {
+    // Nunca bloquear a motorista por falha de leitura — o /wallet completo decide.
+    return c.json({ blocked: false });
+  }
+});
 // GET /api/v1/drivers/wallet — saldo/pontos, viagens negativas e extrato do motorista
 app.get('/api/v1/drivers/wallet', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
@@ -1216,15 +1232,39 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const id = c.req.param('id');
-  const rows = await sql`SELECT t.*, d."currentLat" AS "driverLat", d."currentLng" AS "driverLng", d."userId" AS "driverUserId" FROM trips t LEFT JOIN drivers d ON d.id = t."driverId" WHERE t.id = ${id} LIMIT 1`;
+  // QUOTA D1 (2026-10-30): uma só leitura serve a viagem, a motorista E a passageira.
+  // Antes o `?view=web` fazia 4 round-trips (viagem + webDriverInfo + users da
+  // passageira + catMaps) e o polling mobile fazia 2 (viagem + users da passageira).
+  // Os LEFT JOIN fazem-se sobre chaves primárias, por isso o JOIN custa 1 linha por
+  // tabela: 4 linhas lidas (web) / 3 (mobile), num só pedido. Medido em produção com
+  // `meta.rows_read`: web 2+2+1+97 → 4 (+97 só 1×/120 s); mobile 2+1 → 3.
+  const isWeb = c.req.query('view') === 'web';
+  const rows = isWeb
+    ? await sql`SELECT t.*, d."currentLat" AS "driverLat", d."currentLng" AS "driverLng", d."userId" AS "driverUserId",
+        d.rating AS "dRating", d."totalTrips" AS "dTotalTrips", d."carMake" AS "dCarMake", d."carModel" AS "dCarModel",
+        d."carColor" AS "dCarColor", d."carPlate" AS "dCarPlate",
+        du.name AS "dName", du.phone AS "dPhone", du."profilePhoto" AS "dPhoto",
+        pu.name AS "pName", pu.phone AS "pPhone", pu."profilePhoto" AS "pPhoto"
+      FROM trips t
+      LEFT JOIN drivers d ON d.id = t."driverId"
+      LEFT JOIN users du ON du.id = d."userId"
+      LEFT JOIN users pu ON pu.id = t."passengerId"
+      WHERE t.id = ${id} LIMIT 1`
+    // Mobile: só precisa da posição da motorista e dos dados da passageira
+    // (3 linhas lidas, 1 query — antes eram 2 queries).
+    : await sql`SELECT t.*, d."currentLat" AS "driverLat", d."currentLng" AS "driverLng", d."userId" AS "driverUserId",
+        pu.name AS "pName", pu.phone AS "pPhone", pu."profilePhoto" AS "pPhoto"
+      FROM trips t
+      LEFT JOIN drivers d ON d.id = t."driverId"
+      LEFT JOIN users pu ON pu.id = t."passengerId"
+      WHERE t.id = ${id} LIMIT 1`;
   if (!rows.length) return c.json({ message: 'Viagem não encontrada.' }, 404);
-  const t = rows[0];
-  if (c.req.query('view') === 'web') {
-    const drv = await webDriverInfo(c, sql, t.driverId);
-    const pu = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
+  const t: any = rows[0];
+  if (isWeb) {
+    const drv = await webDriverInfo(c, sql, t.driverId, t);
     const pl = paxLive.get(t.id);
     const { byCode } = await catMaps(sql);
-    return c.json({ ...webTripRow(t, drv, pu[0]?.name || '', (code) => byCode[code] || 'Económico', pu[0]?.phone || '', photoUrl(c, pu[0]?.profilePhoto || '')), paxLive: pl && Date.now() - pl.ts < 60000 && String(t.status) !== 'IN_PROGRESS' ? { lat: pl.lat, lng: pl.lng } : null });
+    return c.json({ ...webTripRow(t, drv, t.pName || '', (code) => byCode[code] || 'Económico', t.pPhone || '', photoUrl(c, t.pPhoto || '')), paxLive: pl && Date.now() - pl.ts < 60000 && String(t.status) !== 'IN_PROGRESS' ? { lat: pl.lat, lng: pl.lng } : null });
   }
   // Polling substitui o socket: devolve posição viva da motorista + ETA.
   const liveD = t.driverUserId ? await geoGet(c.env, String(t.driverUserId)) : null;
@@ -1238,12 +1278,13 @@ app.get('/api/v1/trips/:id', requireAuth, async (c) => {
     driver = { lat: dLat, lng: dLng, h: liveD ? normH(liveD.h) : null, distanceKm: Math.round(dk * 10) / 10, etaMinutes: Math.max(1, Math.ceil((dk / 30) * 60)) };
   }
   const pin = user.sub === t.passengerId ? pinForTrip(t.id) : undefined;
-  // Nome/foto/telefone da passageira para o modal da motorista (mobile).
+  // Nome/foto/telefone da passageira para o modal da motorista (mobile) — já vem no JOIN.
   let paxInfo: any = {};
-  try {
-    const pax = await sql`SELECT name, phone, "profilePhoto" FROM users WHERE id = ${t.passengerId} LIMIT 1`;
-    if (pax.length) paxInfo = { passengerName: pax[0].name || '', passengerPhone: pax[0].phone || '', passengerPhoto: photoUrl(c, pax[0].profilePhoto || '') };
-  } catch {}
+  if (t.pName != null || t.pPhone != null || t.pPhoto != null) paxInfo = { passengerName: t.pName || '', passengerPhone: t.pPhone || '', passengerPhoto: photoUrl(c, t.pPhoto || '') };
+  // Os alias do JOIN não fazem parte do contrato da resposta.
+  delete t.pName; delete t.pPhone; delete t.pPhoto;
+  delete t.dName; delete t.dPhone; delete t.dPhoto;
+  delete t.dRating; delete t.dTotalTrips; delete t.dCarMake; delete t.dCarModel; delete t.dCarColor; delete t.dCarPlate;
   return c.json({ ...t, driver, ...paxInfo, ...(pin ? { pin } : {}) });
 });
 // Histórico de posições da viagem (auditoria/disputas). Só participantes ou admin.
@@ -1444,8 +1485,10 @@ app.post('/api/v1/ratings', requireAuth, async (c) => {
   const b = await c.req.json().catch(() => ({}));
   try {
     let rated = String((b as any).ratedId || (b as any).driverId || '');
+    let _drvId = '';
     try {
       const tr = await sql`SELECT "passengerId", "driverId" FROM trips WHERE id = ${String((b as any).tripId)} LIMIT 1`;
+      if (tr.length && tr[0].driverId) _drvId = String(tr[0].driverId);
       if (tr.length && !rated) {
         if (user.sub === tr[0].passengerId && tr[0].driverId) {
           const d = await sql`SELECT "userId" FROM drivers WHERE id = ${tr[0].driverId} LIMIT 1`;
@@ -1454,6 +1497,9 @@ app.post('/api/v1/ratings', requireAuth, async (c) => {
       }
     } catch {}
     await sql`INSERT INTO ratings (id, "tripId", "raterId", "ratedId", score, comment, "createdAt") VALUES (${String((b as any).tripId) + ':' + user.sub}, ${String((b as any).tripId)}, ${user.sub}, ${rated}, ${Number((b as any).score || 5)}, ${String((b as any).comment || '').slice(0, 500)}, NOW()) ON CONFLICT (id) DO NOTHING`;
+    // (2026-10-30) webDriverInfo guarda a nota 120 s em cache; invalida-a para a
+    // avaliação nova aparecer já. É 1 DELETE de memória, 0 escritas na D1.
+    if (_drvId) drvRatingCache.delete(_drvId);
   } catch (e) { console.error('ratings insert error:', e); }
   return c.json({ success: true });
 });
@@ -3017,22 +3063,49 @@ function webTripRow(r: any, drv: any, paxName: string, catName?: (code: string) 
   };
 }
 
-async function webDriverInfo(c: any, sql: any, driverId: string | null) {
+// Nota da motorista: o `AVG(ratings.score) JOIN trips` custa 24–121 linhas lidas em
+// CADA chamada de /trips/:id e o resultado só muda quando alguém avalia (raro).
+// Cache de 120 s por isolate → ~112 chamadas/viagem passam a ~2–3 queries.
+// (Não se usa `drivers.rating` directamente porque o POST /ratings não a mantém.)
+const drvRatingCache = new Map<string, { a: number; at: number }>();
+const DRV_RATING_TTL_MS = 120_000;
+
+// `pre` = linha de /api/v1/trips/:id já com os JOIN de drivers + users feitos.
+// Com ele não há nenhuma query aqui: poupa-se 1 round-trip e a leitura de 1 linha.
+async function webDriverInfo(c: any, sql: any, driverId: string | null, pre?: any) {
   const env = c.env;
   if (!driverId) return null;
-  const d = await sql`
+  let r: any;
+  if (pre) {
+    r = {
+      userId: pre.driverUserId, currentLat: pre.driverLat, currentLng: pre.driverLng,
+      rating: pre.dRating, totalTrips: pre.dTotalTrips,
+      carMake: pre.dCarMake, carModel: pre.dCarModel, carColor: pre.dCarColor, carPlate: pre.dCarPlate,
+      name: pre.dName, phone: pre.dPhone, profilePhoto: pre.dPhoto,
+    };
+  } else {
+    const d = await sql`
     SELECT d."userId", d."currentLat", d."currentLng", d.rating, d."totalTrips", d."carMake", d."carModel", d."carColor", d."carPlate", u.name, u.phone, u."profilePhoto"
     FROM drivers d LEFT JOIN users u ON u.id = d."userId" WHERE d.id = ${driverId} LIMIT 1`;
-  if (!d.length) return null;
-  const r = d[0];
+    if (!d.length) return null;
+    r = d[0];
+  }
   const live = await geoGet(env, String(r.userId || ''));
   const lat = live && Number.isFinite(Number(live.lat)) ? Number(live.lat) : (r.currentLat != null ? Number(r.currentLat) : null);
   const lng = live && Number.isFinite(Number(live.lng)) ? Number(live.lng) : (r.currentLng != null ? Number(r.currentLng) : null);
   const hh = live ? normH(live.h) : null;
   let avg = r.rating != null ? Number(r.rating) : 5;
   try {
-    const ar = await sql`SELECT COALESCE(AVG(rt.score), 0)::float AS a, COUNT(*)::int AS n FROM ratings rt JOIN trips t ON t.id = rt."tripId" WHERE t."driverId" = ${driverId}`;
-    if (ar[0] && Number(ar[0].n) > 0) avg = Math.round(Number(ar[0].a) * 10) / 10;
+    const key = String(driverId);
+    const hit = drvRatingCache.get(key);
+    if (hit && Date.now() - hit.at < DRV_RATING_TTL_MS) {
+      avg = hit.a;
+    } else {
+      const ar = await sql`SELECT COALESCE(AVG(rt.score), 0)::float AS a, COUNT(*)::int AS n FROM ratings rt JOIN trips t ON t.id = rt."tripId" WHERE t."driverId" = ${driverId}`;
+      if (ar[0] && Number(ar[0].n) > 0) avg = Math.round(Number(ar[0].a) * 10) / 10;
+      if (drvRatingCache.size > 500) drvRatingCache.clear();
+      drvRatingCache.set(key, { a: avg, at: Date.now() });
+    }
   } catch {}
   return {
     lat,
@@ -3585,7 +3658,7 @@ export class TripRinger {
 // das transições e o histórico mínimo de trip_points (1 ponto/60s, auditoria);
 // escritas Neon de estado continuam exclusivas do REST existente.
 const PUSH_GPS_MIN_MS = 10_000;
-const PUSH_STATUS_TTL_MS = 15_000;
+const PUSH_STATUS_TTL_MS = 60_000;
 function normH(v: any): number | null {
   if (v == null || v === '') return null;
   const n = Number(v);
@@ -3847,7 +3920,10 @@ export class TripPush {
       return;
     }
     if (m.t === 'state') {
-      await this.refreshStatus(true).catch(() => null);
+      // (2026-10-30) era refreshStatus(true): cada `state` forçava uma leitura à D1
+      // mesmo com o estado já fresco. O push de transição continua a ser imediato —
+      // isto é só o refresh passivo do WS, que agora respeita o TTL de 60 s.
+      await this.refreshStatus(false).catch(() => null);
       try { ws.send(JSON.stringify({ t: 'state', status: this.status, driver: this.driver ? { lat: this.driver.lat, lng: this.driver.lng, h: this.driver.h ?? null } : null, pax: this.passenger ? { lat: this.passenger.lat, lng: this.passenger.lng } : null, etaMin: this.etaMin(), ts: Date.now() })); } catch {}
       return;
     }
