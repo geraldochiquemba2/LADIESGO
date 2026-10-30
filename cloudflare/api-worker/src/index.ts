@@ -288,6 +288,19 @@ app.post('/api/v1/debug/cron/notifications', async (c) => {
   await runNotificationSchedules(c.env);
   return c.json({ ok: true });
 });
+// Dispara o guarda de viagens esquecidas à mão (só staging). `mode=on|shadow|off`
+// força o modo daquela chamada; sem `mode` usa `system_flags.stale_guard`.
+app.post('/api/v1/debug/cron/sweep', async (c) => {
+  const key = c.env.DEBUG_KEY as string | undefined;
+  if (!key || c.req.query('key') !== key) return c.json({ message: 'Not found.' }, 404);
+  if (String(c.env.ENVIRONMENT || '') !== 'staging') return c.json({ message: 'Not found.' }, 404);
+  const mode = String(c.req.query('mode') || '').toLowerCase();
+  const r = await sweepStaleTrips(c.env, {
+    mode: mode === 'on' || mode === 'off' || mode === 'shadow' ? mode : undefined,
+    max: Number(c.req.query('max')) || undefined,
+  });
+  return c.json(r);
+});
 
 // ─── AUTH ───
 app.post('/api/v1/auth/guest', async (c) => {
@@ -5279,20 +5292,287 @@ async function ringStart(env: any) {
   } catch {}
 }
 
-// Retenção do histórico de posições (30 dias). Corre 1x/dia via Cron Trigger.
+// Retenção do histórico de posições (30 dias) e do log do guarda de viagens (7 dias).
+// Corre 1x/dia via Cron Trigger. `try` separados: se um falhar o outro continua.
 async function purgeTripPoints(env: any) {
+  const sql = neon(env.DB);
   try {
-    const sql = neon(env.DB);
     await sql`DELETE FROM trip_points WHERE ts < ${Date.now() - 30 * 24 * 60 * 60 * 1000}`;
   } catch {}
+  try {
+    // O log do guarda é diagnóstico: 7 dias chegam (e a tabela fica pequena).
+    await sql`DELETE FROM stale_guard_log WHERE "createdAt" < NOW() - INTERVAL '7 days'`;
+  } catch {}
 }
+
+// ─── Guarda de viagens esquecidas ───────────────────────────────────────────
+// PROBLEMA: uma viagem que fica aberta sem ninguém a mexer nela gasta quota 24/7 —
+// o WS da viagem, o ciclo de GPS e o polling dos dois lados continuam a correr.
+// Medido (2026-10-30): ~600 pedidos de Durable Object por hora e por viagem aberta.
+// Fechar à 4.ª hora custa ~15 linhas escritas; deixá-la 10 h abertas custa ~4 300
+// pedidos de DO + ~1 900 escritas.
+//
+// REGRAS guiadas pelo GPS, não pelo relógio: o sinal de vida de uma viagem é o
+// último ponto em `trip_points` (1 ponto/180 s durante a viagem), não o `updatedAt`
+// — as ofertas e as leituras também refrescam o `updatedAt`.
+//
+//   REQUESTED                  aberta há >30 min .......................... fechar
+//   ACCEPTED                   sem GPS há >20 min (piso 25 min) ........... fechar
+//   DRIVER_ARRIVED             sem GPS há >30 min (piso 40 min) ........... fechar
+//   IN_PROGRESS                sem GPS há >45 min (piso 60 min) ........... fechar
+//   REQUESTED/ACCEPTED/ARRIVED aberta há >4 h ............................. fechar
+//   IN_PROGRESS                aberta há >8 h ............................. fechar
+//
+// Os pisos e as folgas de GPS são generosos de propósito: fechar a viagem de uma
+// passageira que está DENTRO do carro é pior do que deixá-la aberta mais uma hora.
+// Um `IN_PROGRESS` só morre depois de 45 min sem uma única posição (ou 8 h de vida).
+//
+// MODOS (`system_flags.stale_guard`, 1 linha/execução):
+//   'off'    não faz nada;
+//   'shadow' só regista as candidatas em `stale_guard_log` — é o DEFAULT (também
+//            quando a flag ou a tabela não existem), para o dono rever antes;
+//   'on'     fecha as viagens.
+// Nunca toca em COMPLETED/CANCELLED. Viagem com `scheduledAt` no futuro é ignorada
+// em QUALQUER estado (foi marcada para mais tarde, não está esquecida).
+// Até STALE_MAX_PER_RUN por execução: o limite do plano Free é 50 SUBREQUESTS por
+// invocação e cada fecho custa 8 (UPDATE + DO + 2 pushes + linha do log) — 4 por
+// hora deixam margem para o agendador de notificações que corre no mesmo cron.
+const STALE_REQ_MIN = 30;
+const STALE_NOGPS_ACCEPTED_MIN = 20;
+const STALE_NOGPS_ARRIVED_MIN = 30;
+const STALE_NOGPS_INPROGRESS_MIN = 45;
+const STALE_MIN_LIFE_ACCEPTED_MIN = 25;
+const STALE_MIN_LIFE_ARRIVED_MIN = 40;
+const STALE_MIN_LIFE_INPROGRESS_MIN = 60;
+const STALE_CAP_MIN = 240;
+const STALE_CAP_IN_PROGRESS_MIN = 480;
+const STALE_MAX_PER_RUN = 4;
+const STALE_SCAN_LIMIT = 50;
+
+// Datas da D1 são TEXT ISO (`strftime('%Y-%m-%dT%H:%M:%fZ','now')`); aceitamos
+// também epoch em segundos/ms para linhas antigas ou de importação.
+function staleMs(v: any): number {
+  if (v === null || v === undefined || v === '') return 0;
+  if (typeof v === 'number' || /^-?\d+$/.test(String(v))) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    if (n > 1e12) return n;            // ms
+    if (n > 1e9) return n * 1000;      // segundos
+    return 0;
+  }
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? t : 0;
+}
+
+// Modo do guarda. Falha de D1 (tabela ausente, quota) -> 'off': nunca fechar
+// viagens por causa de um erro de leitura.
+async function staleGuardMode(env: any): Promise<string> {
+  try {
+    const sql = neon(env.DB);
+    const rows: any[] = await sql`SELECT value FROM system_flags WHERE key = 'stale_guard'`;
+    const v = String((rows && rows[0] && rows[0].value) || '').trim().toLowerCase();
+    if (v === 'on' || v === 'off' || v === 'shadow') return v;
+    return 'shadow';
+  } catch {
+    return 'off';
+  }
+}
+
+// 1 linha por decisão. Escrita IMEDIATAMENTE a seguir ao fecho (antes dos avisos):
+// se o push falhar, a decisão não se perde.
+async function staleLogOne(env: any, mode: string, e: any): Promise<boolean> {
+  try {
+    const sql = neon(env.DB);
+    await sql`INSERT INTO stale_guard_log (id, "createdAt", mode, "tripId", status, reason, "ageMin", "idleMin", action)
+      VALUES (${crypto.randomUUID()}, NOW(), ${mode}, ${String(e.tripId)}, ${String(e.status)}, ${String(e.reason).slice(0, 120)},
+        ${Math.round(Number(e.ageMin) || 0)}, ${Number.isFinite(Number(e.idleMin)) ? Math.round(Number(e.idleMin)) : null},
+        ${mode === 'on' ? 'closed' : 'shadow'})`;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function staleLogWrite(env: any, mode: string, entries: any[]): Promise<number> {
+  let n = 0;
+  for (const e of entries) if (await staleLogOne(env, mode, e)) n += 1;
+  return n;
+}
+
+// Varre as viagens ativas e (conforme o modo) fecha as esquecidas.
+// `opts.dry` = só pré-visualizar: nunca escreve, nunca fecha, ignora o modo.
+async function sweepStaleTrips(env: any, opts?: { mode?: string; max?: number; dry?: boolean }) {
+  const dry = !!opts?.dry;
+  const reqMode = String(opts?.mode || '').trim().toLowerCase();
+  const mode = reqMode === 'on' || reqMode === 'off' || reqMode === 'shadow' ? reqMode : await staleGuardMode(env);
+  const max = Math.max(1, Math.min(50, Math.trunc(Number(opts?.max)) || STALE_MAX_PER_RUN));
+  const out: any = { mode, dry, scanned: 0, candidates: [], closed: 0, logged: 0 };
+  if (mode === 'off' && !dry) return out;
+
+  const sql = neon(env.DB);
+  const now = Date.now();
+  let rows: any[] = [];
+  try {
+    // QUOTA: `INDEXED BY trips_status_idx` (status, createdAt) — só as viagens em
+    // estado ativo, não o histórico (ver "Terceira vaga" no AGENTS.md).
+    rows = await sql`SELECT t.id, t.status, t."passengerId", t."driverId", t."createdAt", t."updatedAt", t."scheduledAt",
+        (SELECT MAX(p.ts) FROM trip_points p WHERE p."tripId" = t.id) AS "lastTs"
+      FROM trips t INDEXED BY trips_status_idx
+      WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')
+      ORDER BY t."createdAt" ASC LIMIT ${STALE_SCAN_LIMIT}`;
+  } catch {
+    out.error = 'leitura falhou';
+    return out;
+  }
+  out.scanned = rows.length;
+
+  const hits: any[] = [];
+  for (const r of rows) {
+    const st = String(r.status || '');
+    const createdMs = staleMs(r.createdAt) || staleMs(r.updatedAt);
+    if (!createdMs) continue;
+    // Viagem agendada para o futuro é ignorada em QUALQUER estado: foi marcada
+    // para mais tarde, não está esquecida. (A app envia `scheduledAt: 0`, mas a
+    // API aceita uma hora marcada.)
+    const schedMs = staleMs(r.scheduledAt);
+    if (schedMs && schedMs > now) continue;
+    const ageMin = (now - createdMs) / 60000;
+    // Sinal de vida = última posição gravada OU a última transição de estado
+    // (o que for mais recente). Assim nunca fechamos uma viagem viva.
+    const lastSeen = Math.max(Number(r.lastTs) || 0, staleMs(r.updatedAt) || 0) || createdMs;
+    const idleMin = (now - lastSeen) / 60000;
+    let reason = '';
+    if (st === 'REQUESTED') {
+      if (ageMin >= STALE_REQ_MIN) reason = 'Nenhuma motorista aceitou a tempo.';
+    } else if (st === 'ACCEPTED') {
+      if (ageMin >= STALE_MIN_LIFE_ACCEPTED_MIN && idleMin >= STALE_NOGPS_ACCEPTED_MIN) reason = 'Perdemos o sinal da motorista.';
+    } else if (st === 'DRIVER_ARRIVED') {
+      // A motorista já chegou: se o GPS morreu com a passageira à espera, o piso
+      // é mais alto (há sempre alguém no sítio a poder fechar à mão).
+      if (ageMin >= STALE_MIN_LIFE_ARRIVED_MIN && idleMin >= STALE_NOGPS_ARRIVED_MIN) reason = 'A motorista chegou mas a viagem não avançou.';
+    } else if (st === 'IN_PROGRESS') {
+      if (ageMin >= STALE_MIN_LIFE_INPROGRESS_MIN && idleMin >= STALE_NOGPS_INPROGRESS_MIN) reason = 'Perdemos o sinal do carro durante a viagem.';
+    }
+    // Teto duro por estado: `IN_PROGRESS` ganha mais 4 h (pode ser uma viagem
+    // longa); os outros caem às 4 h mesmo com GPS a chegar.
+    if (!reason) {
+      const cap = st === 'IN_PROGRESS' ? STALE_CAP_IN_PROGRESS_MIN : STALE_CAP_MIN;
+      if (ageMin >= cap) reason = 'A viagem ficou aberta demasiado tempo.';
+    }
+    if (!reason) continue;
+    hits.push({
+      tripId: String(r.id),
+      status: st,
+      passengerId: r.passengerId ? String(r.passengerId) : null,
+      driverId: r.driverId ? String(r.driverId) : null,
+      reason: reason.slice(0, 80),
+      ageMin,
+      idleMin,
+    });
+    if (hits.length >= max) break;
+  }
+
+  out.candidates = hits.map((h) => ({
+    tripId: h.tripId, status: h.status, ageMin: Math.round(h.ageMin),
+    idleMin: Number.isFinite(h.idleMin) ? Math.round(h.idleMin) : null, reason: h.reason,
+  }));
+  if (!hits.length) return out;
+  if (dry) return out;
+  if (mode === 'shadow') {
+    out.logged = await staleLogWrite(env, 'shadow', hits);
+    return out;
+  }
+
+  const closed: any[] = [];
+  let wasRequested = false;
+  for (const h of hits) {
+    let upd: any[] = [];
+    try {
+      // Idempotente: só fecha se ainda estiver ATIVA e no mesmo estado lido (a
+      // motorista pode ter aceitado/avançado entretanto).
+      upd = await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = 'system', "cancelReason" = ${h.reason}, "updatedAt" = NOW()
+        WHERE id = ${h.tripId} AND status = ${h.status}
+        RETURNING "passengerId", "driverId"`;
+    } catch {
+      continue;
+    }
+    if (!upd.length) continue;
+    out.closed += 1;
+    const paxId = upd[0].passengerId ? String(upd[0].passengerId) : h.passengerId;
+    const drvId = upd[0].driverId ? String(upd[0].driverId) : h.driverId;
+    const row = { ...h, passengerId: paxId, driverId: drvId };
+    // A linha do log é escrita JÁ a seguir ao fecho (custo 1 escrita): se o push
+    // falhar, a decisão fica registada à mesma.
+    out.logged += (await staleLogOne(env, 'on', row)) ? 1 : 0;
+    closed.push(row);
+    if (h.status === 'REQUESTED') wasRequested = true;
+    // Aviso imediato aos dois lados (o `by:'system'` chega ao cliente como ''
+    // e o banner mostra "Viagem cancelada" + "Motivo: …").
+    try { await notifyTripPush(env, h.tripId, 'CANCELLED', { by: 'system', reason: h.reason }); } catch {}
+    try {
+      const body = `Motivo: ${h.reason}`;
+      await pushToUser(sql, paxId, 'Viagem cancelada', body, { tripId: h.tripId, type: 'cancelled' });
+      if (drvId) {
+        const d = await sql`SELECT "userId" FROM drivers WHERE id = ${drvId} LIMIT 1`;
+        const du = d.length ? String(d[0].userId || '') : '';
+        if (du) await pushToUser(sql, du, 'Corrida cancelada', body, { tripId: h.tripId, type: 'cancelled' });
+      }
+    } catch {}
+  }
+  // Pedidos que saíram do feed: uma única difusão no fim (não 1 por viagem) —
+  // cada `hubBroadcast` é um subrequest.
+  if (wasRequested) { try { await hubBroadcast(env); } catch {} }
+  return out;
+}
+
+// GET /api/v1/admin/stale-guard — modo atual, últimas decisões e pré-visualização
+// (dry-run: nunca fecha nem escreve).
+app.get('/api/v1/admin/stale-guard', adminMiddleware, async (c) => {
+  const sql = neon(c.env.DB);
+  const mode = await staleGuardMode(c.env);
+  // `max` só alarga a pré-visualização (1..50); nunca altera o limite do cron.
+  const max = Math.max(1, Math.min(50, Math.trunc(Number(c.req.query('max')) || STALE_MAX_PER_RUN)));
+  // `dry` + `mode` para não voltar a ler a flag (1 leitura em vez de 2).
+  const preview = await sweepStaleTrips(c.env, { dry: true, mode, max });
+  let log: any[] = [];
+  try {
+    log = await sql`SELECT "tripId", status, reason, mode, "ageMin", "idleMin", action, "createdAt"
+      FROM stale_guard_log ORDER BY "createdAt" DESC LIMIT 40`;
+  } catch {}
+  return c.json({
+    mode,
+    rules: {
+      requestedMin: STALE_REQ_MIN,
+      noGpsAcceptedMin: STALE_NOGPS_ACCEPTED_MIN,
+      noGpsArrivedMin: STALE_NOGPS_ARRIVED_MIN,
+      noGpsInProgressMin: STALE_NOGPS_INPROGRESS_MIN,
+      minLifeAcceptedMin: STALE_MIN_LIFE_ACCEPTED_MIN,
+      minLifeArrivedMin: STALE_MIN_LIFE_ARRIVED_MIN,
+      minLifeInProgressMin: STALE_MIN_LIFE_INPROGRESS_MIN,
+      capMin: STALE_CAP_MIN,
+      capInProgressMin: STALE_CAP_IN_PROGRESS_MIN,
+      maxPerRun: STALE_MAX_PER_RUN,
+    },
+    active: preview.scanned,
+    candidates: preview.candidates,
+    log,
+  });
+});
 
 export default {
   fetch: app.fetch,
   async scheduled(event: any, env: any, _ctx: any) {
     // Fila Premium: expira o 1.º que não pagou e promove/avisa o seguinte.
     try { await premiumExpire(neon(env.DB), env, true, _ctx); } catch {}
-    await runNotificationSchedules(env);
+    // Agendadas: em try/catch para um erro aqui não impedir o guarda (e vice-versa).
+    try { await runNotificationSchedules(env); } catch {}
+    // Guarda de viagens esquecidas: 1x/hora na batida do minuto 7. Reutiliza o
+    // cron por minuto que já existe — não acrescenta Cron Trigger nem pedidos.
+    try {
+      if (event && event.cron === '* * * * *' && new Date(Number(event.scheduledTime) || Date.now()).getUTCMinutes() === 7) {
+        await sweepStaleTrips(env);
+      }
+    } catch {}
     if (!event || event.cron === '17 3 * * *') {
       await purgeTripPoints(env);
       await rotateTurnCredential(env);

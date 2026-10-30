@@ -1,7 +1,7 @@
-# Quota diária do plano Free — proteção em 3 anéis
+# Quota diária do plano Free — proteção em 4 anéis
 
 Objectivo: **nunca estourar** os limites diários da conta `rerere…` (Workers, D1, Durable
-Objects) sem mudar de plano. Não é uma questão de "ter sorte": há três anéis independentes,
+Objects) sem mudar de plano. Não é uma questão de "ter sorte": há quatro anéis independentes,
 e o primeiro que dispara segura os outros.
 
 ```
@@ -19,6 +19,10 @@ e o primeiro que dispara segura os outros.
    ┌─ 3. NÃO GASTAR (desenho) ─────▼───────────────────────────────────────┐
    │ cortes já aplicados: FTS-only em `places`, 1 query por viagem, caches │
    │ de nota/pesquisa/perfil, backoff dos 5 WS, `trip_points` 180 s        │
+   └───────────────────────────────┬───────────────────────────────────────┘
+   ┌─ 4. NÃO DEIXAR CORRER ────────▼───────────────────────────────────────┐
+   │ guarda de viagens esquecidas (1x/hora, minuto 7 do cron existente):   │
+   │ sem GPS/vida a mais → CANCELLED + aviso aos dois lados                │
    └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -105,6 +109,87 @@ As escritas opcionais continuam a ser travadas localmente pelo `budget.ts` (`wri
 - `GET /trips/active` com `INDEXED BY trips_status_idx` (78 → 5 linhas).
 - Polling só como rede de segurança com o WebSocket aberto (60 s), backoff exponencial nos 5
   WebSockets, `trip_points` a cada 180 s, `geoPushToTrip` com throttle de 9 s.
+
+## 4.º anel — guarda de viagens esquecidas (2026-10-30)
+
+Uma viagem que fica aberta sem ninguém a mexer nela **continua a gastar quota**: o WebSocket da
+viagem, o ciclo de GPS de 2 s e o polling dos dois lados correm 24/7. Medido: **~600 pedidos de
+Durable Object por hora e por viagem aberta**. Fechar à 4.ª hora custa ~15 linhas escritas; deixá-la
+10 h abertas custa ~4 300 pedidos de DO + ~1 900 escritas — e do outro lado ficam duas pessoas a
+olhar para um mapa de uma corrida que já acabou.
+
+O guarda corre no **cron por minuto** que já existe (`* * * * *`), no **minuto 7** de cada hora:
+1 execução/hora, **0 pedidos extra** e nenhum Cron Trigger novo.
+
+### Regras (guiadas pelo GPS, não pelo relógio)
+
+O sinal de vida é o último ponto em `trip_points` (1/180 s durante a viagem) **ou** a última
+transição de estado, o que for mais recente. `updatedAt` sozinho não serve: as ofertas refrescam-no.
+
+| Estado | Fecha quando |
+|---|---|
+| `REQUESTED` | aberta há > **30 min** (ninguém aceitou) |
+| `ACCEPTED` | sem GPS há > **20 min** e vida ≥ **25 min** |
+| `DRIVER_ARRIVED` | sem GPS há > **30 min** e vida ≥ **40 min** |
+| `IN_PROGRESS` | sem GPS há > **45 min** e vida ≥ **60 min** |
+| `REQUESTED`/`ACCEPTED`/`DRIVER_ARRIVED` | vida > **4 h** (mesmo com GPS a chegar) |
+| `IN_PROGRESS` | vida > **8 h** |
+
+- Nunca toca em `COMPLETED`/`CANCELLED`.
+- Viagem com `scheduledAt` no futuro é ignorada em **qualquer** estado (foi marcada, não esquecida).
+- Os pisos são generosos de propósito: fechar a viagem de quem está **dentro** do carro é pior do
+  que deixá-la aberta mais uma hora.
+- Ao fechar: `status='CANCELLED'`, `cancelledBy='system'`, `cancelReason` ≤ 80 caracteres, `UPDATE`
+  idempotente com `AND status = <estado lido>` (se a motorista aceitou entretanto, não fecha), aviso
+  imediato ao `TripPush` (`by:'system'` → o cliente mostra "Viagem cancelada" + "Motivo: …"), push
+  Expo aos dois lados e **um** `hubBroadcast` no fim (só se fechou algum `REQUESTED`).
+
+### Modos (`system_flags.stale_guard`)
+
+| Valor | Efeito |
+|---|---|
+| ausente / `shadow` (**default**) | só regista as candidatas em `stale_guard_log` — **não fecha nada** |
+| `on` | fecha |
+| `off` | não faz nada |
+
+Erro de D1 a ler a flag → `off` (nunca fecha por causa de um erro de leitura). Ligar/desligar é
+**1 linha**, sem deploy:
+
+```bash
+npx wrangler@4.151.1 d1 execute ladiesgo --remote \
+  --command "INSERT INTO system_flags (key,value,\"updatedAt\") VALUES ('stale_guard','on',CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value, \"updatedAt\"=excluded.\"updatedAt\""
+```
+
+**Antes de ligar**: rever o log real durante alguns dias (ver abaixo). Só depois passar a `'on'`.
+
+### Custo (medido em produção, 2026-10-30)
+
+- Execução sem candidatas: **5 linhas lidas, 0 escritas** (`INDEXED BY trips_status_idx`, plano
+  `SEARCH t USING INDEX trips_status_idx (status=?)` + temp B-tree sobre 0–2 linhas), mais 1 linha da
+  flag. Ou seja ~6 linhas/hora — nada.
+- Cada fecho: **1 UPDATE** (~5 linhas escritas, o `trips` tem 6 índices) + 1 linha do log (3) +
+  `TripPush` + 2 pushes. Por isso **`STALE_MAX_PER_RUN = 4`**: o limite do Free é **50 subrequests
+  por invocação** e o mesmo cron ainda corre `premiumExpire` e `runNotificationSchedules`.
+
+### Operação
+
+```bash
+# pré-visualização (só admin; dry-run, NUNCA escreve) — `?max=` até 50
+curl -H "Authorization: Bearer <JWT admin>" \
+  https://ladiesgo-api.rererererererere670.workers.dev/api/v1/admin/stale-guard
+
+# forçar uma execução (SÓ staging, precisa do DEBUG_KEY)
+curl -X POST "https://ladiesgo-api-staging.<sub>.workers.dev/api/v1/debug/cron/sweep?key=$DEBUG_KEY&mode=shadow&max=10"
+```
+
+`GET /admin/stale-guard` devolve `{mode, rules, active, candidates, log}`. O log fica 7 dias
+(limpo pelo `purgeTripPoints`). A rota de debug devolve **404** fora de staging.
+
+**Prova**: 46/46 em staging (`%TEMP%\opencode\t-stale-guard.mjs`) — 10 viagens sintéticas cobrindo
+todas as regras, `shadow` regista e não fecha, `on` fecha as 5 candidatas, `REQUESTED` agendada /
+`ACCEPTED` com GPS / `DRIVER_ARRIVED` com GPS / `IN_PROGRESS` nova / `COMPLETED` intactas, teto 4 h
+fecha mesmo com GPS, frame WS `cancelled` com `by:''` + motivo, 2.ª chamada `closed:0`, tokens Expo
+falsos podados, `404` sem key, `401` sem sessão, staging a zero no fim.
 
 ## Regras de ouro (para humanos **e** agentes)
 

@@ -749,7 +749,7 @@ produção" só porque falhou no `wrangler d1 execute`.**
   `SEARCH ... trips_passenger_idx` + `USE TEMP B-TREE FOR ORDER BY` a ler as 76. Além disso partiria as
   viagens agendadas (`status='REQUESTED'` + `scheduledAt` no futuro).
 
-## Proteção da quota — 3 anéis (2026-10-30)
+## Proteção da quota — 4 anéis (2026-10-30)
 Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
 
 1. **Medir (autoritativo):** `cd cloudflare/api-worker && node scripts/quota-watch.mjs` — lê a
@@ -770,6 +770,26 @@ Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
    tabela ausente ou D1 em baixo → nada corta (nunca parte a app). `/health` mostra `shed`.
 3. **Não gastar:** os cortes das vagas 1–3 (FTS-only em `places`, 1 query por viagem,
    `INDEXED BY trips_status_idx`, caches, backoff dos WS, `trip_points` 180 s).
+4. **Não deixar correr (guarda de viagens esquecidas):** migração **`0022_stale_guard.sql`** cria
+   `stale_guard_log`. Uma viagem aberta sem ninguém custa **~600 pedidos de DO/hora**; o guarda
+   corre no **minuto 7** do cron por minuto que já existe (**1×/hora, 0 pedidos extra**) e fecha:
+   `REQUESTED` >30 min; `ACCEPTED` sem GPS >20 min (vida ≥25); `DRIVER_ARRIVED` sem GPS >30 min
+   (vida ≥40); `IN_PROGRESS` sem GPS >45 min (vida ≥60); teto 4 h (8 h em `IN_PROGRESS`).
+   `scheduledAt` no futuro é ignorado em qualquer estado; `COMPLETED`/`CANCELLED` nunca.
+   - **Modos** (`system_flags.stale_guard`): ausente/`shadow` (**default**) só regista em
+     `stale_guard_log`; `on` fecha; `off` nada. Erro de D1 a ler a flag → `off`.
+   - Ao fechar: `cancelledBy='system'` + `cancelReason` ≤80, `UPDATE` idempotente com
+     `AND status = <estado lido>`, `notifyTripPush(...,{by:'system',reason})`, push Expo aos dois
+     lados, **1** `hubBroadcast` no fim. O cliente mostra "Viagem cancelada" + "Motivo: …".
+   - **`STALE_MAX_PER_RUN = 4`** porque o Free tem **50 subrequests por invocação** e o mesmo cron
+     corre `premiumExpire` + `runNotificationSchedules` (este em `try/catch`).
+   - Custo medido em produção: execução sem candidatas = **5 linhas lidas, 0 escritas**.
+   - `GET /api/v1/admin/stale-guard` (admin, dry-run, `?max=` até 50) → `{mode,rules,active,
+     candidates,log}`; `POST /api/v1/debug/cron/sweep` só staging + `DEBUG_KEY` (404 fora).
+   - **Ligar só depois de rever o log:** 1 `INSERT … ON CONFLICT` em `system_flags`
+     (`key='stale_guard', value='on'`), sem deploy.
+   - Prova: **46/46** em staging (`%TEMP%\opencode\t-stale-guard.mjs`), staging a zero no fim;
+     produção: `/health` 200, `/admin/stale-guard` 401 sem sessão, modo `shadow`, 0 candidatas.
 
 Regras (aplica-se a agentes): antes de qualquer operação que escreva >1 000 linhas correr o
 vigilante e usar `--guard writes=N`; **nunca** reimportar a base toda (117 k escritas = o teto
