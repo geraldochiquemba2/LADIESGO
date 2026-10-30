@@ -913,6 +913,52 @@ staging a zero).
 sha256 `31dd4ede…`) servido **byte a byte igual** pelo Pages e pelo Worker estático
 (conferido com `?cb=` no fim, já com o `__bootFallback`).
 
+### 10. Sétima vaga (2026-10-30) — `DriverGeo` com snapshot único (P7)
+
+**O problema.** O `DriverGeo` (DO global `geo:global`) guardava **1 chave por motorista**
+(`p:<userId>`) e o `load()`, que corre a cada hibernação, fazia
+`storage.list({ prefix: 'p:' })`. Dois defeitos somavam-se: o custo de acordar o objeto crescia com
+o nº de motoristas **e as chaves nunca eram apagadas** (só no `walletBlocked`) — cada motorista que
+passou pela app deixava lá a sua chave para sempre. Medido em produção com **1** motorista real:
+`geo:global` objecto `6f8141fd…` = **11 leituras de storage por 1 pedido** (15 365 leituras / 3 482
+pedidos em 48 h). A duração do objeto é irrelevante (0,16 % do orçamento de leituras de storage);
+o que crescia mal era a leitura.
+
+**A correção (`src/index.ts`, sem migração de D1).** Tudo numa **única chave `snapshot:v1`**
+(`GEO_SNAP_KEY`), valor `{ userId: {…, ts, ps} }`:
+- `load()`: **1 `storage.get`** → repõe no `pos` só o que tem `ts` < `GEO_TTL_MS` (18 min). Se a
+  chave não existir, cai no ramo **legacy**: 1 `storage.list({prefix:'p:'})`, `delete` das chaves
+  antigas (em lote) e escrita do snapshot. **Corre uma vez e nunca mais.**
+- `persistSnapshot()`: poda >18 min, ordena por `ts` desc, corta a
+  `GEO_SNAP_MAX_CHARS = 100 KiB` (o limite do DO por valor é 128 KiB) e faz **1 `storage.put`**.
+- `persistNow()`: `state.waitUntil(...)` — a gravação **nunca** atrasa a resposta HTTP (antes o
+  `put('p:…')` também era fire-and-forget, por isso não há regressão).
+- Todos os `put('p:'…)`/`delete('p:'…)` foram substituídos por `persistNow()`.
+- **Diagnóstico:** rota interna `GET /stats` no DO e `GET /api/v1/debug/geo/stats` (só
+  `ENVIRONMENT==='staging'` **e** role `ADMIN`; em produção **404**). Devolve
+  `{ mode:'snapshot'|'legacy-list'|'empty', migrated, drivers, snapshotBytes }`. (O gate não usa
+  `DEBUG_KEY`: o valor do staging não está disponível localmente.)
+- `GEO_TTL_MS` já existia (junto do `geoStub`, ~linha 1220) — **não** declarar outra vez (o build
+  rebenta com `The symbol "GEO_TTL_MS" has already been declared`).
+
+**Medido com a GraphQL por objeto** (`%TEMP%\opencode\geo-cost.mjs`, janelas de 1 min):
+| Momento | reads | writes | req | reads/req |
+|---|---|---|---|---|
+| antes (14:58–16:09Z) | 11 | 0 | 1 | **11,00** |
+| migração (16:34Z) | 22 | 12 | 1 | 22,00 |
+| depois (16:35–16:36Z) | 1 | 0 | 1 | **1,00** |
+
+As 12 escritas do minuto da migração são o `delete` das 11 chaves `p:` + o `put` do snapshot.
+
+**Provado em staging** (versão `7d0d0d0a`, D1 de staging a zero no fim — 0 `ZZ Geo%`, 0
+`drvtest-geo-%`): motorista de teste com posição gravada pelo código **antigo** → depois do deploy
+`mode:"legacy-list", migrated:true, drivers:1` (214 bytes) e `/drivers/nearby` com a posição velha;
+130 s depois (hibernação) `mode:"snapshot", migrated:false, drivers:1`; posição **nova**
+(-8.9111, 13.3111, gravada só no snapshot) recuperada depois de outra hibernação; `offline:true` →
+`drivers:0`, snapshot **2 bytes**, `/drivers/nearby` vazio.
+
+**Em produção (2026-10-30):** API `67343957-df45-465e-a20e-7ef0c0d1f045`.
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -987,9 +1033,11 @@ Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da Gr
   P5 1 `JOIN` no `/trips/history` — **feito na migração `0023`** (319→90);
   P6 `softResync` respeitar `liveSkipPoll('nearby')` — **FEITO a 30/10** (ver "9. Sexta vaga": o
   `pollCars` do `softResync` passa a 1×/60 s com o WS de carros aberto); P7 snapshot do `DriverGeo`
-  — só quando houver >~20 motoristas.
-- **Nada mais a cortar sem medir.** O que resta é o `DriverGeo` (P7, depende do número de motoristas)
-  e o pool do FTS (P1, recusado por perda de qualidade).
+  — **FEITO a 30/10** por decisão do dono (ver "10. Sétima vaga": snapshot numa só chave,
+  **11 → 1 leitura por acordar**, medido com a GraphQL por objeto).
+- **Nada mais a cortar sem medir.** O pool do FTS (P1) ficou recusado por perda de qualidade e o
+  `DriverGeo` (P7) está feito; o que sobra é o sharding do `NotifHub`/`geo:global`, que só passa a
+  valer com muitos utilizadores/motoristas.
 
 ## Proteção da quota — 4 anéis (2026-10-30)
 Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:

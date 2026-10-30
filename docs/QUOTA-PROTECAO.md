@@ -118,6 +118,12 @@ As escritas opcionais continuam a ser travadas localmente pelo `budget.ts` (`wri
 - Polling só como rede de segurança com o WebSocket aberto (60 s), backoff exponencial nos 5
   WebSockets, `trip_points` a cada 180 s, `geoPushToTrip` com throttle de 9 s. O `softResync`
   deixou de repetir o `/drivers/nearby` com o WS de carros aberto (era ~112 pedidos/h).
+- **`DriverGeo` com snapshot único (30/10):** as posições vivas passaram de 1 chave por motorista
+  (`p:<userId>`, com `storage.list({prefix:'p:'})` a cada hibernação e chaves antigas nunca
+  apagadas) para **uma só chave `snapshot:v1`**. Medido em produção (GraphQL por objeto,
+  `6f8141fd…`): **11 → 1 leitura de storage por acordar**. A migração das chaves antigas corre uma
+  vez (16:34Z: 22 leituras + 12 escritas) e depois só há 1 escrita por gravação. Detalhe em
+  `AGENTS.md` → "10. Sétima vaga".
 
 ## 4.º anel — guarda de viagens esquecidas (2026-10-30)
 

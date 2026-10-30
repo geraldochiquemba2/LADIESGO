@@ -288,6 +288,24 @@ app.post('/api/v1/debug/cron/notifications', async (c) => {
   await runNotificationSchedules(c.env);
   return c.json({ ok: true });
 });
+// Estado interno do DriverGeo (só staging, só ADMIN): prova de onde veio o
+// `load()` — `snapshot` (chave única) ou `legacy-list` (migração das chaves
+// `p:<userId>` antigas, que são apagadas nessa mesma passagem).
+// Em produção devolve 404 (o DEBUG_KEY não é conhecido pelo agente e o estado
+// interno não se expõe).
+app.get('/api/v1/debug/geo/stats', requireAuth, async (c) => {
+  if (String(c.env.ENVIRONMENT || '') !== 'staging') return c.json({ message: 'Not found.' }, 404);
+  const u: any = c.get('user');
+  if (!u || String(u.role || '') !== 'ADMIN') return c.json({ message: 'Só admin.' }, 403);
+  const ns: any = (c.env as any).DRIVERGEO;
+  if (!ns || !ns.get) return c.json({ error: 'sem DRIVERGEO' }, 503);
+  try {
+    const r = await ns.get(ns.idFromName('geo:global')).fetch(new Request('https://geo/stats'));
+    return new Response(await r.text(), { status: r.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
 // Dispara o guarda de viagens esquecidas à mão (só staging). `mode=on|shadow|off`
 // força o modo daquela chamada; sem `mode` usa `system_flags.stale_guard`.
 app.post('/api/v1/debug/cron/sweep', async (c) => {
@@ -4336,6 +4354,20 @@ export class NotifHub {
 // Serve /drivers/nearby, buildOfferQueue, webDriverInfo e o polling da viagem.
 // Só vive em memória (rede de segurança = próximo ping repõe); TTL 5min na
 // leitura. Sem custo de armazenamento e sem escritas D1 por ping.
+// ── Persistência do mapa de posições (QUOTA DO, 2026-10-30) ──────────────────
+// Uma ÚNICA chave (`snapshot:v1`) com todas as posições válidas. Antes, cada
+// motorista tinha a sua chave (`p:<userId>`) e o `load()` fazia
+// `storage.list({prefix:'p:'})` — o custo de acordar o objeto crescia com o nº
+// de motoristas e as chaves antigas nunca eram apagadas. Medido em produção
+// (`geo:global`, 48 h): 15 365 linhas de storage lidas para 3 482 pedidos
+// (~4,4 por pedido) com apenas 1 motorista real. Agora é 1 leitura por acordar
+// e 1 escrita por gravação, independente do nº de motoristas; o snapshot só
+// leva posições com menos de 18 min (as velhas caem sozinhas, sem chaves órfãs).
+const GEO_SNAP_KEY = 'snapshot:v1';
+const GEO_LEGACY_PREFIX = 'p:';
+// GEO_TTL_MS = 18 min (já declarado acima, junto do geoStub).
+const GEO_SNAP_MAX_CHARS = 100 * 1024; // limite do DO por valor é 128 KiB
+
 export class DriverGeo {
   state: any;
   env: any;
@@ -4402,17 +4434,65 @@ export class DriverGeo {
   // A hibernação do DO limpa a memória. Sem isto, as posições desapareciam
   // quando o objeto ficava ocioso e a passagreira deixava de ver carros.
   loaded = false;
+  loadMode = '';        // 'snapshot' | 'legacy-list' | 'empty' (diagnóstico)
+  legacyMigrated = false;
   async load() {
     if (this.loaded) return;
     this.loaded = true;
+    const now = Date.now();
     try {
-      const all: any = await this.state.storage.list({ prefix: 'p:' });
-      const now = Date.now();
-      for (const [k, v] of all) {
-        const uid = String(k).slice(2);
-        if (!this.pos.has(uid) && v && now - Number(v.ts || 0) <= 18 * 60 * 1000) this.pos.set(uid, v);
+      // 1 leitura, seja qual for o nº de motoristas.
+      const snap: any = await this.state.storage.get(GEO_SNAP_KEY);
+      if (snap && typeof snap === 'object') {
+        this.loadMode = 'snapshot';
+        for (const uid of Object.keys(snap)) {
+          const v = snap[uid];
+          if (!v || now - Number(v.ts || 0) > GEO_TTL_MS) continue;
+          this.pos.set(uid, v);
+        }
+        return;
       }
-    } catch {}
+      // Migração única: versões anteriores guardavam 1 chave por motorista.
+      // Corre uma vez, apaga as chaves antigas e deixa o snapshot escrito.
+      const all: any = await this.state.storage.list({ prefix: GEO_LEGACY_PREFIX });
+      if (!all || !all.size) { this.loadMode = 'empty'; return; }
+      const kills: string[] = [];
+      for (const [k, v] of all) {
+        kills.push(String(k));
+        const uid = String(k).slice(GEO_LEGACY_PREFIX.length);
+        if (v && now - Number(v.ts || 0) <= GEO_TTL_MS) this.pos.set(uid, v);
+      }
+      this.loadMode = 'legacy-list';
+      this.legacyMigrated = true;
+      try { await this.state.storage.delete(kills); } catch {}
+      try { await this.persistSnapshot(now); } catch {}
+    } catch (e) { try { console.warn('geo load falhou', String(e)); } catch {} }
+  }
+  // Grava o mapa todo numa só chave (1 linha escrita) e poda o que já expirou.
+  async persistSnapshot(now = Date.now()) {
+    const recs: any[] = [];
+    for (const [uid, v] of this.pos) {
+      if (!v || now - Number(v.ts || 0) > GEO_TTL_MS) continue;
+      recs.push([uid, v]);
+    }
+    // Mais recentes primeiro: se o valor passar do limite, ficam os mais úteis.
+    recs.sort((a: any, b: any) => Number(b[1].ts || 0) - Number(a[1].ts || 0));
+    const out: any = {};
+    let chars = 2;
+    for (const [uid, v] of recs) {
+      const rec = v.ps ? v : { ...v, ps: now };
+      const size = JSON.stringify(rec).length + String(uid).length + 6;
+      if (chars + size > GEO_SNAP_MAX_CHARS) break;
+      out[uid] = rec;
+      chars += size;
+    }
+    await this.state.storage.put(GEO_SNAP_KEY, out);
+    return Object.keys(out).length;
+  }
+  // Persistência fora do caminho crítico da resposta (nunca atrasa um pedido).
+  persistNow() {
+    try { this.state.waitUntil(this.persistSnapshot(Date.now())); }
+    catch { try { this.persistSnapshot().catch(() => {}); } catch {} }
   }
   // Aplica uma atualização de posição vinda de HTTP (/set) ou de mensagem WS.
   setPos(userId: string, lat: number, lng: number, cats: any, online: boolean | null, h?: number | null): boolean {
@@ -4441,9 +4521,8 @@ export class DriverGeo {
     // por motorista (2min) mantém-se bem dentro da quota DO (100k/dia).
     const goingOnline = online === true && !wasOnline;
     if (goingOnline || !prev || now - Number(prev.ps || 0) > 120_000) {
-      const rec: any = { ...this.pos.get(userId), ps: now };
-      this.pos.set(userId, rec);
-      try { this.state.storage.put('p:' + userId, rec).catch(() => {}); } catch {}
+      this.pos.set(userId, { ...this.pos.get(userId), ps: now });
+      this.persistNow();
     }
     this.broadcastNearby();
     return wasOnline;
@@ -4458,7 +4537,7 @@ export class DriverGeo {
         const w = await sql`SELECT "walletBlocked" FROM users WHERE id = ${userId} LIMIT 1`;
         if (w.length && Number(w[0].walletBlocked || 0)) {
           this.pos.delete(userId);
-          try { this.state.storage.delete('p:' + userId).catch(() => {}); } catch {}
+          this.persistNow();
           await sql`UPDATE drivers SET "isOnline" = false, "updatedAt" = NOW() WHERE "userId" = ${userId}`;
           return;
         }
@@ -4516,7 +4595,7 @@ export class DriverGeo {
       const b: any = await req.json().catch(() => ({}));
       const uid = String(b.userId || '');
       this.pos.delete(uid);
-      try { this.state.storage.delete('p:' + uid).catch(() => {}); } catch {}
+      this.persistNow();
       this.broadcastNearby();
       return this.json({ ok: true });
     }
@@ -4533,6 +4612,15 @@ export class DriverGeo {
         if (now - Number(v.ts || 0) <= 18 * 60 * 1000) drivers.push(v);
       }
       return this.json({ drivers });
+    }
+    // Diagnóstico (chamado só pelo debug do staging): de onde veio o load()
+    // ('snapshot' = chave única, 'legacy-list' = migração das chaves 'p:'
+    // antigas) e quantas posições estão em memória.
+    if (path.endsWith('/stats')) {
+      await this.load();
+      let bytes = 0;
+      try { bytes = JSON.stringify(Array.from(this.pos.entries())).length; } catch {}
+      return this.json({ mode: this.loadMode, migrated: this.legacyMigrated, drivers: this.pos.size, snapshotBytes: bytes, snapshotMaxBytes: GEO_SNAP_MAX_CHARS });
     }
     return new Response('not found', { status: 404 });
   }
@@ -4554,7 +4642,7 @@ export class DriverGeo {
     if (!m || typeof m !== 'object') return;
     if (m.offline) {
       this.pos.delete(userId);
-      try { this.state.storage.delete('p:' + userId).catch(() => {}); } catch {}
+      this.persistNow();
       await this.d1Online(userId, false);
       this.broadcastNearby();
       return;

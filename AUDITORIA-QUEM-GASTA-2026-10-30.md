@@ -131,7 +131,7 @@ O piso noturno medido (118–120/h) **bate certo** com o cenário "parada" + cro
 
 | Objeto | 26 h | Storage lido | Nota |
 |---|---|---|---|
-| `geo:global` | 938 req | **7 776** | `load()` faz `storage.list({prefix:'p:'})` — **O(nº de motoristas) por hibernação**, e as chaves nunca são apagadas |
+| `geo:global` | 938 req | **7 776** | `load()` faz `storage.list({prefix:'p:'})` — **O(nº de motoristas) por hibernação**, e as chaves nunca são apagadas. **Corrigido a 30/10 (P7): snapshot numa só chave, 11 → 1 leitura por acordar** |
 | `notif:<userId>` | ~194 | 0 | 1 objeto por utilizador, WS hibernável |
 | `trip:<id>` / `requests:global` | 46 / 28 | 0 / 0 | — |
 
@@ -161,7 +161,7 @@ Duração: 0,07 GB-s por viagem (Hibernation API a funcionar) — 26 h deram 0,6
 | **P4** | `/ratings/pending`: `INDEXED BY trips_passenger_idx`/`_driver_idx` por papel | 83 → 0–1 | nenhum (mesma resposta) |
 | **P5** | `/trips/history`: um só `JOIN` | 153 → ~60 | nenhum |
 | **P6** | `softResync` respeitar `liveSkipPoll('nearby')` | −112 pedidos/h por app de passageira aberta | mapa de carros actualiza pelo WS (já existe) — **FEITO 30/10** |
-| **P7** | `DriverGeo.load`: chave única `snapshot` em vez de `list({prefix:'p:'})`, e apagar chaves com `ts` > 18 min | custo deixa de crescer com o nº de motoristas | 1 migração de storage no DO (inócuo; o `pos` repovoa no 1.º ping) |
+| **P7** | `DriverGeo.load`: chave única `snapshot` em vez de `list({prefix:'p:'})`, e apagar chaves com `ts` > 18 min | **FEITO 30/10: 11 → 1 leitura por acordar** (medido) | 1 migração de storage no DO (inócuo; o `pos` repovoa no 1.º ping) |
 
 **Ordem recomendada:** P1 (o único sítio que ainda lê milhares) → P3+P4+P5 (uma tarde, tudo de resposta idêntica) → P6 (pedidos) → P7 (só quando houver mais de ~20 motoristas).
 
@@ -170,8 +170,15 @@ Duração: 0,07 GB-s por viagem (Hibernation API a funcionar) — 26 h deram 0,6
 > `ratings_rated_idx`), **97 → 18 linhas**; TTL 600 s. `GET /ratings/mine` passou à mesma fonte
 > (**131 → 35 linhas**). Detalhe e provas em `AGENTS.md` → "8. Quinta vaga".
 > **P4/P5 FEITOS** na migração `0023`. **P1 medido e recusado** (perde qualidade nas pesquisas mais
-> usadas de Luanda por ~0,3 % de quota). **Resta só o P7** (snapshot do `DriverGeo`, que só faz
-> sentido acima de ~20 motoristas).
+> usadas de Luanda por ~0,3 % de quota). **P7 FEITO a 30/10** (decisão do dono, sem esperar pelos
+> ~20 motoristas): o `DriverGeo` passou a guardar **todas** as posições numa **única chave**
+> (`snapshot:v1`) e a apagar de vez as chaves `p:<userId>` antigas (eram elas que faziam o
+> `storage.list({prefix:'p:'})` custar **11 leituras por acordar** em produção com **1** motorista).
+> Medido com a GraphQL por objeto (`6f8141fd…`): **11 → 1 leitura/pedido**, e a migração correu
+> uma só vez (16:34Z: 22 leituras + 12 escritas, o `delete` das 11 chaves velhas). Provado em
+> staging: `mode:"legacy-list"` na 1.ª hibernação e `mode:"snapshot"` na seguinte, posição nova
+> (-8.9111, 13.3111) recuperada do snapshot, offline → `drivers:0`/snapshot 2 bytes. Ver
+> `AGENTS.md` → "10. Sétima vaga".
 >
 > **P6 FEITO a 30/10** — e com ele a **9.ª vaga** de cortes, que ataca o recurso mais perto do tecto
 > em uso real: os **pedidos ao Worker**.
