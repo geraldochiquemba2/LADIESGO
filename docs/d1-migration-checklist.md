@@ -81,10 +81,10 @@ node scripts/monitor-writes.mjs --watch
 
 ### 8. Verificar Integridade
 ```bash
-node scripts/monitor-writes.mjs --status
-node scripts/monitor-writes.mjs --verify  # conta registos e compara com expected
+node scripts/quota-watch.mjs            # quota REAL da conta (lidas/escritas/pedidos)
+node scripts/quota-watch.mjs --guard writes=1   # confirma que ainda há folga para escrever
 ```
-- [ ] Contagem de registos correta
+- [ ] Contagem de registos correta (comparar com o `expected` do import, via `SELECT COUNT(*)`)
 - [ ] Nenhum duplicado
 - [ ] API a responder normalmente (`/api/v1/health`)
 

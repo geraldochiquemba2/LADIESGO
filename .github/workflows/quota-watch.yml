@@ -1,0 +1,62 @@
+name: quota-watch (plano Free)
+
+# Vigilante da quota diária da conta Cloudflare (Workers / D1 / Durable Objects).
+# Corre sozinho de 3 em 3 horas, sem depender de nenhum PC ligado.
+#
+# O que faz:
+#   1. lê a quota REAL da conta na GraphQL Analytics API (d1AnalyticsAdaptiveGroups,
+#      workersInvocationsAdaptive, durableObjects*);
+#   2. manda o resumo para o Telegram quando o nível é >= AVISO (70%);
+#   3. escreve o nível em D1 (`system_flags.quota_shed`) para o Worker se
+#      degradar com elegância antes de bater no muro;
+#   4. FALHA (e o GitHub manda email) a partir de CRÍTICO (92%).
+#
+# Segredos do repositório (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   token com "Account Analytics: Read" + "D1: Edit"
+#   TELEGRAM_BOT_TOKEN     opcional (sem ele só falha o email do GitHub)
+#   TELEGRAM_CHAT_ID       opcional
+# Sem CLOUDFLARE_API_TOKEN o workflow termina sem fazer nada (não falha).
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: quota-watch
+  cancel-in-progress: false
+
+jobs:
+  vigiar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '016a8f9ed58a5cd10e9be697944905f0'
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Sem CLOUDFLARE_API_TOKEN — a saltar
+        if: env.CLOUDFLARE_API_TOKEN == ''
+        run: |
+          echo "::warning::Falta o segredo CLOUDFLARE_API_TOKEN; a vigilância não correu."
+          exit 0
+
+      - name: Relatório + alerta + corte de carga
+        # Sai != 0 a partir de CRÍTICO (92%): o GitHub manda email de falha.
+        # --apply-shed só escreve quando o nível sobe (1 linha, 3 escritas D1).
+        run: node cloudflare/api-worker/scripts/quota-watch.mjs --telegram --apply-shed --fail-at=critical
+
+      - name: Resumo no sumário do run
+        if: always()
+        run: node cloudflare/api-worker/scripts/quota-watch.mjs --json --quiet > quota.json || true
+      - name: Publicar resumo
+        if: always()
+        run: |
+          node -e "const r=require('./quota.json');console.log('## Quota '+r.levelName);console.log('| métrica | usado | teto | % | teto às |');console.log('|---|---|---|---|---|');for(const m of r.metrics)console.log('| '+m.label+' | '+m.used+' | '+m.max+' | '+(m.pct*100).toFixed(1)+'% | '+(m.eta||'—')+' |')" >> $GITHUB_STEP_SUMMARY || true

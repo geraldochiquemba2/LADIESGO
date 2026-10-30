@@ -6,6 +6,7 @@ import { makeSql as neon, d1metrics, resetD1Metrics } from './db';
 import { newBucket, tryConsume } from './ratelimit';
 import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
 import { bumpRequest, budgetState, writeGuard } from './budget';
+import { shedLevel, shedState } from './shed';
 
 type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_SECRET_KEY?: string; METERED_ICE_JSON?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
 
@@ -255,7 +256,7 @@ async function requireAuth(c: any, next: any) {
 
 // ─── health ───
 app.get('/ping', (c) => c.json({ ok: true, ts: Date.now(), worker: true }));
-app.get('/api/v1/health', (c) => c.json({ ok: true, ts: Date.now(), budget: budgetState() }));
+app.get('/api/v1/health', (c) => c.json({ ok: true, ts: Date.now(), budget: budgetState(), shed: shedState().level }));
 app.get('/api', (c) => c.json({ name: 'LadiesGo! API', status: 'online', runtime: 'cloudflare-workers' }));
 
 // ─── debug: métricas D1 (só ativo se DEBUG_KEY estiver definido) ───
@@ -923,10 +924,14 @@ app.get('/api/v1/trips/history', requireAuth, async (c) => {
   try {
     let did: string | undefined;
     if (d) did = await driverIdFor(sql, d);
+    // QUOTA (corte de carga): no nível 2 (conta quase no teto de leituras) o
+    // histórico devolve 8 viagens em vez de 30 (~50 linhas em vez de ~153).
+    // Contrato igual: `{ trips: [...] }`, só com menos itens.
+    const lim = (await shedLevel(c.env)) >= 2 ? 8 : 30;
     let rows: any[];
-    if (p && did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} OR t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
-    else if (p) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} ORDER BY t."createdAt" DESC LIMIT 30`;
-    else if (did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT 30`;
+    if (p && did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} OR t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT ${lim}`;
+    else if (p) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."passengerId" = ${p} ORDER BY t."createdAt" DESC LIMIT ${lim}`;
+    else if (did) rows = await sql`SELECT t.*, u.name AS passenger_name, du.name AS driver_name FROM trips t LEFT JOIN users u ON u.id = t."passengerId" LEFT JOIN drivers dd ON dd.id = t."driverId" LEFT JOIN users du ON du.id = dd."userId" WHERE t."driverId" = ${did} ORDER BY t."createdAt" DESC LIMIT ${lim}`;
     else return c.json({ trips: [] });
     const { byCode } = await catMaps(sql);
     return c.json({ trips: rows.map((t: any) => ({
@@ -2032,7 +2037,12 @@ app.get('/api/places/search', async (c) => {
   const phit = await cacheGet(c, pkey);
   if (phit) return phit;
   // Base local primeiro: instantâneo, offline e com distância à localização.
-  const local: any[] = await localPlaces(c, q, lat, lng);
+  // QUOTA (corte de carga): com `quota_shed >= 1` (nível ALTO/CRÍTICO da conta,
+  // escrito por scripts/quota-watch.mjs) a pesquisa deixa de tocar na D1 e
+  // responde pelo cache (acima) ou pelo Photon/Nominatim — a app continua a
+  // pesquisar, mas sem varrer `places_fts`. As respostas já em cache não mudam.
+  const shed = await shedLevel(c.env);
+  const local: any[] = shed >= 1 ? [] : await localPlaces(c, q, lat, lng);
   if (local.length >= 1) return cachePut(c, pkey, 604800, { places: local });
   try {
     // Photon e Nominatim em paralelo: devolve o primeiro com resultados.

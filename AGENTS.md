@@ -749,6 +749,33 @@ produção" só porque falhou no `wrangler d1 execute`.**
   `SEARCH ... trips_passenger_idx` + `USE TEMP B-TREE FOR ORDER BY` a ler as 76. Além disso partiria as
   viagens agendadas (`status='REQUESTED'` + `scheduledAt` no futuro).
 
+## Proteção da quota — 3 anéis (2026-10-30)
+Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
+
+1. **Medir (autoritativo):** `cd cloudflare/api-worker && node scripts/quota-watch.mjs` — lê a
+   GraphQL Analytics da **conta** (pedidos, D1 lidas/escritas, DO pedidos/GB-s), dá percentagem,
+   projecção das 24 h e a **hora a que o teto seria atingido**. Códigos: 0 OK · 1 aviso (70%)
+   · 2 alto (85%) · 3 crítico (92%) · 4 esgotado · 5 erro. Flags: `--json`, `--check`,
+   `--telegram`, `--guard writes=N,reads=N` (recusa se não houver folga → exit 3), `--apply-shed`.
+   - **`.github/workflows/quota-watch.yml`** corre de 3 em 3 h, alerta no Telegram e **falha**
+     a partir de CRÍTICO (o GitHub manda email). Precisa do segredo `CLOUDFLARE_API_TOKEN`
+     (+ `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`); sem token, salta sem falhar.
+   - `scripts/monitor-writes.mjs` está **descontinuado** (media com `SELECT COUNT(*) FROM places`
+     — lia 23 k linhas por chamada — e procurava uma tabela `_write_metrics` inexistente, dando
+     "0 escritas" falso). Fica só como atalho para o `quota-watch`.
+2. **Degradar antes do muro (conta, não isolate):** migração **`0021_system_flags.sql`** cria
+   `system_flags`; `--apply-shed` escreve `quota_shed` = 0/1/2. O Worker lê-o em `src/shed.ts`
+   (1 linha/isolate/60 s) e: **1** → `/api/places/search` deixa de consultar `places_fts`
+   (cache + Photon/Nominatim); **2** → `/trips/history` devolve 8 em vez de 30. Nível 0/normal,
+   tabela ausente ou D1 em baixo → nada corta (nunca parte a app). `/health` mostra `shed`.
+3. **Não gastar:** os cortes das vagas 1–3 (FTS-only em `places`, 1 query por viagem,
+   `INDEXED BY trips_status_idx`, caches, backoff dos WS, `trip_points` 180 s).
+
+Regras (aplica-se a agentes): antes de qualquer operação que escreva >1 000 linhas correr o
+vigilante e usar `--guard writes=N`; **nunca** reimportar a base toda (117 k escritas = o teto
+do dia); medir SQL só com `SELECT` + `meta.rows_read`; ao ver `7500`/`1027`/429 **parar** até
+às 00:00 UTC (repetir o comando conta e agrava).
+
 ## Incidentes de quota (2026-10-17) — NAO REPETIR
 Dois limites foram esgotados no mesmo dia, ambos pela via do assistente (nao por uso real).
 Prova: os logs em `~/.wrangler/logs` registam `"agent":"opencode"`, e o historico do PowerShell
@@ -785,12 +812,14 @@ Regras para nao repetir:
 - **Um import completo = o dia inteiro.** Nunca repetir o import "para ver se passou"; ver a quota antes.
 
 ### Ver a quota da conta (antes de qualquer import)
-O wrangler não tem comando de quota; usar a GraphQL Analytics API com o token OAuth do wrangler
-(`~/.wrangler/config/default.toml` → `oauth_token`) e o `accountTag` `016a8f9ed58a5cd10e9be697944905f0`:
+**Forma oficial: `cd cloudflare/api-worker && node scripts/quota-watch.mjs`** (ver "Proteção da
+quota — 3 anéis"). Lê a GraphQL Analytics da conta com o token OAuth do wrangler
+(`default.toml` → `oauth_token`) e o `accountTag` `016a8f9ed58a5cd10e9be697944905f0`:
 - **Workers:** `workersInvocationsAdaptive { sum { requests errors subrequests } dimensions { scriptName } }`
 - **D1:** `d1AnalyticsAdaptiveGroups { sum { rowsRead rowsWritten readQueries writeQueries } dimensions { datetime databaseId } }`
+- **DO:** `durableObjectsInvocationsAdaptiveGroups { sum { requests } }` + `durableObjectsPeriodicGroups { sum { duration rowsRead rowsWritten } }`
 
-Script pronto: `%TEMP%\opencode\cf-quota.mjs` (hoje/24h por script e por BD) e `cf-d1-hourly.mjs` (hora a hora).
+Scripts antigos (histórico, mesmos dados): `%TEMP%\opencode\cf-quota.mjs` e `cf-d1-hourly.mjs`.
 **Nota:** a API de *billing/subscriptions* devolve **403** com este token (sem scope de billing) — não dá para
 confirmar o plano por API, só pelo dashboard.
 
