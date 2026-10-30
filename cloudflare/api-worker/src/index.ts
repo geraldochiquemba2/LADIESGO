@@ -7,8 +7,9 @@ import { newBucket, tryConsume } from './ratelimit';
 import { WS_MAX_MESSAGE_BYTES } from './conn-limit';
 import { bumpRequest, budgetState, writeGuard } from './budget';
 import { shedLevel, shedState } from './shed';
+import { runQuotaWatch, lastQuotaState } from './quota';
 
-type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_SECRET_KEY?: string; METERED_ICE_JSON?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any };
+type Env = { DB: any; JWT_SECRET: string; JWT_EXPIRES_IN?: string; ENVIRONMENT?: string; METERED_DOMAIN?: string; METERED_TURN_APIKEY?: string; METERED_SECRET_KEY?: string; METERED_ICE_JSON?: string; METERED_FREE_MB?: string; RINGER?: any; TRIPPUSH?: any; REQUESTSHUB?: any; NOTIFHUB?: any; DEBUG_KEY?: string; TG_BOT_TOKEN?: string; TG_CHAT_ID?: string; TELEGRAM_BOT_TOKEN?: string; TELEGRAM_CHAT_ID?: string; RATE_LIMIT_MAX?: string; RATE_LIMIT_WINDOW_MS?: string; BUDGET_REQ_MAX?: string; BUDGET_WRITE_MAX?: string; API_RL?: any; CF_ANALYTICS_TOKEN?: string; CF_ACCOUNT_ID?: string };
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors({ origin: '*', allowHeaders: ['Content-Type', 'Authorization'], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
@@ -5719,6 +5720,44 @@ app.get('/api/v1/admin/stale-guard', adminMiddleware, async (c) => {
   });
 });
 
+// ── Vigilante da quota no próprio Worker (30/10/2026) ────────────────────────
+// O agendador do GitHub não cumpre neste repositório (medido: `keep-alive` com
+// `*/10 * * * *` fez 29 execuções em 6,8 dias, com intervalos de 3–10 h; o
+// `quota-watch` de 3 em 3 horas ficou a 0 nos dois primeiros slots). O cron por
+// minuto do Worker já existe, por isso a vigilância passa a viver aqui: 1 leitura
+// da GraphQL Analytics de 3 em 3 horas e o corte de carga em `system_flags`.
+app.get('/api/v1/admin/quota', adminMiddleware, async (c) => {
+  return c.json(await lastQuotaState(c.env));
+});
+// Forçar uma leitura agora (admin). Custa 1 chamada à GraphQL; não toca na app.
+app.post('/api/v1/admin/quota/check', adminMiddleware, async (c) => {
+  const r = await runQuotaWatch(c.env, true);
+  return c.json({ ...r, state: await lastQuotaState(c.env) });
+});
+// Teste do caminho CRÍTICO sem gastar quota a sério (só staging + ADMIN):
+// injeta uma leitura de 93% e corre o alerta + corte de carga verdadeiros.
+app.post('/api/v1/debug/quota/alert', adminMiddleware, async (c) => {
+  if (String(c.env.ENVIRONMENT || '') !== 'staging') return c.json({ message: 'Not found.' }, 404);
+  const now = Date.now();
+  const fake: any = {
+    ts: now,
+    account: String(c.env.CF_ACCOUNT_ID || ''),
+    level: 3,
+    levelName: 'CRÍTICO',
+    worst: { key: 'reads', used: 4_650_000, max: 5_000_000, pct: 0.93 },
+    metrics: [
+      { key: 'requests', used: 30_000, max: 100_000, pct: 0.3 },
+      { key: 'reads', used: 4_650_000, max: 5_000_000, pct: 0.93 },
+      { key: 'writes', used: 20_000, max: 100_000, pct: 0.2 },
+      { key: 'doRequests', used: 5_000, max: 100_000, pct: 0.05 },
+      { key: 'doGbSeconds', used: 300, max: 13_000, pct: 0.02 },
+    ],
+    shed: 2,
+  };
+  const r = await runQuotaWatch(c.env, true, fake);
+  return c.json({ ...r, fake: true, state: await lastQuotaState(c.env) });
+});
+
 export default {
   fetch: app.fetch,
   async scheduled(event: any, env: any, _ctx: any) {
@@ -5736,5 +5775,11 @@ export default {
       await purgeTripPoints(env);
       await rotateTurnCredential(env);
     }
+    // Quota: ao minuto 0 dos slots de 3 em 3 horas (00/03/06/…/21Z). O "claim" em
+    // `system_flags.quota_watch` (90 min) impede repetições com vários isolates.
+    try {
+      const now = new Date();
+      if (now.getUTCMinutes() === 0 && now.getUTCHours() % 3 === 0) await runQuotaWatch(env);
+    } catch {}
   },
 };

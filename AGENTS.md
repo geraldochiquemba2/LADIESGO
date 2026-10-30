@@ -959,6 +959,60 @@ As 12 escritas do minuto da migração são o `delete` das 11 chaves `p:` + o `p
 
 **Em produção (2026-10-30):** API `67343957-df45-465e-a20e-7ef0c0d1f045`.
 
+### 11. Oitava vaga (2026-10-30) — o vigilante da quota mudou-se para dentro do Worker
+
+**Porque.** O `.github/workflows/quota-watch.yml` está correto, mas **o agendador do GitHub não cumpre
+neste repositório**. Prova medida: o antigo `keep-alive` tinha `cron: '*/10 * * * *'` (144 execuções/dia
+esperadas) e fez **29 execuções em 6,8 dias** (06/10 20:52Z → 13/10 06:22Z), com intervalos de
+**2,9 a 9,8 horas**. O `quota-watch` entrou na `main` às 10:48Z de 30/10 e às 15:00Z tinha **0 execuções**
+(incluindo os slots das 12:00Z e 15:00Z). O workflow está `active`, o YAML é válido, o repo não está
+arquivado/desativado e não houve incidente do GitHub relevante (só Issues+Pages, 14:31–15:02Z).
+**Um guarda que não corre não guarda nada** → a vigilância passou para o cron por minuto que o Worker
+**já tem** (0 pedidos extra).
+
+**Código:** `cloudflare/api-worker/src/quota.ts` (novo) + ligações em `src/index.ts`.
+- `readQuota(env)` — a **mesma** query GraphQL e a **mesma** matemática do `scripts/quota-watch.mjs`
+  (validado lado a lado: pedidos 5,30 %, lidas 10,89 %, escritas 4,00 %, DO pedidos 0,75 %,
+  DO duração 1,276 GB-s — idênticos). **`sum.duration` já vem em GB-s** (não dividir por 1e9/1e3).
+- Níveis 70/85/92/100 % (AVISO/ALTO/CRÍTICO/ESGOTADO) e `shedFor()`: ≥92 % → `quota_shed=2`,
+  ≥85 % → `1`, resto → `0`. **O `quota_shed` é escrito SEMPRE** (incluindo 0), senão um dia mau
+  deixava a app degradada para sempre — é auto-curativo.
+- `runQuotaWatch(env, force, fake?)` — corre no cron ao **minuto 0 dos slots de 3 em 3 horas**
+  (00/03/06/…/21Z); um **claim de 90 min** em `system_flags.quota_watch` impede repetições com
+  vários isolates. Alerta por Telegram (`TG_BOT_TOKEN`/`TG_CHAT_ID`, com anti-spam de 6 h) e
+  devolve `{ok, level, worst, alerted, shed}`. Nunca lança: erro → `{ error }`.
+- **Segredo necessário:** `CF_ANALYTICS_TOKEN` (**Account Analytics: Read** + **D1: Edit**).
+  Sem ele é **no-op silencioso** (`{skipped:'sem CF_ANALYTICS_TOKEN'}`) — nunca parte a app.
+  O token OAuth do wrangler local **não serve para criar API tokens** (`/user/tokens`,
+  `/accounts/:id/tokens` → 403 `9109`); tem de ser criado no dashboard pelo dono.
+  Meter com `wrangler secret put CF_ANALYTICS_TOKEN` (prod) e `--env staging` (staging).
+- `CF_ACCOUNT_ID = "016a8f9ed58a5cd10e9be697944905f0"` acrescentado a `[vars]` e `[env.staging.vars]`.
+
+**Rotas:**
+| Rota | Quem | O que faz |
+|---|---|---|
+| `GET /api/v1/admin/quota` | ADMIN | último estado guardado (`configured`, `quota_watch`, `quota_shed`) |
+| `POST /api/v1/admin/quota/check` | ADMIN | força uma leitura agora (1 GraphQL) e devolve o estado |
+| `POST /api/v1/debug/quota/alert` | ADMIN **e** staging | injeta uma leitura falsa CRÍTICO (93 %) e exercita alerta + corte. **404 em produção** |
+
+**Provado em staging** (versão `2e7ebf93`): sem sessão → 401; admin → 200; **sem** segredo →
+`{skipped:'sem CF_ANALYTICS_TOKEN'}`; segredo de brincadeira → `{error:"graphql: Authentication failed
+(status: 400)"}` com `/health` 200 e **0 linhas escritas**; segredo real → `{ok:true,level:0}` e
+`quota_watch` gravado; `/debug/quota/alert` → nível 3, `alertTs` posto (Telegram OK) e
+`quota_shed='2'` escrito. **Anel 2 ponta-a-ponta:** 12 viagens sintéticas → `quota_shed=2` devolve
+**8** no `/trips/history`, `quota_shed=0` devolve **12** (staging a zero no fim: 0 viagens, 0 flags,
+restos `t=0/u=0`).
+
+**Em produção (2026-10-30):** API `6da29130-0aea-416d-b4de-33dfb4dfa18f`. Smoke: `/health` 200
+(`shed:0`), `/admin/quota` sem sessão **401** e com sessão **200** (`configured:false` até o dono
+meter o segredo, `quota_shed:"0"`), `/debug/quota/alert` e `/debug/geo/stats` **404** com sessão
+de admin (o gate de staging funciona).
+
+> **Pendente (só o dono):** criar o API token (Account Analytics: Read + D1: Edit) e meter com
+> `wrangler secret put CF_ANALYTICS_TOKEN` (prod **e** `--env staging`). Até lá o vigilante dentro
+> do Worker não mede nada (e é isso que se vê em `/admin/quota`: `configured:false`). O workflow do
+> GitHub fica só para `workflow_dispatch` manual.
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -1042,20 +1096,27 @@ Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da Gr
 ## Proteção da quota — 4 anéis (2026-10-30)
 Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
 
-1. **Medir (autoritativo):** `cd cloudflare/api-worker && node scripts/quota-watch.mjs` — lê a
-   GraphQL Analytics da **conta** (pedidos, D1 lidas/escritas, DO pedidos/GB-s), dá percentagem,
-   projecção das 24 h e a **hora a que o teto seria atingido**. Códigos: 0 OK · 1 aviso (70%)
-   · 2 alto (85%) · 3 crítico (92%) · 4 esgotado · 5 erro. Flags: `--json`, `--check`,
-   `--telegram`, `--guard writes=N,reads=N` (recusa se não houver folga → exit 3), `--apply-shed`.
-   - **`.github/workflows/quota-watch.yml`** corre de 3 em 3 h, alerta no Telegram e **falha**
-     a partir de CRÍTICO (o GitHub manda email). Precisa do segredo `CLOUDFLARE_API_TOKEN`
-     (+ `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`); sem token, salta sem falhar.
-     **Estado a 30/10 (medido pela API pública do GitHub): 0 execuções** — o ficheiro entrou na
-     `main` às 10:48Z e os slots das 12:00Z e 15:00Z não criaram run nenhum (o `keep-alive` também
-     parou a 13/10, mas esse foi desativado à mão). Não há `gh` nesta máquina: **só o dono** pode
-     correr GitHub → Actions → "quota-watch (plano Free)" → *Run workflow* e confirmar que o
-     segredo existe (Settings → Secrets and variables → Actions). Se o run manual passar mas o
-     agendado não arrancar, é config de Actions do repositório, não do script.
+1. **Medir (autoritativo):** duas vias, a mesma query e a mesma matemática.
+   - **Dentro do Worker (a que corre sempre):** `src/quota.ts` no cron por minuto, ao minuto 0 dos
+     slots de 3 em 3 h (00/03/06/…/21Z). Precisa do segredo `CF_ANALYTICS_TOKEN`; sem ele é no-op.
+     `GET /api/v1/admin/quota` mostra o último estado; `POST /api/v1/admin/quota/check` força uma
+     leitura. **Substitui o GitHub Actions como agendador** — ver "11. Oitava vaga" e a prova do
+     agendador em baixo. Escreve `quota_watch` **e** `quota_shed` (o `quota_shed` é reescrito em
+     todos os níveis, incluindo 0, para o corte ser auto-curativo).
+   - **À mão:** `cd cloudflare/api-worker && node scripts/quota-watch.mjs` — lê a
+     GraphQL Analytics da **conta** (pedidos, D1 lidas/escritas, DO pedidos/GB-s), dá percentagem,
+     projecção das 24 h e a **hora a que o teto seria atingido**. Códigos: 0 OK · 1 aviso (70%)
+     · 2 alto (85%) · 3 crítico (92%) · 4 esgotado · 5 erro. Flags: `--json`, `--check`,
+     `--telegram`, `--guard writes=N,reads=N` (recusa se não houver folga → exit 3), `--apply-shed`.
+   - **`.github/workflows/quota-watch.yml`** (3 em 3 h + Telegram + falha a partir de CRÍTICO):
+     **manter só para `workflow_dispatch` manual.** Precisa do segredo `CLOUDFLARE_API_TOKEN`
+     (Settings → Secrets and variables → Actions).
+     **Prova de que o agendador do GitHub não serve neste repo (medida a 30/10):** o antigo
+     `keep-alive` com `cron: '*/10 * * * *'` (144/dia esperadas) fez **29 execuções em 6,8 dias**,
+     com intervalos de **2,9 a 9,8 h**; e o `quota-watch`, que entrou na `main` às 10:48Z, tinha
+     **0 execuções** às 15:00Z (slots das 12:00Z e 15:00Z perdidos). Repo `active`, não arquivado,
+     YAML válido, sem incidente do GitHub relevante. Não há `gh` nesta máquina — **só o dono** pode
+     correr *Run workflow*.
    - `scripts/monitor-writes.mjs` está **descontinuado** (media com `SELECT COUNT(*) FROM places`
      — lia 23 k linhas por chamada — e procurava uma tabela `_write_metrics` inexistente, dando
      "0 escritas" falso). Fica só como atalho para o `quota-watch`.

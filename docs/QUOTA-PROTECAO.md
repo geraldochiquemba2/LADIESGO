@@ -67,10 +67,37 @@ node scripts/quota-watch.mjs --apply-shed
 O `monitor-writes.mjs` antigo está **descontinuado** (media com `SELECT COUNT(*) FROM places`,
 gastava quota e mentia); ficou só como atalho para o `quota-watch`.
 
-Automático: `.github/workflows/quota-watch.yml` corre de 3 em 3 horas, manda o resumo ao
-Telegram (se houver segredos) e aplica o nível em D1. **Falha** a partir de CRÍTICO, e o
-GitHub manda email — é o alarme que não depende de nenhum PC ligado.
+### Automático — dentro do Worker (o que corre sempre)
 
+O agendador do GitHub **não cumpre neste repositório** e isso foi medido: o antigo `keep-alive`
+tinha `cron: '*/10 * * * *'` (144 execuções/dia esperadas) e fez **29 execuções em 6,8 dias**
+(06/10 20:52Z → 13/10 06:22Z), com intervalos de **2,9 a 9,8 h**; o `quota-watch` entrou na `main`
+às 10:48Z de 30/10 e às 15:00Z tinha **0 execuções** (slots das 12:00Z e 15:00Z perdidos). Workflow
+`active`, YAML válido, repo não arquivado, sem incidente do GitHub relevante.
+
+Por isso a vigilância passou para o cron por minuto que o Worker **já tem** (`src/quota.ts`,
+0 pedidos extra):
+
+- Corre ao **minuto 0 dos slots de 3 em 3 horas** (00/03/06/09/12/15/18/21Z); claim de 90 min em
+  `system_flags.quota_watch` impede repetições com vários isolates.
+- Mesma query e mesma matemática do `quota-watch.mjs` — validado lado a lado (pedidos 5,30 %,
+  lidas 10,89 %, escritas 4,00 %, DO 0,75 %, 1,276 GB-s: idênticos). `sum.duration` **já vem em GB-s**.
+- Escreve **sempre** `quota_shed` (0/1/2), não só quando corta — um dia mau não deixa a app degradada
+  para sempre.
+- Alerta no Telegram (`TG_BOT_TOKEN`/`TG_CHAT_ID`, anti-spam de 6 h).
+- **Precisa do segredo `CF_ANALYTICS_TOKEN`** (Account Analytics: Read + D1: Edit) no Worker, em
+  produção **e** em staging. Sem ele é no-op silencioso (nunca parte a app).
+
+```
+GET  /api/v1/admin/quota          # último estado guardado (ADMIN)
+POST /api/v1/admin/quota/check    # força uma leitura agora (ADMIN)
+POST /api/v1/debug/quota/alert    # só staging: injeta um CRÍTICO falso (93%) — 404 em produção
+```
+
+### Automático — GitHub Actions (só manual)
+
+`.github/workflows/quota-watch.yml` fica para `workflow_dispatch`: corre de 3 em 3 horas *se* o
+agendador quiser, manda o resumo ao Telegram e **falha** a partir de CRÍTICO (o GitHub manda email).
 Segredos a criar no repositório (Settings → Secrets → Actions), uma vez:
 
 | Segredo | Para quê |
@@ -78,7 +105,8 @@ Segredos a criar no repositório (Settings → Secrets → Actions), uma vez:
 | `CLOUDFLARE_API_TOKEN` | ler Analytics (Account Analytics: Read) e escrever a flag (D1: Edit) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | alerta no telefone (opcional) |
 
-Sem `CLOUDFLARE_API_TOKEN` o workflow termina com um aviso e não falha.
+Sem `CLOUDFLARE_API_TOKEN` o workflow termina com um aviso e não falha. **Não contar com o horário**:
+disparar à mão (GitHub → Actions → "quota-watch (plano Free)" → *Run workflow*).
 
 ## 2.º anel — degradar antes do muro
 
@@ -261,3 +289,21 @@ o que subiu (o relatório mostra por script e por base, e a projecção hora a h
   + 1 da flag), ou seja +1 linha por minuto e por isolate em troca do travão.
 - Vigilante: relatório do dia 30/10 às 10:20Z — pedidos 4.2 k (4,2%), leituras 430 k (8,6%),
   escritas 518 (0,5%), DO 536 pedidos (0,5%); nível OK.
+
+### Vigilante dentro do Worker (30/10, versão staging `2e7ebf93`)
+
+- **Sem segredo** → `POST /admin/quota/check` devolve `{skipped:'sem CF_ANALYTICS_TOKEN'}` e não
+  escreve nada. **Segredo inválido** → `{error:"graphql: Authentication failed (status: 400)"}`,
+  `/health` continua 200 e **0 linhas escritas**. **Segredo real** → `{ok:true, level:0,
+  worst:{key:'reads', pct:0.1089}}` e `quota_watch` gravado.
+- **Alerta + corte** (`POST /debug/quota/alert`, leitura falsa de 93 %): nível 3, `alertTs` posto
+  (Telegram respondeu OK) e `quota_shed='2'` escrito em `system_flags`.
+- **Anel 2 ponta-a-ponta** (12 viagens sintéticas `zzq-pax-…`): com `quota_shed=2` o
+  `/trips/history` devolve **8**; com `quota_shed=0` devolve **12**. Staging a zero no fim
+  (0 viagens, 0 *flags*, restos `t=0/u=0`).
+- **Produção** (`ladiesgo-api` `6da29130`): `/health` 200 (`shed:0`); `/admin/quota` **401** sem
+  sessão e **200** com sessão (`configured:false` enquanto não houver `CF_ANALYTICS_TOKEN`,
+  `quota_shed:"0"`); `/debug/quota/alert` e `/debug/geo/stats` **404** com sessão de admin.
+- **Pendente (só o dono):** criar o API token (Account Analytics: Read + D1: Edit) e meter com
+  `wrangler secret put CF_ANALYTICS_TOKEN` (prod e `--env staging`). Sem ele o anel 1 dentro do
+  Worker não mede — e o `quota_shed` fica onde estiver (hoje `0`).

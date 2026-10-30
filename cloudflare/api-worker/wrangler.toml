@@ -6,6 +6,8 @@ compatibility_date = "2025-06-01"
 JWT_EXPIRES_IN = "7d"
 RATE_LIMIT_MAX = "100"
 RATE_LIMIT_WINDOW_MS = "60000"
+# Conta dona de tudo (Workers + D1 + DO). Usada pelo vigilante da quota.
+CF_ACCOUNT_ID = "016a8f9ed58a5cd10e9be697944905f0"
 
 # Limpeza diária de trip_points (retenção 30 dias). 03:17 UTC.
 [triggers]
@@ -85,6 +87,7 @@ JWT_EXPIRES_IN = "7d"
 ENVIRONMENT = "staging"
 RATE_LIMIT_MAX = "1000"
 RATE_LIMIT_WINDOW_MS = "60000"
+CF_ACCOUNT_ID = "016a8f9ed58a5cd10e9be697944905f0"
 
 # Staging não tem cron: o agendador é exercitado à mão por
 # POST /api/v1/debug/cron/notifications?key=<DEBUG_KEY>.
