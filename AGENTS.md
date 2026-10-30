@@ -593,7 +593,59 @@ Worker estático `6bcd9f6f…`).
 - **`walletData()`** — cache de 60 s + dedupe de pedido em curso (`__walletC`/`__walletP`).
 - **`paintWBadge`** 120 s → **600 s**; **`sharedNotifPoll`** 30 s → **60 s**.
 
-### 4. Segunda vaga (2026-10-30) — leituras por viagem
+### 4. Custo real por operação — medido (2026-10-30)
+Medição em produção com `meta.rows_read` (só `SELECT`) e em **staging** com `meta.rows_written`
+(viagem/post/tudo de teste apagado no fim). Serve para responder "o que gasta a D1" sem estimar.
+
+**Leituras por pedido** (`rows_read` real, ID real de produção):
+| Operação | Linhas lidas |
+|---|---|
+| `PUT /drivers/location` (cada fix de GPS) | **1** (`walletBlocked`) — e **0 escritas** |
+| `POST /drivers/position` (ping) | 1 (`walletBlocked`) + **1 escrita só na transição offline→online** |
+| `GET /trips/incoming` | **3** (gate do motorista 2 + lista 1) |
+| `GET /trips/:id` web / mobile | **4** / **3** (+97 do `AVG` só 1×/120 s) |
+| `GET /trips/active` passageira / motorista | **78** / **65** (lê todas as viagens dela: 76) |
+| `GET /trips/history` | **153** (30 resultados) |
+| `GET /ratings/pending` | **83** |
+| `GET /notifications` (lista+banner+unread) | **14** (13+1+**0**) |
+| `GET /notifications/unread-count` (60 s) | **0** |
+| `GET /drivers/nearby` (15 s) | **0–2** |
+| `GET /turn/ice` | **1** (cache 60 s no isolate) |
+| `GET /premium/reservations/mine` | **4** (3 + `premiumExpire` 1) |
+| `GET /api/places/search` (FTS) | **3** (`isptec`) a **2 399** (`kilamba`) |
+| `GET /api/places/search` **antes** (o `LIKE '%…%'`) | **23 332** em cada cache miss |
+| `GET /api/zone` | **0** (Nominatim + cache, não toca na D1) |
+
+Baseline de tráfego real (30/10 07:00Z, 98 pedidos): **741 linhas lidas = 7,6 linhas/pedido**. Ou seja,
+o uso normal da app gasta **~500–1 200 linhas/hora**; 5 M/dia daria para ~100× mais tráfego.
+
+**Escritas por operação** (`rows_written` real, medido em `ladiesgo-staging`):
+| Operação | Linhas escritas |
+|---|---|
+| `INSERT` viagem | **5** |
+| `UPDATE` status → `ACCEPTED` | **3** |
+| `UPDATE` status → `IN_PROGRESS` / `COMPLETED` | **2** / **2** |
+| `INSERT` `trip_points` (1 ponto, cada **180 s**) | **4** |
+| `INSERT` notificação | **4** |
+| `UPDATE` `isRead` (marcar lida) | **1** |
+| `INSERT` avaliação | **4** |
+| `INSERT` mensagem de chat | **3** |
+| `INSERT` `wallet_tx` | **3** |
+| `INSERT` `turn_credentials` (1/dia) | **3** |
+| GPS (position/location) | **0** |
+
+Uma viagem completa ≈ **12** (ciclo) + **20** (5 pontos) + **8** (2 avisos) + **4** (avaliação) + **3** (chat)
+≈ **45–55 linhas escritas**. Com o teto de 100 000 → **~2 000 viagens/dia só pelas escritas**, ou seja as
+escritas **não** são o gargalo do tráfego real (30/10: 400 linhas = 0,4 %).
+
+**Porque é que um import "não deixa escrever":** cada `INSERT` escreve a linha **mais uma entrada por índice**
+(`trips` tem 6 índices → 5–7 entradas por linha). Um import completo das 73 tabelas/queries custou
+**116 798 linhas escritas** (medido a 28/10), sozinho acima das 100 000/dia → **erro 7500**: todas as escritas
+devolvem 500 até às 00:00 UTC (as leituras continuam). Foi isso, e não a app, que bloqueou as escritas.
+`budget.ts` conta o `rows_written` real de cada statement (`db.ts` linha 80) e o `writeGuard()` corta os
+endpoints de **escrita opcional** com **503 + `Retry-After`** a partir de **90 000** (`BLOCK_RATIO` 0.9).
+
+### 5. Segunda vaga (2026-10-30) — leituras por viagem
 Relatório: `AUDITORIA-FREE-PLANO-2026-10-30.md`. **Em produção** (API `001d7f87`, Pages `09c545c0`,
 Worker estático `39c8b901`).
 
