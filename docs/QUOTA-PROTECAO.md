@@ -21,8 +21,9 @@ e o primeiro que dispara segura os outros.
    │ de nota/pesquisa/perfil, backoff dos 5 WS, `trip_points` 180 s        │
    └───────────────────────────────┬───────────────────────────────────────┘
    ┌─ 4. NÃO DEIXAR CORRER ────────▼───────────────────────────────────────┐
-   │ guarda de viagens esquecidas (1x/hora, minuto 7 do cron existente):   │
-   │ sem GPS/vida a mais → CANCELLED + aviso aos dois lados                │
+   │ guarda de viagens esquecidas (a cada minuto, no cron já existente):   │
+   │ REQUESTED 6 min sem ninguém aceitar; sem GPS/vida a mais → CANCELLED  │
+   │ + aviso aos dois lados                                                │
    └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -118,17 +119,19 @@ Durable Object por hora e por viagem aberta**. Fechar à 4.ª hora custa ~15 lin
 10 h abertas custa ~4 300 pedidos de DO + ~1 900 escritas — e do outro lado ficam duas pessoas a
 olhar para um mapa de uma corrida que já acabou.
 
-O guarda corre no **cron por minuto** que já existe (`* * * * *`), no **minuto 7** de cada hora:
-1 execução/hora, **0 pedidos extra** e nenhum Cron Trigger novo.
+O guarda corre no **cron por minuto** que já existe (`* * * * *`): 1 execução por minuto,
+**0 pedidos extra** e nenhum Cron Trigger novo. Corre a cada minuto — e não 1×/hora — porque a
+regra do `REQUESTED` é de **6 minutos**: uma passagem horária deixaria a passageira entre 6 e 66
+minutos presa na tela "A procurar motorista…".
 
-### Regras (guiadas pelo GPS, não pelo relógio)
+### Regras (o `REQUESTED` é guiado pelo relógio; os restantes pelo GPS)
 
 O sinal de vida é o último ponto em `trip_points` (1/180 s durante a viagem) **ou** a última
 transição de estado, o que for mais recente. `updatedAt` sozinho não serve: as ofertas refrescam-no.
 
 | Estado | Fecha quando |
 |---|---|
-| `REQUESTED` | aberta há > **30 min** (ninguém aceitou) |
+| `REQUESTED` | aberta há > **6 min** (ninguém aceitou) |
 | `ACCEPTED` | sem GPS há > **20 min** e vida ≥ **25 min** |
 | `DRIVER_ARRIVED` | sem GPS há > **30 min** e vida ≥ **40 min** |
 | `IN_PROGRESS` | sem GPS há > **45 min** e vida ≥ **60 min** |
@@ -137,10 +140,14 @@ transição de estado, o que for mais recente. `updatedAt` sozinho não serve: a
 
 - Nunca toca em `COMPLETED`/`CANCELLED`.
 - Viagem com `scheduledAt` no futuro é ignorada em **qualquer** estado (foi marcada, não esquecida).
-- Os pisos são generosos de propósito: fechar a viagem de quem está **dentro** do carro é pior do
+- O `REQUESTED` é o único guiado pelo relógio, e de propósito: a oferta roda a cada 30 s e o raio
+  já expandiu 3× para 12 km em 1 minuto; 6 minutos sem ninguém aceitar é tempo demais e quem está
+  à espera prefere pedir de novo (ou ver o aviso) a ficar 30 min num "a procurar".
+- Nos restantes os pisos são generosos: fechar a viagem de quem está **dentro** do carro é pior do
   que deixá-la aberta mais uma hora.
-- Ao fechar: `status='CANCELLED'`, `cancelledBy='system'`, `cancelReason` ≤ 80 caracteres, `UPDATE`
-  idempotente com `AND status = <estado lido>` (se a motorista aceitou entretanto, não fecha), aviso
+- Ao fechar: `status='CANCELLED'`, `cancelledBy='system'`, `cancelReason` ≤ 80 caracteres (no
+  `REQUESTED`: `Nenhuma motorista aceitou em 6 minutos.`), `UPDATE` idempotente com
+  `AND status = <estado lido>` (se a motorista aceitou entretanto, não fecha), aviso
   imediato ao `TripPush` (`by:'system'` → o cliente mostra "Viagem cancelada" + "Motivo: …"), push
   Expo aos dois lados e **um** `hubBroadcast` no fim (só se fechou algum `REQUESTED`).
 
@@ -166,10 +173,12 @@ npx wrangler@4.151.1 d1 execute ladiesgo --remote \
 
 - Execução sem candidatas: **5 linhas lidas, 0 escritas** (`INDEXED BY trips_status_idx`, plano
   `SEARCH t USING INDEX trips_status_idx (status=?)` + temp B-tree sobre 0–2 linhas), mais 1 linha da
-  flag. Ou seja ~6 linhas/hora — nada.
+  flag. Por minuto são ~6 linhas lidas (≈8 600/dia, 0,17 % do teto de leituras) e **0 escritas** —
+  o cron já corria ao minuto, por isso não acrescenta nenhum pedido ao Worker.
 - Cada fecho: **1 UPDATE** (~5 linhas escritas, o `trips` tem 6 índices) + 1 linha do log (3) +
-  `TripPush` + 2 pushes. Por isso **`STALE_MAX_PER_RUN = 4`**: o limite do Free é **50 subrequests
-  por invocação** e o mesmo cron ainda corre `premiumExpire` e `runNotificationSchedules`.
+  `TripPush` + 2 pushes. Por isso **`STALE_MAX_PER_RUN = 2`**: o limite do Free é **50 subrequests
+  por invocação** e o mesmo cron ainda corre `premiumExpire` e `runNotificationSchedules`; 2/min =
+  120/h, muito acima do que é preciso.
 
 ### Operação
 
@@ -185,11 +194,14 @@ curl -X POST "https://ladiesgo-api-staging.<sub>.workers.dev/api/v1/debug/cron/s
 `GET /admin/stale-guard` devolve `{mode, rules, active, candidates, log}`. O log fica 7 dias
 (limpo pelo `purgeTripPoints`). A rota de debug devolve **404** fora de staging.
 
-**Prova**: 46/46 em staging (`%TEMP%\opencode\t-stale-guard.mjs`) — 10 viagens sintéticas cobrindo
-todas as regras, `shadow` regista e não fecha, `on` fecha as 5 candidatas, `REQUESTED` agendada /
-`ACCEPTED` com GPS / `DRIVER_ARRIVED` com GPS / `IN_PROGRESS` nova / `COMPLETED` intactas, teto 4 h
-fecha mesmo com GPS, frame WS `cancelled` com `by:''` + motivo, 2.ª chamada `closed:0`, tokens Expo
-falsos podados, `404` sem key, `401` sem sessão, staging a zero no fim.
+**Prova**: **49/49** em staging (`%TEMP%\opencode\t-stale-guard.mjs`) — 11 viagens sintéticas cobrindo
+todas as regras, `rules.requestedMin = 6` e `rules.maxPerRun = 2`, `REQUESTED` de 2 min **intacta** e
+a de 12 min fechada com o motivo `Nenhuma motorista aceitou em 6 minutos.`, `shadow` regista e não
+fecha, `on` fecha as 5 candidatas, `REQUESTED` agendada / `ACCEPTED` com GPS / `DRIVER_ARRIVED` com
+GPS / `IN_PROGRESS` nova / `COMPLETED` intactas, teto 4 h fecha mesmo com GPS, frame WS `cancelled`
+com `by:''` + motivo, 2.ª chamada `closed:0`, tokens Expo falsos podados, `404` sem key, `401` sem
+sessão, staging a zero no fim. Produção (após deploy): `/health` 200, `mode:'on'`,
+`requestedMin:6`, `maxPerRun:2`, 0 viagens ativas e 0 candidatas.
 
 ## Regras de ouro (para humanos **e** agentes)
 

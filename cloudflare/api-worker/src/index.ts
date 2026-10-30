@@ -5316,16 +5316,19 @@ async function purgeTripPoints(env: any) {
 // último ponto em `trip_points` (1 ponto/180 s durante a viagem), não o `updatedAt`
 // — as ofertas e as leituras também refrescam o `updatedAt`.
 //
-//   REQUESTED                  aberta há >30 min .......................... fechar
+//   REQUESTED                  aberta há >6 min ........................... fechar
 //   ACCEPTED                   sem GPS há >20 min (piso 25 min) ........... fechar
 //   DRIVER_ARRIVED             sem GPS há >30 min (piso 40 min) ........... fechar
 //   IN_PROGRESS                sem GPS há >45 min (piso 60 min) ........... fechar
 //   REQUESTED/ACCEPTED/ARRIVED aberta há >4 h ............................. fechar
 //   IN_PROGRESS                aberta há >8 h ............................. fechar
 //
-// Os pisos e as folgas de GPS são generosos de propósito: fechar a viagem de uma
-// passageira que está DENTRO do carro é pior do que deixá-la aberta mais uma hora.
-// Um `IN_PROGRESS` só morre depois de 45 min sem uma única posição (ou 8 h de vida).
+// O `REQUESTED` é o único guiado pelo RELÓGIO, e de propósito: a passageira está
+// na tela "A procurar motorista…" e 6 min sem ninguém aceitar é tempo demais
+// (a oferta roda a cada 30 s e o raio já expandiu 3×). Os restantes são guiados
+// pelo GPS e com pisos generosos: fechar a viagem de quem está DENTRO do carro é
+// pior do que deixá-la aberta mais uma hora. Um `IN_PROGRESS` só morre depois de
+// 45 min sem uma única posição (ou 8 h de vida).
 //
 // MODOS (`system_flags.stale_guard`, 1 linha/execução):
 //   'off'    não faz nada;
@@ -5334,10 +5337,15 @@ async function purgeTripPoints(env: any) {
 //   'on'     fecha as viagens.
 // Nunca toca em COMPLETED/CANCELLED. Viagem com `scheduledAt` no futuro é ignorada
 // em QUALQUER estado (foi marcada para mais tarde, não está esquecida).
-// Até STALE_MAX_PER_RUN por execução: o limite do plano Free é 50 SUBREQUESTS por
-// invocação e cada fecho custa 8 (UPDATE + DO + 2 pushes + linha do log) — 4 por
-// hora deixam margem para o agendador de notificações que corre no mesmo cron.
-const STALE_REQ_MIN = 30;
+// Corre no cron POR MINUTO (o que já existe) e não 1×/hora: com a regra dos 6 min
+// uma passagem horária deixaria a passageira 6–66 min à espera. Custo de uma
+// passagem sem candidatas: 1 linha (flag) + 5 (scan) = 6 leituras, 0 escritas.
+// Até STALE_MAX_PER_RUN por passagem: o limite do plano Free é 50 SUBREQUESTS por
+// invocação e cada fecho custa ~6 (UPDATE + DO + 2 pushes + SELECT da motorista +
+// linha do log). 2 por minuto = 120/h (muito mais do que é preciso) e deixam
+// margem para `premiumExpire` e para o agendador de notificações, que correm na
+// MESMA invocação do cron.
+const STALE_REQ_MIN = 6;
 const STALE_NOGPS_ACCEPTED_MIN = 20;
 const STALE_NOGPS_ARRIVED_MIN = 30;
 const STALE_NOGPS_INPROGRESS_MIN = 45;
@@ -5346,7 +5354,7 @@ const STALE_MIN_LIFE_ARRIVED_MIN = 40;
 const STALE_MIN_LIFE_INPROGRESS_MIN = 60;
 const STALE_CAP_MIN = 240;
 const STALE_CAP_IN_PROGRESS_MIN = 480;
-const STALE_MAX_PER_RUN = 4;
+const STALE_MAX_PER_RUN = 2;
 const STALE_SCAN_LIMIT = 50;
 
 // Datas da D1 são TEXT ISO (`strftime('%Y-%m-%dT%H:%M:%fZ','now')`); aceitamos
@@ -5443,7 +5451,7 @@ async function sweepStaleTrips(env: any, opts?: { mode?: string; max?: number; d
     const idleMin = (now - lastSeen) / 60000;
     let reason = '';
     if (st === 'REQUESTED') {
-      if (ageMin >= STALE_REQ_MIN) reason = 'Nenhuma motorista aceitou a tempo.';
+      if (ageMin >= STALE_REQ_MIN) reason = `Nenhuma motorista aceitou em ${STALE_REQ_MIN} minutos.`;
     } else if (st === 'ACCEPTED') {
       if (ageMin >= STALE_MIN_LIFE_ACCEPTED_MIN && idleMin >= STALE_NOGPS_ACCEPTED_MIN) reason = 'Perdemos o sinal da motorista.';
     } else if (st === 'DRIVER_ARRIVED') {
@@ -5566,12 +5574,11 @@ export default {
     try { await premiumExpire(neon(env.DB), env, true, _ctx); } catch {}
     // Agendadas: em try/catch para um erro aqui não impedir o guarda (e vice-versa).
     try { await runNotificationSchedules(env); } catch {}
-    // Guarda de viagens esquecidas: 1x/hora na batida do minuto 7. Reutiliza o
-    // cron por minuto que já existe — não acrescenta Cron Trigger nem pedidos.
+    // Guarda de viagens esquecidas: corre a CADA MINUTO (o cron já bate ao
+    // minuto, logo 0 pedidos extra) porque a regra do `REQUESTED` é de 6 min —
+    // 1×/hora deixaria a passageira até 66 min na tela "A procurar motorista…".
     try {
-      if (event && event.cron === '* * * * *' && new Date(Number(event.scheduledTime) || Date.now()).getUTCMinutes() === 7) {
-        await sweepStaleTrips(env);
-      }
+      if (event && event.cron === '* * * * *') await sweepStaleTrips(env);
     } catch {}
     if (!event || event.cron === '17 3 * * *') {
       await purgeTripPoints(env);

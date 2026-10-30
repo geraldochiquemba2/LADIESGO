@@ -231,6 +231,11 @@ Sintoma: quem cancelava via a viagem terminar, mas o outro lado só descobria 10
   `myTripId`/`tripId` + `lg_mtrip`/`lg_trip`/`lg_org`/`lg_orgm`, remove marcadores, volta a `home`, mostra
   `showCancelBanner` com o texto por papel ("Corrida cancelada pela motorista/passageira" + "Motivo: …"), fecha o
   WS e faz `return` (não chama `pollTrip`/`pollMine`). Quem cancelou continua a ver "Cancelaste a corrida".
+- **Cancelamento pelo sistema (guarda, 2026-10-30):** o `by` chega como `''` (o DO normaliza `'system'`).
+  A condição passou de `if(_cbBy&&!_cbActor)` para `if(!_cbActor)` e o texto é
+  `_cbBy ? 'Corrida cancelada pela motorista/passageira' : 'Viagem cancelada'` — antes o `by:''` caía
+  fora do bloco e obrigava a um `pollTrip()` para mostrar o banner (1 pedido extra e o socket ficava aberto
+  até à resposta). O motivo continua no banner (`Motivo: …`).
 - Prova (2026-10-29, produção, Node com WS global + browser real em 2 origens):
   passageira→motorista 200/748 ms com frame em 770 ms; motorista→passageira 200/736 ms com frame em 737 ms.
   No browser: frame com `by`/`reason` em 484 ms (A) e 519 ms (B), banner correto no recetor e
@@ -772,27 +777,37 @@ Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
    `INDEXED BY trips_status_idx`, caches, backoff dos WS, `trip_points` 180 s).
 4. **Não deixar correr (guarda de viagens esquecidas):** migração **`0022_stale_guard.sql`** cria
    `stale_guard_log`. Uma viagem aberta sem ninguém custa **~600 pedidos de DO/hora**; o guarda
-   corre no **minuto 7** do cron por minuto que já existe (**1×/hora, 0 pedidos extra**) e fecha:
-   `REQUESTED` >30 min; `ACCEPTED` sem GPS >20 min (vida ≥25); `DRIVER_ARRIVED` sem GPS >30 min
+   corre **a cada minuto** no cron por minuto que já existe (**0 pedidos extra**) e fecha:
+   **`REQUESTED` >6 min** (a passageira está na tela "A procurar motorista…" e ninguém aceitou);
+   `ACCEPTED` sem GPS >20 min (vida ≥25); `DRIVER_ARRIVED` sem GPS >30 min
    (vida ≥40); `IN_PROGRESS` sem GPS >45 min (vida ≥60); teto 4 h (8 h em `IN_PROGRESS`).
    `scheduledAt` no futuro é ignorado em qualquer estado; `COMPLETED`/`CANCELLED` nunca.
+   O `REQUESTED` é o único guiado pelo **relógio** (os outros pelo GPS): a oferta roda a 30 s e o
+   raio já expandiu 3× para 12 km em 1 min, por isso 6 min é tempo demais. Correr 1×/hora deixaria
+   a passageira até 66 min à espera — daí o sweep ir no cron **por minuto**.
    - **Modos** (`system_flags.stale_guard`): ausente/`shadow` (**default**) só regista em
      `stale_guard_log`; `on` fecha; `off` nada. Erro de D1 a ler a flag → `off`.
-   - Ao fechar: `cancelledBy='system'` + `cancelReason` ≤80, `UPDATE` idempotente com
+   - Ao fechar: `cancelledBy='system'` + `cancelReason` ≤80 (`REQUESTED` →
+     `Nenhuma motorista aceitou em 6 minutos.`), `UPDATE` idempotente com
      `AND status = <estado lido>`, `notifyTripPush(...,{by:'system',reason})`, push Expo aos dois
-     lados, **1** `hubBroadcast` no fim. O cliente mostra "Viagem cancelada" + "Motivo: …".
-   - **`STALE_MAX_PER_RUN = 4`** porque o Free tem **50 subrequests por invocação** e o mesmo cron
-     corre `premiumExpire` + `runNotificationSchedules` (este em `try/catch`).
-   - Custo medido em produção: execução sem candidatas = **5 linhas lidas, 0 escritas**.
+     lados, **1** `hubBroadcast` no fim. O frame chega ao cliente com `by:''` e o handler do WS
+     (`if(!_cbActor)`) mostra **"Viagem cancelada"** + "Motivo: …" e fecha o socket **sem** pedido
+     extra (antes caía no `pollTrip`).
+   - **`STALE_MAX_PER_RUN = 2`** porque o Free tem **50 subrequests por invocação** e o mesmo cron
+     corre `premiumExpire` + `runNotificationSchedules` (este em `try/catch`). 2/min = 120/h.
+   - Custo medido em produção: execução sem candidatas = **5 linhas lidas, 0 escritas** (≈6/min com
+     a flag).
    - `GET /api/v1/admin/stale-guard` (admin, dry-run, `?max=` até 50) → `{mode,rules,active,
      candidates,log}`; `POST /api/v1/debug/cron/sweep` só staging + `DEBUG_KEY` (404 fora).
    - **Ligar só depois de rever o log:** 1 `INSERT … ON CONFLICT` em `system_flags`
      (`key='stale_guard', value='on'`), sem deploy.
-   - **ESTADO (2026-10-30, 11:55Z): LIGADO** — `stale_guard='on'` em produção, por decisão do dono.
+   - **ESTADO (2026-10-30): LIGADO** — `stale_guard='on'` em produção, por decisão do dono.
      Antes de ligar: 0 viagens ativas e 0 candidatas (nada fechou à primeira hora). Para parar:
      `value='off'` (ou `'shadow'` para voltar a auditar). Não é preciso deploy.
-   - Prova: **46/46** em staging (`%TEMP%\opencode\t-stale-guard.mjs`), staging a zero no fim;
-     produção: `/health` 200, `/admin/stale-guard` 401 sem sessão, modo `shadow`, 0 candidatas.
+   - Prova: **49/49** em staging (`%TEMP%\opencode\t-stale-guard.mjs`), staging a zero no fim
+     (11 viagens sintéticas; `REQUESTED` de 2 min intacta e de 12 min fechada com o motivo
+     `Nenhuma motorista aceitou em 6 minutos.`); produção após deploy (`ef0fc46e…`):
+     `/health` 200, `mode:'on'`, `requestedMin:6`, `maxPerRun:2`, 0 ativas, 0 candidatas.
 
 Regras (aplica-se a agentes): antes de qualquer operação que escreva >1 000 linhas correr o
 vigilante e usar `--guard writes=N`; **nunca** reimportar a base toda (117 k escritas = o teto
