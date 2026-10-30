@@ -1125,6 +1125,21 @@ Objectivo: fechar o "2×" da nona vaga com números medidos, não modelados. Rel
   escreve na DriverGeo.
 - `GEO_PUSH_MIN_MS` 20 s → **30 s** (= o intervalo de redesenho do recetor, `onGpsPush` 30 s ou 150 m;
   nenhum frame é descartado).
+- **Prova funcional do espelho 60 s + 40 m** (staging, `%TEMP%\opencode\t-mirror60b.mjs`, **6/6**, lido
+  por `GET /trips/:id` = o caminho da passageira): fix a 2,2 km espelha logo; outro fix a 15 s **não**
+  espelha; aos 62 s um fix a **22 m** do último espelhado **não** espelha (guarda de 40 m); aos 73 s um
+  fix a **222 m** volta a espelhar. Staging a zero no fim (1 admin, 0 trips, 0 drivers, 0 `trip_points`).
+- **Duas armadilhas ao testar isto** (custaram 2 ensaios falhados, não são bugs do espelho):
+  1. **O `geo:global` pode ser ejetado entre fixes** e o storage só persiste **1×/2 min** por motorista
+     (throttle `ps` em `setPos`). Um fix espelhado só em memória **desaparece** na ejeção e a posição
+     volta ao último valor persistido — parece "o espelho não funcionou". Num teste, manter o objeto
+     quente com um poll ao `/drivers/nearby` a cada 5 s. Em produção não se nota: o cliente manda fix
+     a cada ≤30 s (`live-geo`/`/drivers/position`), que volta a escrever a posição.
+  2. **O espelho vive dentro do bloco da motorista**, depois do gate `PUSH_GPS_MIN_MS = 10 s` — um fix
+     menos de 10 s após o anterior **sai antes** de chegar ao espelho. Ao testar, dar ≥11 s entre fixes.
+- A guarda de movimento compara com o **último ponto espelhado** (`att.lastMirrorLat/Lng`), não com o
+  último fix: por isso um fix bloqueado pelo teto de 60 s **não** "gasta" a guarda (é o que faz o F3
+  do ensaio passar).
 
 **3. `persistPoint` tinha um bug de raiz: o gate NUNCA valeu.**
 - O DO da viagem **hiberna e é recriado** entre fixes; `this.lastPointAt` voltava a 0 a cada arranque.
