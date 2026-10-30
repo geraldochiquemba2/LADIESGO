@@ -200,12 +200,13 @@ const RIDE_MULT: Record<string, number> = { ECONOMY: 1.0, COMFORT: 1.35, PREMIUM
 //      'all'   -> tudo, incluindo apagadas: SÓ para o histórico resolver o nome
 async function getCategories(sql: any, mode: 'app' | 'admin' | 'all' = 'app') {
   const rows = mode === 'all'
-    ? await sql`SELECT code, name, color, mult, active, deleted FROM ride_categories ORDER BY sort, code`
+    ? await sql`SELECT code, name, color, mult, active, deleted, "basePrice" FROM ride_categories ORDER BY sort, code`
     : mode === 'admin'
-      ? await sql`SELECT code, name, color, mult, active, deleted FROM ride_categories WHERE deleted = 0 ORDER BY sort, code`
-      : await sql`SELECT code, name, color, mult, active, deleted FROM ride_categories WHERE deleted = 0 AND active = 1 ORDER BY sort, code`;
+      ? await sql`SELECT code, name, color, mult, active, deleted, "basePrice" FROM ride_categories WHERE deleted = 0 ORDER BY sort, code`
+      : await sql`SELECT code, name, color, mult, active, deleted, "basePrice" FROM ride_categories WHERE deleted = 0 AND active = 1 ORDER BY sort, code`;
   return rows.map((r: any) => ({
     code: r.code, name: r.name, color: r.color, mult: Number(r.mult),
+    basePrice: Number(r.basePrice) || 0,
     active: Number(r.active) !== 0, deleted: Number(r.deleted) === 1,
   }));
 }
@@ -2852,9 +2853,9 @@ app.get('/api/v1/categories', async (c) => {
     return c.json({ categories: await getCategories(sql) });
   } catch {
     return c.json({ categories: [
-      { code: 'ECONOMY', name: 'Económico', color: '#61188E', mult: 1 },
-      { code: 'COMFORT', name: 'Conforto', color: '#ff5fc8', mult: 1.4 },
-      { code: 'PREMIUM', name: 'Família', color: '#5b21c9', mult: 1.65 },
+      { code: 'ECONOMY', name: 'Económico', color: '#61188E', mult: 1, basePrice: 1500 },
+      { code: 'COMFORT', name: 'Conforto', color: '#ff5fc8', mult: 1.4, basePrice: 2500 },
+      { code: 'PREMIUM', name: 'Família', color: '#5b21c9', mult: 1.65, basePrice: 3500 },
     ] });
   }
 });
@@ -2877,15 +2878,16 @@ app.post('/api/v1/admin/categories', adminMiddleware, async (c) => {
   const name = String(b.name || '').trim().slice(0, 30);
   const color = String(b.color || '').trim();
   const mult = Number(b.mult);
-  if (name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5) {
-    return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5).' }, 400);
+  const basePrice = Math.max(0, Math.round(Number(b.basePrice) || 0));
+  if (name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5 || basePrice > 100000) {
+    return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5, preço até 100000).' }, 400);
   }
   const code = name.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 16) || 'CAT';
   try {
     bustCatCache();
-    const rows = await sql`INSERT INTO ride_categories (code, name, color, mult, sort) VALUES (${code}, ${name}, ${color}, ${mult}, 99) RETURNING code, name, color, mult, active`;
+    const rows = await sql`INSERT INTO ride_categories (code, name, color, mult, sort, "basePrice") VALUES (${code}, ${name}, ${color}, ${mult}, 99, ${basePrice}) RETURNING code, name, color, mult, active, "basePrice"`;
     const r = rows[0];
-    return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult), active: true } });
+    return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult), basePrice: Number(r.basePrice) || 0, active: true } });
   } catch (e) {
     if (String(e).includes('duplicate') || String(e).includes('already exists')) {
       // Se já existiu e foi apagada, o code fica reservado de propósito: recriá-lo
@@ -2913,19 +2915,20 @@ app.put('/api/v1/admin/categories/:code', adminMiddleware, async (c) => {
   const name = b.name != null ? String(b.name).trim().slice(0, 30) : cur.name;
   const color = b.color != null ? String(b.color).trim() : cur.color;
   const mult = b.mult != null ? Number(b.mult) : cur.mult;
+  const basePrice = b.basePrice != null ? Math.max(0, Math.round(Number(b.basePrice) || 0)) : (Number(cur.basePrice) || 0);
   const active = b.active != null ? (b.active ? 1 : 0) : (cur.active ? 1 : 0);
-  if (name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5) {
-    return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5).' }, 400);
+  if (name.length < 2 || !/^#[0-9a-fA-F]{6}$/.test(color) || !Number.isFinite(mult) || mult < 0.5 || mult > 5 || basePrice > 100000) {
+    return c.json({ message: 'Dados inválidos (nome 2-30, cor #hex, mult 0.5-5, preço até 100000).' }, 400);
   }
   // Desativar a última deixaria a app sem escalões de preço.
   if (!active && !all.some((x: any) => x.code !== code && x.active && !x.deleted)) {
     return c.json({ message: 'Tem de ficar pelo menos uma categoria ativa.' }, 409);
   }
   bustCatCache();
-  const rows = await sql`UPDATE ride_categories SET name = ${name}, color = ${color}, mult = ${mult}, active = ${active} WHERE code = ${code} RETURNING code, name, color, mult, active`;
+  const rows = await sql`UPDATE ride_categories SET name = ${name}, color = ${color}, mult = ${mult}, active = ${active}, "basePrice" = ${basePrice} WHERE code = ${code} RETURNING code, name, color, mult, active, "basePrice"`;
   if (!rows.length) return c.json({ message: 'Categoria não encontrada.' }, 404);
   const r = rows[0];
-  return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult), active: Number(r.active) !== 0 } });
+  return c.json({ category: { code: r.code, name: r.name, color: r.color, mult: Number(r.mult), basePrice: Number(r.basePrice) || 0, active: Number(r.active) !== 0 } });
 });
 
 // DELETE /api/v1/admin/categories/:code — Apaga da app E do painel.
@@ -4490,14 +4493,22 @@ app.get('/api/v1/shared/departures/:id/payment', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const departureId = c.req.param('id');
   const user = c.get('user');
-  const dep = await sql`SELECT sd.iban, sd.express_code, sd.whatsapp_number, sd.driver_id, sd.price_per_seat, sd.expires_at AS dep_expires_at, sd.scheduled_at, u.name AS driver_name, u.phone AS driver_phone, u."profilePhoto" AS driver_photo FROM shared_departures sd JOIN drivers d ON d.id = sd.driver_id JOIN users u ON u.id = d."userId" WHERE sd.id = ${departureId} LIMIT 1`;
+  const dep = await sql`SELECT sd.iban, sd.express_code, sd.whatsapp_number, sd.driver_id, sd.price_per_seat, sd.expires_at AS dep_expires_at, sd.scheduled_at, sd.origin_lat, sd.origin_lng, sd.origin_name, sd.dest_lat, sd.dest_lng, sd.dest_name, u.name AS driver_name, u.phone AS driver_phone, u."profilePhoto" AS driver_photo FROM shared_departures sd JOIN drivers d ON d.id = sd.driver_id JOIN users u ON u.id = d."userId" WHERE sd.id = ${departureId} LIMIT 1`;
   if (!dep.length) return c.json({ message: 'Partida não encontrada.' }, 404);
   const r = dep[0];
   // Verificar se o usuário tem reserva nesta partida
   const res = await sql`SELECT id, status, position, expires_at FROM shared_reservations WHERE departure_id = ${departureId} AND passenger_id = ${user.sub} AND status IN ('pending','paid') ORDER BY created_at DESC LIMIT 1`;
   if (!res.length) return c.json({ message: 'Você não tem reserva nesta partida.' }, 403);
   const rr = res[0];
-  return c.json({ driver: { name: r.driver_name, phone: r.driver_phone, photo: photoUrl(c, r.driver_photo) }, iban: r.iban, expressCode: r.express_code, whatsappNumber: r.whatsapp_number, pricePerSeat: r.price_per_seat || 0, expiresAt: rr.expires_at || r.dep_expires_at, myPosition: rr.position, myStatus: rr.status, scheduledAt: r.scheduled_at });
+  return c.json({
+    driver: { name: r.driver_name, phone: r.driver_phone, photo: photoUrl(c, r.driver_photo) },
+    iban: r.iban, expressCode: r.express_code, whatsappNumber: r.whatsapp_number,
+    pricePerSeat: r.price_per_seat || 0, expiresAt: rr.expires_at || r.dep_expires_at,
+    myPosition: rr.position, myStatus: rr.status, scheduledAt: r.scheduled_at,
+    // Coordenadas para a passageira poder ver a rota da partida ("Ver rota").
+    originLat: r.origin_lat, originLng: r.origin_lng, originName: r.origin_name,
+    destLat: r.dest_lat, destLng: r.dest_lng, destName: r.dest_name,
+  });
 });
 
 // POST /api/v1/shared/departures/:id/approve — Motorista aprova passageira
@@ -4513,13 +4524,45 @@ app.post('/api/v1/shared/departures/:id/approve', requireAuth, async (c) => {
   if (!dep.length) return c.json({ message: 'Partida não encontrada.' }, 404);
   const didApr = await driverIdFor(sql, user.sub);
   if (dep[0].driver_id !== user.sub && dep[0].driver_id !== didApr) return c.json({ message: 'Apenas a motorista pode aprovar.' }, 403);
-  const res = await sql`SELECT id, status FROM shared_reservations WHERE id = ${passengerId} AND departure_id = ${departureId} AND status = 'pending' LIMIT 1`;
+  const res = await sql`SELECT id, status, passenger_id FROM shared_reservations WHERE id = ${passengerId} AND departure_id = ${departureId} AND status = 'pending' LIMIT 1`;
   if (!res.length) return c.json({ message: 'Reserva não encontrada ou já processada.' }, 404);
   const seat = await sql`UPDATE shared_departures SET seats_taken = seats_taken + 1, status = CASE WHEN seats_taken + 1 >= total_seats THEN 'full' ELSE status END WHERE id = ${departureId} AND seats_taken < total_seats RETURNING seats_taken, total_seats, status`;
   if (!seat.length) return c.json({ message: 'Partida não encontrada ou sem vagas.' }, 404);
   await sql`UPDATE shared_reservations SET status = 'approved', approved_at = NOW() WHERE id = ${passengerId}`;
   const newTaken = Number(seat[0].seats_taken);
   const newStatus = seat[0].status;
+  const totalSeats = Number(seat[0].total_seats);
+  const approvedUser = res[0].passenger_id ? String(res[0].passenger_id) : '';
+  const info = await sql`SELECT origin_name, dest_name FROM shared_departures WHERE id = ${departureId} LIMIT 1`;
+  const originName = info.length ? String((info[0] as any).origin_name || '') : '';
+  const destName = info.length ? String((info[0] as any).dest_name || 'o destino') : 'o destino';
+  const rotaTxt = (originName ? ' ' + originName : '') + ' \u2192 ' + destName;
+  // A passageira aprovada é avisada (notificação na app + push): antes só descobria ao reabrir a lista.
+  if (approvedUser) {
+    const t1 = '\ud83e\udd8b Lugar aprovado!';
+    const b1 = 'A motorista aprovou o teu lugar na partida' + rotaTxt + '. Bom viagem!';
+    try {
+      await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt") VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${approvedUser}, ${t1}, ${b1}, 'shared_approved', 0, ${departureId}, NOW())`;
+    } catch {}
+    notifPokeSoon(c, approvedUser);
+    try { c.executionCtx.waitUntil(pushToUser(sql, approvedUser, t1, b1, { type: 'shared_approved', departureId })); } catch {}
+  }
+  // Partida completa: quem ficou na fila recebe "Todos os lugares foram preenchidos".
+  if (newTaken >= totalSeats) {
+    const waiting = await sql`SELECT DISTINCT passenger_id FROM shared_reservations WHERE departure_id = ${departureId} AND status = 'pending'`;
+    const ids = (waiting || []).map((r: any) => String(r.passenger_id || '')).filter((x: string) => x && x !== approvedUser);
+    if (ids.length) {
+      const t2 = 'Todos os lugares foram preenchidos';
+      const b2 = 'A partida' + rotaTxt + ' já está completa. Fica atenta às próximas partidas.';
+      for (const uid of ids) {
+        try {
+          await sql`INSERT INTO notifications (id, "userId", title, body, type, "isRead", data, "createdAt") VALUES (${'nt_' + crypto.randomUUID().slice(0, 12)}, ${uid}, ${t2}, ${b2}, 'shared_full', 0, ${departureId}, NOW())`;
+        } catch {}
+      }
+      try { c.executionCtx.waitUntil(notifPokeMany(c.env, ids)); } catch {}
+      try { c.executionCtx.waitUntil(Promise.all(ids.map((uid: string) => pushToUser(sql, uid, t2, b2, { type: 'shared_full', departureId })))); } catch {}
+    }
+  }
   // Notificar próxima da fila (marcar próxima como ativa para pagar)
   const next = await sql`SELECT id, passenger_id FROM shared_reservations WHERE departure_id = ${departureId} AND status = 'pending' ORDER BY position ASC LIMIT 1`;
   return c.json({ ok: true, approved: passengerId, seatsTaken: newTaken, totalSeats: seat[0].total_seats, status: newStatus, nextInQueue: next.length ? next[0] : null });

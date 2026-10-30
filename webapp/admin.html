@@ -158,9 +158,9 @@ table{border:1px solid #f1edf9}
   <section id="sec-cats" style="display:none">
     <h2>Categorias de viatura</h2>
     <p class="mut">Nome e cor aparecem na app; o multiplicador define o preço (base × mult). O código é fixo.</p>
-    <table><thead><tr><th>Código</th><th>Nome</th><th>Cor</th><th>Mult.</th><th>Exemplo 1 km</th><th>Estado</th><th>Ações</th></tr></thead><tbody id="cats"><tr><td colspan="7" class="mut">A carregar…</td></tr></tbody></table>
+    <table><thead><tr><th>Código</th><th>Nome</th><th>Cor</th><th>Mult.</th><th>Preço/pessoa</th><th>Exemplo 1 km</th><th>Estado</th><th>Ações</th></tr></thead><tbody id="cats"><tr><td colspan="8" class="mut">A carregar…</td></tr></tbody></table>
     <h2 style="margin-top:16px">Adicionar categoria</h2>
-    <div class="filters"><input id="ncName" placeholder="Nome (ex: XL)" maxlength="30" autocomplete="off"><input type="color" id="ncColor" value="#61188E" style="width:52px;height:42px;border:1.5px solid var(--ln);border-radius:12px;padding:2px;background:#fff"><input id="ncMult" placeholder="Mult. (ex: 2)" inputmode="decimal" autocomplete="off" style="max-width:120px"><button class="chip" data-a="addcat" style="align-self:center">Adicionar</button></div>
+    <div class="filters"><input id="ncName" placeholder="Nome (ex: XL)" maxlength="30" autocomplete="off"><input type="color" id="ncColor" value="#61188E" style="width:52px;height:42px;border:1.5px solid var(--ln);border-radius:12px;padding:2px;background:#fff"><input id="ncMult" placeholder="Mult. (ex: 2)" inputmode="decimal" autocomplete="off" style="max-width:120px"><input id="ncPrice" placeholder="Preço/pessoa (Kz)" inputmode="numeric" autocomplete="off" style="max-width:170px"><button class="chip" data-a="addcat" style="align-self:center">Adicionar</button></div>
     <div class="mut" id="catMsg" style="margin:8px 0"></div>
   </section>
   <section id="sec-premium" style="display:none">
@@ -468,12 +468,12 @@ async function decide(id,ok){
 function catEx(mult){const m=parseFloat(String(mult).replace(',','.'));if(!Number.isFinite(m))return'—';return '≈ '+fmt(Math.max(900,Math.round((500+400*1+70*3)*m/100)*100))+' Kz';}
 function renderCats(){
   try{var _ae=document.activeElement;if(_ae&&/^(INPUT|SELECT|TEXTAREA)$/.test(_ae.tagName)&&$('cats')&&$('cats').contains(_ae))return;}catch(e){}
-  $('cats').innerHTML=CATS.map(x=>'<tr'+(x.active===false?' style="opacity:.6"':'')+'><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" oninput="document.getElementById(\'ce_'+esc(x.code||'')+'\').textContent=catEx(this.value)" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td class="mut" id="ce_'+esc(x.code||'')+'">'+catEx(x.mult)+'<br><span class="mut sm">1 km × '+esc(x.mult||'')+'</span></td><td>'+(x.active===false?'<span style="color:#d92d4b;font-weight:700">Inativa</span>':'<span style="color:#12a150;font-weight:700">Ativa</span>')+'</td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button> <button class="chip" data-a="togglecat" data-id="'+esc(x.code||'')+'" data-st="'+(x.active===false?'1':'0')+'">'+(x.active===false?'Ativar':'Desativar')+'</button> <button class="chip" data-a="delcat" data-id="'+esc(x.code||'')+'">Apagar</button></td></tr>').join('')||'<tr><td colspan="7" class="mut">Sem categorias.</td></tr>';
+  $('cats').innerHTML=CATS.map(x=>'<tr'+(x.active===false?' style="opacity:.6"':'')+'><td class="mono">'+esc(x.code||'')+'</td><td><input id="cn_'+esc(x.code||'')+'" value="'+esc(x.name||'')+'" maxlength="30" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:130px"></td><td><input type="color" id="cc_'+esc(x.code||'')+'" value="'+esc(x.color||'#61188E')+'" style="width:44px;height:34px;border:1.5px solid var(--ln);border-radius:10px;padding:2px;background:#fff"></td><td><input id="cm_'+esc(x.code||'')+'" value="'+esc(x.mult||'')+'" inputmode="decimal" oninput="document.getElementById(\'ce_'+esc(x.code||'')+'\').textContent=catEx(this.value)" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:64px"></td><td><input id="cp_'+esc(x.code||'')+'" value="'+esc(x.basePrice||0)+'" inputmode="numeric" style="border:1.5px solid var(--ln);border-radius:10px;padding:8px 10px;font:inherit;font-size:16px;width:90px"></td><td class="mut" id="ce_'+esc(x.code||'')+'">'+catEx(x.mult)+'<br><span class="mut sm">1 km × '+esc(x.mult||'')+'</span></td><td>'+(x.active===false?'<span style="color:#d92d4b;font-weight:700">Inativa</span>':'<span style="color:#12a150;font-weight:700">Ativa</span>')+'</td><td><button class="chip" data-a="savecat" data-id="'+esc(x.code||'')+'">Guardar</button> <button class="chip" data-a="togglecat" data-id="'+esc(x.code||'')+'" data-st="'+(x.active===false?'1':'0')+'">'+(x.active===false?'Ativar':'Desativar')+'</button> <button class="chip" data-a="delcat" data-id="'+esc(x.code||'')+'">Apagar</button></td></tr>').join('')||'<tr><td colspan="8" class="mut">Sem categorias.</td></tr>';
 }
 async function addCat(){
   const m=$('catMsg');if(m){m.textContent='';m.style.color='';}
   const gv=id=>{try{return ($(id)||{}).value||'';}catch(e){return'';}};
-  const body={name:gv('ncName').trim(),color:gv('ncColor'),mult:gv('ncMult').trim()==='' ? 1 : parseFloat(String(gv('ncMult')).replace(',','.'))};
+  const body={name:gv('ncName').trim(),color:gv('ncColor'),mult:gv('ncMult').trim()==='' ? 1 : parseFloat(String(gv('ncMult')).replace(',','.')),basePrice:parseInt(String(gv('ncPrice')).replace(/[^0-9]/g,''),10)||0};
   if(body.name.length<2){if(m)m.textContent='Escreve o nome.';return;}
   try{
     const r=await fetch('/api/v1/admin/categories',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body)});
@@ -486,7 +486,7 @@ async function addCat(){
 async function saveCat(code){
   const m=$('catMsg');if(m)m.textContent='';
   const gv=id=>{try{return ($(id)||{}).value||'';}catch(e){return'';}};
-  const body={name:gv('cn_'+code).trim(),color:gv('cc_'+code),mult:parseFloat(String(gv('cm_'+code)).replace(',','.'))};
+  const body={name:gv('cn_'+code).trim(),color:gv('cc_'+code),mult:parseFloat(String(gv('cm_'+code)).replace(',','.')),basePrice:parseInt(String(gv('cp_'+code)).replace(/[^0-9]/g,''),10)||0};
   if(body.name.length<2){if(m)m.textContent='Nome curto.';return;}
   try{
     const r=await fetch('/api/v1/admin/categories/'+encodeURIComponent(code),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ah()),body:JSON.stringify(body)});

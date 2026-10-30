@@ -406,6 +406,63 @@ reserva Premium, não o antigo `sharedPickBar`.
 - Provado no browser (`https://ladiesgo.pages.dev`): barra certa nos dois campos, ISPTEC escolhido e gravado
   em `_sharedOrigin` (lat/lng), cancelar devolve o formulário com o campo vazio, picker Premium intacto.
 
+## Marcador não salta ao escolher ponto (2026-10-30)
+Ao escolher um ponto, o alfinete saltava ~200–400 m e o nome mudava para a zona (`/api/zone`) em vez do sítio
+pesquisado. Quatro causas, todas corrigidas no cliente (`webapp/ladiesgo-home.html`):
+
+- **Geocoder tardio a sobrepor-se:** cada `/api/zone`/`/api/places/search` tem um contador de geração
+  (`_prmGeoGen`); respostas de pedidos antigos são descartadas. Antes, a resposta lenta de um arrasto anterior
+  escrevia por cima do ponto novo.
+- **`orgCenterOn()` animado:** centrar o mapa com animação fazia o `moveend` reescrever o ponto. Passou a
+  `orgCenterOn(animate:false)` no confirmar.
+- **Ciclo da motorista a perseguir o carro:** o loop de `follow` reposicionava o mapa por baixo do dedo.
+  Agora `pickerOpen()` bloqueia o follow enquanto o picker está aberto, e `_prmUserMove` desliga o follow
+  em `dragstart`/`zoomstart`.
+- **Âncora do alfinete:** usava o topo do ícone; passou a `pr.bottom` (o alfinete aponta ao pixel certo).
+
+Prova (browser real, `https://ladiesgo.pages.dev`, pesquisa "Patricio"): marcador a **0 m / 0 px** de deriva
+durante 14,5 s de observação, nome apresentado é o do sítio pesquisado (não o da zona).
+
+## "Ver rota" nas partidas partilhadas (2026-10-30)
+- No formulário "Anunciar Partida" e na lista de partidas há **"Ver rota"**; a passageira vê a rota no mapa
+  antes de reservar.
+- `GET /api/v1/shared/departures/:id/payment` passou a devolver **origem/destino com coordenadas e nomes**
+  (antes só o valor), que é o que `sharedViewRoute()` precisa para desenhar a linha.
+- A rota desenha-se com `L.polyline` no mesmo mapa do `/home` e fecha com o botão de voltar; não abre o picker.
+
+## Partida Compartilhada — avisos de aprovação e de partida cheia (2026-10-30)
+Antes, aprovar um lugar não avisava ninguém: a passageira só descobria por polling, e quem ficava na fila
+nunca sabia que a partida tinha enchido.
+
+- **`POST /api/v1/shared/departures/:id/approve`** grava uma linha em `notifications`
+  (`type='shared_approved'`, título `🦋 Lugar aprovado!`) para a passageira aprovada e faz `notifPoke()`
+  no `NotifHub` dela (frame `{t:'notif'}` no WS `/notifications/live`).
+- **Quando a aprovação enche a partida** (`status='full'`), todas as reservas ainda `pending`/na fila recebem
+  `type='shared_full'` com o título exato **"Todos os lugares foram preenchidos"**. A passageira que acabou de
+  ser aprovada é **excluída** (não lhe faz sentido avisar que encheu).
+- Os dois avisos levam `data = departureId`, para o toque abrir a partida certa.
+- Prova (produção, contas de teste `ZZ…` apagadas no fim, script `%TEMP%\opencode\t-shared-notifs.mjs`):
+  **12/12** — criar partida, A e B na fila, nenhum aviso antes, `/payment` com coordenadas, aprovar A,
+  partida `full`, A recebe `shared_approved`, B recebe `shared_full` com o título exato, A não recebe
+  `shared_full`.
+- **Ordem importa no teste:** `/payment` só responde com reserva **pendente** — chamá-lo depois de aprovar
+  devolve 404 `Você não tem reserva nesta partida.` (foi a única falha do 1.º ensaio, 11/12 → 12/12).
+
+## Categorias com preço por pessoa (2026-10-30)
+O preço das categorias deixou de ser só um multiplicador de distância: cada categoria tem **preço por pessoa**.
+
+- **Migração `0020_category_prices.sql`** acrescenta `ride_categories."basePrice"` e preenche:
+  `ECONOMY 1500`, `COMFORT 2500`, `PREMIUM 3500` (Kz). Aplicada em produção **e** em staging.
+- `getCategories()` devolve `basePrice` nos três modos (`app`/`admin`/`all`); `POST`/`PUT` de
+  `/api/v1/admin/categories` aceitam e devolvem `basePrice`.
+- **`basePrice = 0` significa "preço por distância"** — é o fallback antigo, não apagar.
+- **A app só mostra preço depois de haver destino.** Antes disso o cartão diz só `Económico`/`Conforto`/`Família`;
+  depois mostra `Económico · 1500 Kz / pessoa`, `Conforto · 2500 Kz`, `Família · 3500 Kz` e, no total,
+  `Preço por pessoa (Família): 3500 Kz · total 14 000 Kz` (formato `toLocaleString('pt-PT')`).
+- **`Kids!` foi apagada (`deleted=1`)** e **`PREMIUM` voltou como "Família"** (`active=1, sort=3`) — é a
+  categoria de 4 lugares; não reintroduzir `Kids!` sem o dono pedir.
+- **`webapp/admin.html`** tem a coluna **"Preço/pessoa"** para editar os valores.
+
 ## App Store — build e submissão (2026-10-29)
 **O build iOS não é EAS.** É GitHub Actions (`.github/workflows/build-ios.yml`): `expo prebuild` + Xcode +
 fastlane (`mobile/fastlane/Fastfile`, lane `release`), que faz cert/sigh/build e `upload_to_testflight`.
@@ -451,6 +508,41 @@ Estado das versões iOS:
 ## Limites do plano Free (decorar)
 - **Workers:** 100.000 pedidos/dia por **conta** (reset 00:00 UTC). Estourar → **erro 1027 / HTTP 429**; a conta inteira fica fora até reiniciar.
 - **D1:** 100.000 linhas **escritas**/dia e 5.000.000 lidas/dia por **conta** (reset 00:00 UTC). Estourar as escritas → **erro 7500**: TODA a escrita devolve **500** (criar utilizador, ficar online, pedidos, chamadas) até reiniciar; a **leitura continua a funcionar**. É por conta, não por base de dados — criar outra D1 **não** contorna.
+- **Durable Objects:** 100.000 pedidos/dia, 13.000 GB-s de duração/dia, 5 M leituras e 100.000 escritas de storage/dia.
+
+## Capacidade a 50.000 viagens/dia — auditoria (2026-10-30)
+Relatório completo: **`AUDITORIA-50K-VIAGENS.md`**. Veredicto: **no Free o sistema aguenta ≈330 viagens/dia**,
+não 50.000 (~150× menos). O que trava primeiro são os **pedidos ao Worker** e os **pedidos às DO** (~300 por
+viagem). No plano pago ($5/mês) 50.000/dia é viável: **≈$377/mês** hoje, **≈$126/mês** com as correções.
+
+**Medido (não estimado) com a GraphQL Analytics API:**
+
+| Métrica | 24 h | 48 h |
+|---|---|---|
+| Pedidos Worker | 38.513 | — |
+| D1 lidas / escritas | 3.556.334 (71% do teto) / 5.401 | — |
+| DO objetos / pedidos / duração | — | 140 / 6.684 / **9,63 GB-s** |
+
+- **A maior parte das leituras da D1 NÃO vem das viagens — vem da pesquisa de lugares.** Com ~20 viagens/dia
+  já se gastam 71% das 5 M leituras. A causa é o **3.º passo de `localPlaces()`**: quando FTS5 e o GLOB de
+  prefixo devolvem <8 linhas, cai num `LIKE '%termo%'` **sem índice** que lê as **23.332 linhas de `places`**
+  (horas de pico: 546 queries → 1,37 M linhas = 2.513 linhas/query). Cada prefixo de autocomplete é uma chave
+  de cache nova (`places:v13:<q>:<lat,lng>`), por isso escrever uma palavra pode gerar várias varreduras.
+- **Correção da estimativa inicial:** a duração real é **0,07 GB-s por viagem de teste** (1–3 GB-s modelado
+  para 15 min), **não 232 GB-s** — a Hibernation API é usada e o objeto só corre enquanto executa
+  (0,76 ms CPU/pedido). O que cresce mal é o **`geo:global`**: 15.200 linhas de storage lidas em 48 h com
+  apenas 2 motoristas.
+- **`requireAuth` não faz nenhuma query** (`index.ts:243-254`, só valida o JWT) — "remover o SELECT de auth"
+  vale **0%**. As leituras vêm dos endpoints.
+- **P0 (protege a quota atual):** matar o `LIKE '%…%'` de `places` (−96% leituras), throttle no emissor de
+  `geoPushToTrip`, backoff exponencial nos 5 WS (hoje 3 s fixos → 1.200 ligações/hora por socket em falha),
+  `trip_points` 60 s → 180 s, `GET /drivers/wallet/status` (61 → 1 linha).
+- **P1/P2:** tirar o `AVG(score) JOIN` do `webDriverInfo`, `refreshStatus` 15 → 60 s, `/api/v1/boot`
+  agregado, shard do `DriverGeo` por geohash, `NotifHub` por shard, `tripId` no payload do GPS.
+- Scripts de medição: `%TEMP%\opencode\cf-quota.mjs` (hoje/24 h), `cf-d1-hourly.mjs` (hora a hora),
+  `cf-do-real2.mjs` (DO por tipo de objeto). **O token OAuth do GraphQL expira**: se devolver
+  `{"code":10000,"message":"Authentication error"}`, correr `npx wrangler@4.151.1 whoami` para o renovar
+  (nunca `wrangler logout`). O limitador ("budget depleted") precisa de ~5 min.
 
 ## Incidentes de quota (2026-10-17) — NAO REPETIR
 Dois limites foram esgotados no mesmo dia, ambos pela via do assistente (nao por uso real).
