@@ -593,10 +593,9 @@ Worker estático `6bcd9f6f…`).
 - **`walletData()`** — cache de 60 s + dedupe de pedido em curso (`__walletC`/`__walletP`).
 - **`paintWBadge`** 120 s → **600 s**; **`sharedNotifPoll`** 30 s → **60 s**.
 
-### 4. Segunda vaga (2026-10-30, por deployar) — leituras por viagem
-Relatório: `AUDITORIA-FREE-PLANO-2026-10-30.md`. Tudo abaixo está **editado e validado**
-(`wrangler deploy --dry-run` 324,29 KiB; 22/22 blocos `<script>` do `/home` passam `vm.Script`) mas **ainda
-não foi publicado** — falta o deploy da API e do Pages/Worker estático.
+### 4. Segunda vaga (2026-10-30) — leituras por viagem
+Relatório: `AUDITORIA-FREE-PLANO-2026-10-30.md`. **Em produção** (API `001d7f87`, Pages `09c545c0`,
+Worker estático `39c8b901`).
 
 - **`GET /api/v1/trips/:id` passou a ler tudo numa query.** Antes o `?view=web` fazia 4 idas à D1
   (viagem + `webDriverInfo` + `users` da passageira + `catMaps`) e o polling mobile fazia 2. Agora é 1 query com
@@ -621,6 +620,22 @@ não foi publicado** — falta o deploy da API e do Pages/Worker estático.
   usavam chaves diferentes e pollavam em paralelo).
 - **`softResync`** usa as mesmas janelas dinâmicas e só chama `pollCars()` com a página visível.
 - **`__callLoop` ocioso com viagem: 2 000 → 10 000 ms** (o WS `calls` já cobre o sinal).
+- **Provado em produção (2026-10-30, só leituras):** `?view=web` devolve 200 com o contrato intacto
+  (`driver.rating` = **4,4**, valor real do `AVG` — antes do cache a query já corria, só custava 97 linhas);
+  mobile 200 com `passengerName`/`passengerPhone`/`passengerPhoto` e **zero** alias vazados
+  (`dName`/`dRating`/`pName` ausentes); `/drivers/wallet/status` 200 `{"blocked":false}`; `/drivers/wallet`
+  continua 200. `ladiesgo-home.html` servido pelo Pages **e** pelo Worker estático com o mesmo sha256 do ficheiro
+  local (437 987 bytes), sem vestígios de `'pt8'`.
+- **Medição de leituras:** `meta.rows_read` da D1 de produção, por statement e com `--remote` (só `SELECT`).
+
+### Armadilha ao medir SQL à mão: `::` não existe no D1
+O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
+por isso `SELECT ... ::float` **funciona na API** mas falha com
+`unrecognized token: ":" ... SQLITE_ERROR [code: 7500]` se copiares a query para `wrangler d1 execute`.
+Tirar o cast (ou usar `CAST(x AS REAL)`) para medir à mão. O `translate()` também trata `NOW()`,
+`date_trunc('month', NOW())`, `NOW() - INTERVAL '…'`, `to_timestamp(...)`, `ILIKE`, `gen_random_uuid()`,
+`TIMESTAMPTZ/JSONB/BOOLEAN/NUMERIC` e `ADD COLUMN IF NOT EXISTS`. **Não assumir que uma query "falha em
+produção" só porque falhou no `wrangler d1 execute`.**
 
 ### O que foi medido e NÃO se fez (para não repetir a análise)
 - **Migração `0021` (índices parciais + `DROP INDEX trips_pending_idx`): abandonada.** Contagens de produção:
@@ -691,6 +706,20 @@ de conta depois de um refresh restaura um token antigo e o login passa a dar
 `Failed to fetch auth token: 400 Bad Request` / `Not logged in` (aconteceu a 2026-10-17).
 Boas praticas: antes de trocar de conta copiar `default.toml` -> `default.<conta>account.toml`;
 em caso de duvida voltar a correr `wrangler login` (NAO `wrangler logout`).
+
+### Quando os tokens morrem todos (aconteceu a 2026-10-30)
+Sintoma: `wrangler d1 execute` devolve **`7403` "The given account is not valid"** com um `accountTag` que
+**não** é o `016a8f9e…`, e `whoami` dá *"Not logged in. Your auth token has expired and could not be refreshed"*.
+- O `accountTag` do erro vem do **token**, não de variáveis de ambiente (não há `CLOUDFLARE_ACCOUNT_ID` no
+  sistema) — se aparecer `5c66df87…` estás com um token de outra conta no `default.toml`.
+- Os três ficheiros (`default.toml`, `default.rerere670account.toml`, `default.fddsfds45account.toml`) estavam
+  **todos inválidos** (`9109 Invalid access token` ao chamar `/client/v4/accounts`). Confirmar com
+  `%TEMP%\opencode\wc-account.mjs <ficheiro>` (imprime a conta de cada token, sem publicar nada).
+- **Saída:** `npx wrangler login` (abre o browser; o dono autoriza) e **logo a seguir**
+  `Copy-Item default.toml default.rerere670account.toml` — sem isto o próximo refresh faz perder o token bom.
+  Guardar o antigo como `default.backup-<data>.toml` antes de substituir.
+- O refresh token é de uso único: se o `default.toml` for substituído por uma cópia velha, o refresh falha e é
+  preciso login outra vez (foi o que aconteceu).
 
 ## Estado de produção (2026-10-28)
 - **Tudo na conta `rerere…`.**
