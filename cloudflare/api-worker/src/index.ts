@@ -1072,13 +1072,16 @@ async function notifyTripPushGps(env: any, tripId: string, lat: number, lng: num
 // mexe-se no mapa da passageira com a app da motorista em segundo plano.
 // noTripPush=1 evita realimentação quando o espelho vem do próprio TripPush.
 //
-// THROTTLE NO EMISSOR (2026-10-30): o TripPush já descarta fixes a menos de
-// PUSH_GPS_MIN_MS (10 s), mas o pedido ao DO era feito na MESMA. Com GPS a 1
-// fix/2 s isso eram ~5 pedidos ao DO por fix útil. Aqui só se chama o DO se o
-// fix for realmente novo (>9 s), o que corta ~80% dos pedidos a `trip:<id>`
-// sem atrasar o mapa (9 s < 10 s do recetor, por isso o recetor nunca descarta
-// um fix que aqui passou). Cache por isolate, 1 entrada por motorista.
-const GEO_PUSH_MIN_MS = 9_000;
+// THROTTLE NO EMISSOR (2026-10-30, 2.ª versão — "para 2×"):
+//   antes: 1 pedido ao DO a cada 9 s FIXOS = ~100 por viagem de 15 min, quando o
+//   recetor (TripPush.onGpsPush) só redesenha a 150 m ou 30 s — >90% dos pedidos
+//   eram trabalho deitado fora. Agora o teto é 20 s fixos: 45 por viagem de
+//   15 min (−55%), e como 20 s < 30 s o redesenho do recetor continua a ter
+//   sempre um fix fresco. `activeTripForDriver` tem cache de 20 s, por isso
+//   não há leituras extra na D1.
+//   (Testado com atalho por movimento a 150 m: poupava só 21% em estrada, por
+//   isso foi retirado — a garantia de 2× vale para qualquer perfil de condução.)
+const GEO_PUSH_MIN_MS = 20_000;
 const geoPushAt = new Map<string, number>();
 async function geoPushToTrip(env: any, userId: string, lat: number, lng: number, noTripPush?: boolean, h?: number | null) {
   if (noTripPush) return;

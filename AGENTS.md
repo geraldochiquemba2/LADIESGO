@@ -520,9 +520,10 @@ Estado das versões iOS:
 - **Durable Objects:** 100.000 pedidos/dia, 13.000 GB-s de duração/dia, 5 M leituras e 100.000 escritas de storage/dia.
 
 ## Capacidade a 50.000 viagens/dia — auditoria (2026-10-30)
-Relatório completo: **`AUDITORIA-50K-VIAGENS.md`**. Veredicto: **no Free o sistema aguenta ≈330 viagens/dia**,
-não 50.000 (~150× menos). O que trava primeiro são os **pedidos ao Worker** e os **pedidos às DO** (~300 por
-viagem). No plano pago ($5/mês) 50.000/dia é viável: **≈$377/mês** hoje, **≈$126/mês** com as correções.
+Relatório completo: **`AUDITORIA-50K-VIAGENS.md`**. Veredicto original (antes dos cortes): **≈330 viagens/dia**
+no Free, não 50.000. O que trava primeiro são os **pedidos ao Worker** e os **pedidos às DO**.
+**Depois dos cortes das vagas 1–3 e 7–12 o valor medido é ≈2.000 viagens/dia** (ver "12. Nona vaga").
+No plano pago ($5/mês) 50.000/dia é viável: **≈$377/mês** hoje, **≈$126/mês** com as correções.
 
 **Medido (não estimado) com a GraphQL Analytics API:**
 
@@ -1029,6 +1030,75 @@ o mesmo token.
 > o `secret put` cria versão nova e a corrida seguinte volta a medir.
 > O workflow do GitHub fica só para `workflow_dispatch` manual.
 
+### 12. Nona vaga (2026-10-30) — "fazer para 2×" viagens/dia
+
+Pedido do dono: **dobrar a capacidade sem sair do Free**. O gargalo medido era o **nº de pedidos às
+Durable Objects por viagem** (≈120), e dentro dele **um só item**: o `geoPushToTrip` chamava o DO da
+viagem **a cada 9 s fixos** (1 pedido por fix, GPS a 1 fix/2 s) quando o recetor
+(`TripPush.onGpsPush`) só redesenha a **150 m ou 30 s** — >90 % dos pedidos eram deitados fora.
+
+**Corte 1 — servidor, `GEO_PUSH_MIN_MS` 9 000 → 20 000** (`cloudflare/api-worker/src/index.ts`).
+- Teto duro de **1 push/20 s por motorista** (`geoPushAt`, 1 entrada por motorista no isolate).
+- 20 s **< 30 s** do recetor ⇒ o redesenho continua a apanhar sempre um fix fresco; nada é descartado.
+- `activeTripForDriver` tem cache de 20 s ⇒ **0 leituras extra na D1**.
+- **Atalho por movimento testado e RECUSADO:** push aos 10 s se andou ≥150 m. No perfil "anda" dava
+  **94** pedidos/viagem contra **104** sem corte nenhum (−10 % apenas, porque o limite passava a ser o
+  movimento, não o relógio). Com o teto fixo são **45**. Ficou de fora para a garantia de 2× valer
+  para qualquer perfil de condução (parado, trânsito, estrada).
+
+**Corte 2 — cliente, janela de polling com WS aberto 60 s → 120 s** (`webapp/ladiesgo-home.html`).
+`liveSkipPoll(key, isOn, win)` com o WebSocket aberto passa a **120 000 ms** (6 × `liveWsOpen()?`,
+2 × `reqLiveOn()?`, 1 × `liveSkipPoll('nearby','nearbyWsOpen',120000)`). Sem WS as janelas ficam como
+estavam (8 s / 30 s) — o polling continua a ser rede de segurança com socket fechado.
+
+**A/B em staging** (`%TEMP%\opencode\ab-geopush.mjs <parado|anda> [s]`, 43 pings a 2 s durante 100 s,
+auto-limpa): nº de **frames `driver`** que a passageira recebe na WS da viagem, e intervalos entre eles.
+
+| Perfil | Antes (9 s) | Depois (20 s) | Intervalo entre frames |
+|---|---|---|---|
+| parado | 3 frames | **5 frames** | 37,4 s → **21,0 s** |
+| anda (54 km/h) | 8 frames | **5 frames** | 14,1 s → **21,4 s** |
+
+- **O mapa ficou *melhor* no carro parado** (37 s → 21 s): com pushes de 9 s o DO `trip:<id>` hibernava
+  e evacuava entre pushes, e o `onGpsPush` voltava a contar o intervalo de 30 s do zero a cada
+  arranque; com 20 s ele é acordado de forma regular e difunde sempre. Em estrada o intervalo passa de
+  14 s para 21 s (perda aceite: 21 s num mapa de táxi é indistinguível).
+- Pedidos ao DO: **≈11 → 5 por 105 s** no mesmo perfil (contado na GraphQL por objeto,
+  `%TEMP%\opencode\do-window.mjs <min>`).
+
+**Conta nova de capacidade (por viagem de 15 min):**
+
+| Recurso | Antes | Depois | Tecto Free/dia |
+|---|---|---|---|
+| Pedidos DO | ≈104 (100 pushes + 4) | **≈49** (45 + 4) | 100 000 → **≈2 040** |
+| Escritas D1 | ≈48 | ≈48 | 100 000 → **≈2 080** |
+| Pedidos Worker | ≈25–30 | **≈20** (polling 120 s) | 100 000 → **≈5 000** |
+
+⇒ **≈800 → ≈2 000 viagens/dia (2,5×)**, que cumpre o "2×" com folga. O que trava a seguir são as
+**escritas da D1** (≈48/viagem: ciclo 13 + 5 pontos × 4 + avisos + avaliação), não os pedidos.
+
+**Correcção de uma medição antiga (importante para não voltar a estimar mal):** uma `/home` de
+passageira **parada não gasta 119 pedidos/h**. Medido no browser (414×896, produção, sessão PASSENGER,
+120 s): **8 pedidos nos primeiros 3 s e ZERO nos 2 minutos seguintes**, + 2 WebSockets abertos
+(`notifications/live`, `drivers/nearby-live`). O piso noturno de ~120 pedidos/h é **cron (60/h) +
+trabalho de teste**, não o cliente. Todo o custo por utilizador está **dentro da viagem**.
+
+**Publicado (2026-10-30):**
+- Staging API `10c10c20-324d-4a50-a29e-1fdef6c0777a`; **produção API `9965322c-dfb8-4528-a68f-149913f203f6`**.
+- Pages `6da6bfc9.ladiesgo.pages.dev` (alias `ladiesgo.pages.dev`); Worker estático `ladiesgo`
+  versão `67524b5b-d293-4c53-b7a9-b4f4107854e6`.
+- `ladiesgo-home.html` (443 550 bytes, sha256 `9d6fb479…`) servido **byte a byte igual** pelo Pages e
+  pelo Worker estático; `poll120: 6`, `polls60: 0`.
+- Verificação em produção (só `GET`): `/health` 200 `shed:0`, `/boot` 200 com as 6 chaves + 3 categorias,
+  `/trips/active` 200 `null`, `/drivers/nearby` 200; browser `/home` (PASSENGER): **7 pedidos e depois 0
+  durante 27 s**, 2 WS, 12 tiles, **0 erros de consola**.
+- Base de produção no fim: **26 users / 121 trips / 1 motorista / 315 notifications** (conta de teste
+  `+244923000111` apagada, 1 escrita); staging a zero.
+
+> **Armadilha de deploy:** `webapp/wrangler.jsonc` diz `"name": "taxiapp-web"`. Correr
+> `wrangler deploy` dentro de `webapp/` **cria um Worker novo chamado `taxiapp-web`** (aconteceu e foi
+> apagado). O Worker estático tem de ser sempre `wrangler deploy --name ladiesgo`.
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -1088,8 +1158,12 @@ Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da Gr
   2,4–2,9 k pedidos por dia. **O cron por minuto NÃO é problema** — a ideia antiga de "65 linhas/min ⇒ 93,6 k/dia"
   vinha de uma janela com trabalho de teste a decorrer.
 - **Depois do corte (11:00/12:00/13:00Z): 502 · 126 · 631 linhas por hora** → **~10 k/dia (0,2 %)** de uso real.
-  O modelo do cliente bate certo com o medido: **parada no `/home` ≈ 119 pedidos/h**, e o piso noturno medido é
+  O modelo do cliente batia com o medido: **parada no `/home` ≈ 119 pedidos/h**, e o piso noturno medido era
   118–120/h (cron 60/h + um cliente).
+  - **CORRECÇÃO (2026-10-30, medida no browser):** esse "119/h" vinha de uma janela com trabalho de teste. Uma
+    `/home` parada faz **8 pedidos nos primeiros 3 s e ZERO depois** (+2 WebSockets abertos, que contam 1 pedido
+    cada) — 0 pedidos/h em repouso. O piso noturno de ~120/h é **cron 60/h + testes**, não o cliente. O custo
+    por utilizador está **dentro da viagem** (ver "12. Nona vaga").
 - **A 3,56 M/dia de 29/10 tinha uma parte grande de auditoria do próprio assistente** (15:00–20:00Z = 2,64 M em
   6 h com 3 000 pedidos/h). Ao ler a quota, separar sempre uso real de trabalho de teste.
 - **O que sobra por operação** (`meta.rows_read`, medido): `places/search` 3→2 399 · `/trips/history` 153 →
