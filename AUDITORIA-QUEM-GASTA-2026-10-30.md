@@ -107,7 +107,7 @@ Piso medido: **~100–120 pedidos/h** com a app fechada (cron 60/h + um cliente)
 
 | # | Origem | Pedidos/h | Corte |
 |---|---|---|---|
-| 1 | `GET /drivers/nearby` — `softResync` a cada 32 s **sem** `liveSkipPoll` | **112** | respeitar o WS `nearby-live` → **0** |
+| 1 | `GET /drivers/nearby` — `softResync` a cada 32 s **sem** `liveSkipPoll` | **112** | **FEITO 30/10:** respeita o WS `nearby-live` (1×/60 s) → **0** |
 | 2 | `GET /trips/incoming` — `pollInc` 4 s → 60 s com WS | 60 (900 sem WS) | fallback ≥30 s |
 | 3 | `GET /trips/:id?view=web` — `pollTrip` 8 s → 60 s com WS | 60 (450 sem WS) | manter |
 | 4 | `GET /route` — 2 pernas com gate de 10 s | até 720 | gate 30–60 s / só com desvio >50 m |
@@ -160,7 +160,7 @@ Duração: 0,07 GB-s por viagem (Hibernation API a funcionar) — 26 h deram 0,6
 | **P3** | `webDriverInfo`: TTL 120 s → 600 s **+ tirar o `JOIN`** (ver nota abaixo) | 97 → **18** linhas e 30/h → 6/h | nota da motorista até 10 min desactualizada (o `POST /ratings` invalida a cache) |
 | **P4** | `/ratings/pending`: `INDEXED BY trips_passenger_idx`/`_driver_idx` por papel | 83 → 0–1 | nenhum (mesma resposta) |
 | **P5** | `/trips/history`: um só `JOIN` | 153 → ~60 | nenhum |
-| **P6** | `softResync` respeitar `liveSkipPoll('nearby')` | −112 pedidos/h por app de passageira aberta | mapa de carros actualiza pelo WS (já existe) |
+| **P6** | `softResync` respeitar `liveSkipPoll('nearby')` | −112 pedidos/h por app de passageira aberta | mapa de carros actualiza pelo WS (já existe) — **FEITO 30/10** |
 | **P7** | `DriverGeo.load`: chave única `snapshot` em vez de `list({prefix:'p:'})`, e apagar chaves com `ts` > 18 min | custo deixa de crescer com o nº de motoristas | 1 migração de storage no DO (inócuo; o `pos` repovoa no 1.º ping) |
 
 **Ordem recomendada:** P1 (o único sítio que ainda lê milhares) → P3+P4+P5 (uma tarde, tudo de resposta idêntica) → P6 (pedidos) → P7 (só quando houver mais de ~20 motoristas).
@@ -170,7 +170,20 @@ Duração: 0,07 GB-s por viagem (Hibernation API a funcionar) — 26 h deram 0,6
 > `ratings_rated_idx`), **97 → 18 linhas**; TTL 600 s. `GET /ratings/mine` passou à mesma fonte
 > (**131 → 35 linhas**). Detalhe e provas em `AGENTS.md` → "8. Quinta vaga".
 > **P4/P5 FEITOS** na migração `0023`. **P1 medido e recusado** (perde qualidade nas pesquisas mais
-> usadas de Luanda por ~0,3 % de quota). **Resta o P6** (pedidos, 1 linha no cliente) e o P7.
+> usadas de Luanda por ~0,3 % de quota). **Resta só o P7** (snapshot do `DriverGeo`, que só faz
+> sentido acima de ~20 motoristas).
+>
+> **P6 FEITO a 30/10** — e com ele a **9.ª vaga** de cortes, que ataca o recurso mais perto do tecto
+> em uso real: os **pedidos ao Worker**.
+> - `GET /api/v1/boot` (novo) junta perfil + bloqueio da carteira + categorias + não lidas + banner
+>   + viagem ativa: **5–7 pedidos → 1**, por +5 linhas lidas na D1 (18 no total, medido em produção).
+> - `Cache-Control: public, max-age=300` em `/categories` e `private, max-age=300` em `/turn/ice`
+>   (provado no browser: 1517 ms com cache-bust vs **2 ms** sem — a 2.ª não chega ao Worker).
+> - Cliente: 60 s de tréguas no banner e nas não lidas depois do `/boot`, e `__adoptActive` aceita a
+>   viagem ativa do próprio `/boot`. Com o `/boot` abortado cai tudo nos endpoints antigos (provado).
+> - O `softResync` deixou de repetir o `/drivers/nearby` com o WS de carros aberto (era o P6).
+> - Medido no browser (414×896, 15 s de `/home`): **7 pedidos `/api/*`** com `/boot` vs **11** sem.
+>   Detalhe e provas em `AGENTS.md` → "9. Sexta vaga".
 
 
 ---

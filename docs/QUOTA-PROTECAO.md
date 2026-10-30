@@ -110,8 +110,14 @@ As escritas opcionais continuam a ser travadas localmente pelo `budget.ts` (`wri
   `webDriverInfo` sem query quando há `LEFT JOIN`. `GET /ratings/mine` passou a usar a mesma
   fonte: **131 → 35 linhas**.
 - `GET /trips/active` com `INDEXED BY trips_status_idx` (78 → 5 linhas).
+- **Arranque num só pedido:** `GET /api/v1/boot` devolve perfil + bloqueio da carteira +
+  categorias + não lidas + banner + viagem ativa (5–7 pedidos → **1**, +5 linhas lidas).
+  `Cache-Control: public, max-age=300` em `/categories` e `private, max-age=300` em `/turn/ice`
+  (o browser serve-os sem tocar no Worker). Se o `/boot` falhar, o cliente volta aos endpoints
+  antigos (`__bootFallback`).
 - Polling só como rede de segurança com o WebSocket aberto (60 s), backoff exponencial nos 5
-  WebSockets, `trip_points` a cada 180 s, `geoPushToTrip` com throttle de 9 s.
+  WebSockets, `trip_points` a cada 180 s, `geoPushToTrip` com throttle de 9 s. O `softResync`
+  deixou de repetir o `/drivers/nearby` com o WS de carros aberto (era ~112 pedidos/h).
 
 ## 4.º anel — guarda de viagens esquecidas (2026-10-30)
 

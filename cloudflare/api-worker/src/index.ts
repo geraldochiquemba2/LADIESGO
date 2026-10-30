@@ -969,25 +969,30 @@ app.get('/api/v1/trips/history', requireAuth, async (c) => {
     return c.json({ trips: [] });
   }
 });
-app.get('/api/v1/trips/active', requireAuth, async (c) => {
-  const sql = neon(c.env.DB);
-  const user = c.get('user');
-  // QUOTA D1: dois lookups indexados (passageira / motorista) em vez de um
-  // OR sobre JOIN que forçava varrimento sem índice. Mesma forma e mesmo
-  // "trip ativa mais recente" do que antes.
-  // QUOTA D1 (2026-10-30): INDEXED BY trips_status_idx força o índice de estado.
-  // Sem ele o SQLite usa trips_passenger_idx/trips_driver_idx e lê TODAS as viagens
-  // históricas da pessoa para achar a ativa (medido em produção: 78 e 65 linhas).
-  // Com ele o custo passa a depender só das viagens em estado ativo (5 e 6 linhas),
-  // com resultados idênticos e ZERO escritas extra (ao contrário de um índice
-  // parcial novo, que custava +6 escritas por viagem). `trips_status_idx` NÃO pode
-  // ser apagado (migração 0012) — o INDEXED BY falha com erro se ele não existir.
-  const asPax = await sql`SELECT t.* FROM trips t INDEXED BY trips_status_idx WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND t."passengerId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
-  const asDrv = await sql`SELECT t.* FROM trips t INDEXED BY trips_status_idx JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND d."userId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
+// Viagem ativa da pessoa (passageira OU motorista), a mais recente das duas.
+// QUOTA D1: dois lookups indexados (passageira / motorista) em vez de um
+// OR sobre JOIN que forçava varrimento sem índice. Mesma forma e mesmo
+// "trip ativa mais recente" do que antes.
+// QUOTA D1 (2026-10-30): INDEXED BY trips_status_idx força o índice de estado.
+// Sem ele o SQLite usa trips_passenger_idx/trips_driver_idx e lê TODAS as viagens
+// históricas da pessoa para achar a ativa (medido em produção: 78 e 65 linhas).
+// Com ele o custo passa a depender só das viagens em estado ativo (5 e 6 linhas),
+// com resultados idênticos e ZERO escritas extra (ao contrário de um índice
+// parcial novo, que custava +6 escritas por viagem). `trips_status_idx` NÃO pode
+// ser apagado (migração 0012) — o INDEXED BY falha com erro se ele não existir.
+// Extraído para o /api/v1/boot usar exactamente a mesma consulta.
+async function activeTripRow(sql: any, sub: string) {
+  const asPax = await sql`SELECT t.* FROM trips t INDEXED BY trips_status_idx WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND t."passengerId" = ${sub} ORDER BY t."createdAt" DESC LIMIT 1`;
+  const asDrv = await sql`SELECT t.* FROM trips t INDEXED BY trips_status_idx JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND d."userId" = ${sub} ORDER BY t."createdAt" DESC LIMIT 1`;
   const a = asPax[0] || null, b = asDrv[0] || null;
   const ta = a && a.createdAt ? new Date(a.createdAt).getTime() : 0;
   const tb = b && b.createdAt ? new Date(b.createdAt).getTime() : 0;
-  return c.json(ta >= tb ? a : b);
+  return ta >= tb ? a : b;
+}
+app.get('/api/v1/trips/active', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  return c.json(await activeTripRow(sql, user.sub));
 });
 // ─── LIVE PUSH BASE (WS hibernável, 1 DO por viagem; polling REST continua) ───
 // GET /api/v1/trips/:id/live → upgrade WS para o TripPush do tripId.
@@ -1590,6 +1595,43 @@ app.put('/api/v1/notifications/read-all', requireAuth, async (c) => {
   await sql`UPDATE notifications SET "isRead" = 1 WHERE "userId" = ${user.sub} AND "isRead" = 0`;
   return c.json({ success: true });
 });
+// ─── BOOT: arranque agregado da app (QUOTA 2026-10-30) ─────────────────────
+// A app abria com 5–7 pedidos ao Worker (perfil, categorias, não lidas, banner,
+// bloqueio da carteira, viagem ativa). Este devolve tudo numa só resposta:
+// −4 a −6 pedidos por abertura. Cada peça tem o seu try/catch — uma falha nunca
+// impede o arranque, o campo vem com o valor por omissão do endpoint individual
+// e o cliente usa os endpoints antigos como fallback (builds antigos também).
+// Custo D1 medido em produção (meta.rows_read, viagem a 0): 1 linha (perfil) +
+// 5 (categorias) + 0 (não lidas) + 1 (banner) + 5–6 (viagem ativa, INDEXED BY
+// trips_status_idx) = 18 linhas para UM pedido ao Worker — os mesmos dados que
+// antes custavam 6 pedidos (≈13 linhas). Troca: −5 pedidos por +5 linhas lidas.
+app.get('/api/v1/boot', requireAuth, async (c) => {
+  const sql = neon(c.env.DB);
+  const user = c.get('user');
+  const out: any = { user: null, walletBlocked: false, categories: [], unread: 0, banner: null, activeTrip: null };
+  // Perfil + bloqueio da carteira na MESMA linha (poupa o /drivers/wallet/status).
+  try {
+    const rows = await sql`SELECT id, phone, name, email, role, "profilePhoto", "isVerified", "mustChangePassword", "walletBalance", "walletBlocked" FROM users WHERE id = ${user.sub} LIMIT 1`;
+    if (rows.length) {
+      out.user = { ...rows[0], profilePhoto: photoUrl(c, rows[0].profilePhoto) };
+      out.walletBlocked = !!Number((rows[0] as any).walletBlocked || 0);
+    }
+  } catch {}
+  try { out.categories = await getCategories(sql); } catch {}
+  try {
+    const n = await sql`SELECT COUNT(*)::int AS n FROM notifications WHERE "userId" = ${user.sub} AND "isRead" = 0`;
+    out.unread = Number((n[0] as any)?.n || 0);
+  } catch {}
+  try {
+    const rows = await sql`SELECT id, title, body, image, "createdAt" FROM notifications
+      WHERE "userId" = ${user.sub} AND type = 'admin' AND image IS NOT NULL AND image <> ''
+      ORDER BY "createdAt" DESC LIMIT 1`;
+    const r: any = (rows || [])[0];
+    if (r) out.banner = { id: r.id, title: r.title || '', body: r.body || '', image: notifImageUrl(c, r.image), createdAt: r.createdAt };
+  } catch {}
+  try { out.activeTrip = (await activeTripRow(sql, user.sub)) || null; } catch {}
+  return c.json(out);
+});
 app.post('/api/v1/payments/create-intent', requireAuth, async (c) => c.json({ clientSecret: null, cash: true }));
 app.post('/api/v1/payments/confirm', requireAuth, async (c) => c.json({ success: true }));
 
@@ -1733,6 +1775,10 @@ app.get('/api/v1/turn/ice', requireAuth, async (c) => {
   const domain = meteredHost(c.env);
   const secret = String(c.env.METERED_SECRET_KEY || '').trim();
   const staticServers = staticIce(c.env.METERED_ICE_JSON);
+  // CACHE (2026-10-30): a credencial vive 48 h; 5 min de cache no browser evita
+  // repetir o pedido em cada chamada da mesma sessão. `private` — nunca partilhar
+  // credenciais entre utilizadores por cache intermédia.
+  const hdr = { 'Cache-Control': 'private, max-age=300' };
 
   // 1) Credencial rotativa (48 h, renovada a cada 24 h) — Metered Secret Key.
   if (domain && secret) {
@@ -1744,7 +1790,7 @@ app.get('/api/v1/turn/ice', requireAuth, async (c) => {
       }
       if (key) {
         const servers = await meteredIce(c.env, key);
-        if (servers) return c.json({ iceServers: servers, demo: false, source: 'rotating' });
+        if (servers) return c.json({ iceServers: servers, demo: false, source: 'rotating' }, 200, hdr);
       }
     } catch { /* cai para os caminhos seguintes */ }
   }
@@ -1753,12 +1799,12 @@ app.get('/api/v1/turn/ice', requireAuth, async (c) => {
   const staticKey = String(c.env.METERED_TURN_APIKEY || '').trim();
   if (domain && staticKey) {
     const servers = await meteredIce(c.env, staticKey);
-    if (servers) return c.json({ iceServers: servers, demo: false });
+    if (servers) return c.json({ iceServers: servers, demo: false }, 200, hdr);
   }
 
   // 3) Lista estática em JSON / 4) OpenRelay público.
-  if (staticServers) return c.json({ iceServers: staticServers, demo: false, source: 'static' });
-  return c.json({ iceServers: FALLBACK_ICE, demo: true });
+  if (staticServers) return c.json({ iceServers: staticServers, demo: false, source: 'static' }, 200, hdr);
+  return c.json({ iceServers: FALLBACK_ICE, demo: true }, 200, hdr);
 });
 app.get('/api/v1/turn/quota', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
@@ -2948,15 +2994,19 @@ app.post('/api/v1/admin/drivers/create', adminMiddleware, async (c) => {
 // GET /api/v1/categories — Lista pública (a home usa para nomes/cores/preços)
 // Devolve só as ativas: desativar ou apagar tira a categoria da app.
 app.get('/api/v1/categories', async (c) => {
+  // CACHE (2026-10-30): lista gerida no admin, muda raramente. 5 min de cache no
+  // browser tira este pedido de todas as aberturas dentro desse período (a home
+  // chama /categories a cada carga). O painel usa /admin/categories (sem cache).
+  const hdr = { 'Cache-Control': 'public, max-age=300' };
   try {
     const sql = neon(c.env.DB);
-    return c.json({ categories: await getCategories(sql) });
+    return c.json({ categories: await getCategories(sql) }, 200, hdr);
   } catch {
     return c.json({ categories: [
       { code: 'ECONOMY', name: 'Económico', color: '#61188E', mult: 1, basePrice: 1500 },
       { code: 'COMFORT', name: 'Conforto', color: '#ff5fc8', mult: 1.4, basePrice: 2500 },
       { code: 'PREMIUM', name: 'Família', color: '#5b21c9', mult: 1.65, basePrice: 3500 },
-    ] });
+    ] }, 200, hdr);
   }
 });
 

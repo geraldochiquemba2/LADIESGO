@@ -840,6 +840,79 @@ nenhuma das duas versões conta.
 `/trips/:id?view=web` devolve `driver.rating = 4,4` (exactamente o valor de antes), `totalTrips 17`,
 `/ratings/mine` 200, sem sessão 401, `/trips/history` 200 com 30, `/trips/active` 200 `null`.
 
+### 9. Sexta vaga (2026-10-30) — `/boot` agregado, cache de 5 min e P6
+
+Objectivo: cortar **pedidos ao Worker** no arranque (o recurso mais próximo do tecto em produção
+real). Não se muda nada de esquema nem se escreve mais na D1.
+
+**1. `GET /api/v1/boot` (novo, autenticado).** Devolve numa só resposta o que a app pedia em 5–7
+pedidos: `user` (perfil + `walletBalance`), `walletBlocked` (na **mesma** linha do perfil),
+`categories`, `unread`, `banner` (último aviso admin **com imagem**) e `activeTrip`. Cada peça tem o
+seu `try/catch` — uma falha nunca impede o arranque — e o cliente usa os endpoints antigos como
+fallback (builds antigos também).
+- Custo medido em produção (`meta.rows_read`, sem viagem ativa): `1` (perfil) + `5` (categorias) +
+  `0` (não lidas) + `1` (banner) + `5–6` (viagem ativa com `INDEXED BY trips_status_idx`) =
+  **18 linhas lidas** para **1** pedido, contra ≈13 linhas em 6 pedidos. Troca de propósito:
+  **−5 pedidos por +5 linhas**, ao câmbio do plano (50 leituras = 1 escrita).
+- `activeTripRow(sql, sub)` foi extraída para `/trips/active` e `/boot` usarem **a mesma** query
+  (`INDEXED BY trips_status_idx`), com a mesma resposta (`null` ou objeto).
+
+**2. `Cache-Control` no que não muda ao segundo.** `GET /api/v1/categories` →
+`public, max-age=300`; `GET /api/v1/turn/ice` → `private, max-age=300` (nos 4 caminhos: rotativa,
+estática, `METERED_ICE_JSON`, fallback). Provado no browser: `/categories` com `?cb=` (cache-bust)
+**1517 ms** vs `/categories` normal **2 ms** — a 2.ª não chega ao Worker. As credenciais TURN
+duram 48 h, por isso 5 min de cache é irrelevante em segurança (e `private` impede caches
+partilhados).
+
+**3. P6 — `softResync` deixa de duplicar o `/drivers/nearby`:** o `pollCars()` do resync passa por
+`liveSkipPoll('nearby','nearbyWsOpen',60000)` → com o WS de carros próximos aberto é só rede de
+segurança a 1×/60 s.
+
+**4. Cliente (`webapp/ladiesgo-home.html`) — nada é obrigatório para a app abrir:**
+- `loadCats` foi partido em `__applyCats(lista)` + `loadCats()` (fetch); `refreshProfile` em
+  `__applyProfile(u)` + `refreshProfile(force)` (fetch). O `/boot` aplica as duas metades sem pedido.
+- `__bootFallback()` → se o `/boot` falhar (404 numa API antiga, rede em baixo, resposta inválida)
+  corre `loadCats()` + `refreshProfile(1)`; `sharedNotifPoll`/`lgBannerCheck`/`loadDrvBlocked`
+  voltam sozinhos porque só saltam quando `__bootUnreadAt`/`__bootBannerAt`/`__bootBlkAt` são
+  recentes. **Provado no browser com o `/boot` abortado:** aparecem `/categories`,
+  `/notifications/unread-count`, `/notifications/banner` e os preços por pessoa ficam certos.
+- `lgBannerCheck(force)`: durante 60 s depois do `/boot` não repete o pedido do banner; o frame
+  `{t:'notif'}` do WS e o botão de notificações passam `force=1`.
+- `sharedNotifPoll(force)`: 60 s de tréguas depois do `/boot` (o `unread` já veio nele).
+- `__adoptActive(pre)` aceita a viagem ativa do `/boot` (`__bootTakeActive()`, válida 120 s) e só
+  faz `GET /trips/active` se não a tiver.
+
+**Medido no browser (produção, 414×896, conta admin, 15 s depois de abrir o `/home`):**
+
+| | pedidos `/api/*` | `/boot` | `/categories` | `unread-count` | `banner` | `trips/active` |
+|---|---|---|---|---|---|---|
+| **com `/boot`** | **7** | 1 | 0 | 0 | 0 | 0 (veio no boot) |
+| `/boot` abortado (fallback) | 11 | 1 (falhou) | 1 | 1 | 1 | 0 (\*) |
+
+(\*) a conta admin não é `PASSENGER` nem `DRIVER`, por isso o `__adoptActive` sai antes do fetch.
+Console: **0 erros** com o `/boot` a funcionar; no teste de fallback só aparece o erro do pedido
+que o próprio teste abortou.
+
+**Popup do banner:** inserida **1** linha em `notifications` para a conta admin (imagem
+`https://ladiesgo.pages.dev/logo.jpg`): o `/boot` trouxe o banner, o popup abriu 1,5 s depois com a
+imagem carregada (`naturalWidth > 0`), o sino ficou `flex` com badge `1`, o X fechou e gravou o id
+em `lg_bseen`; ao recarregar **não voltou** e não houve pedido de `/notifications/banner`.
+Linha apagada no fim (base de produção intacta: 315 `notifications`, 26 `users`, 121 `trips`, 0
+vestígios `zz%`).
+
+**Verificação em staging** (`ladiesgo-api-staging`, antes do deploy de produção): **24/24** —
+`/health`, login admin, `/boot` com as 6 chaves, `boot.user == /users/profile`,
+`boot.categories == /categories`, `boot.activeTrip == /trips/active`, `Cache-Control` nas duas
+rotas, `/boot` sem token → **401**, e uma passageira guest com `unread=0`/`banner=null` a passar a
+`unread=1` + banner com imagem depois de um aviso admin (conta e notificação apagadas no fim,
+staging a zero).
+
+**Em produção (2026-10-30):** API `35209603-f3f8-4302-808c-d3f633bfd6f2` (smoke só de `GET`
+**10/10**), Pages `c576add6.ladiesgo.pages.dev` (alias `ladiesgo.pages.dev`), Worker estático
+`8c43103f-7b8f-45ce-b64b-a36912e196d7`. `ladiesgo-home.html` (443 541 bytes,
+sha256 `31dd4ede…`) servido **byte a byte igual** pelo Pages e pelo Worker estático
+(conferido com `?cb=` no fim, já com o `__bootFallback`).
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -912,9 +985,11 @@ Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da Gr
   (ver "O que foi medido e NÃO se fez"); P3 nota da motorista — **FEITO a 30/10** (ver "8. Quinta vaga",
   97→18 linhas e TTL 600 s); P4 `INDEXED BY` no `/ratings/pending` — **feito na migração `0023`**;
   P5 1 `JOIN` no `/trips/history` — **feito na migração `0023`** (319→90);
-  P6 `softResync` respeitar `liveSkipPoll('nearby')` (−112 pedidos/h) — **o único que resta que corta
-  *pedidos***, e é 1 linha no cliente (levar no próximo deploy do `webapp/`); P7 snapshot do `DriverGeo`
+  P6 `softResync` respeitar `liveSkipPoll('nearby')` — **FEITO a 30/10** (ver "9. Sexta vaga": o
+  `pollCars` do `softResync` passa a 1×/60 s com o WS de carros aberto); P7 snapshot do `DriverGeo`
   — só quando houver >~20 motoristas.
+- **Nada mais a cortar sem medir.** O que resta é o `DriverGeo` (P7, depende do número de motoristas)
+  e o pool do FTS (P1, recusado por perda de qualidade).
 
 ## Proteção da quota — 4 anéis (2026-10-30)
 Guia completo e runbook: **`docs/QUOTA-PROTECAO.md`**. Resumo operacional:
