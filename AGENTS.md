@@ -236,6 +236,9 @@ Sintoma: quem cancelava via a viagem terminar, mas o outro lado só descobria 10
   `_cbBy ? 'Corrida cancelada pela motorista/passageira' : 'Viagem cancelada'` — antes o `by:''` caía
   fora do bloco e obrigava a um `pollTrip()` para mostrar o banner (1 pedido extra e o socket ficava aberto
   até à resposta). O motivo continua no banner (`Motivo: …`).
+  Publicado em 2026-10-30: Pages `9dd37801.ladiesgo.pages.dev` e Worker estático `20430986-24cf-414c-9c07-6b2e2e0f9893`;
+  `https://ladiesgo.pages.dev/ladiesgo-home.html` e `https://ladiesgo.rerer…workers.dev/ladiesgo-home.html` servem
+  o ficheiro local byte a byte (sha256 `421c3922…`, 439 176 bytes).
 - Prova (2026-10-29, produção, Node com WS global + browser real em 2 origens):
   passageira→motorista 200/748 ms com frame em 770 ms; motorista→passageira 200/736 ms com frame em 737 ms.
   No browser: frame com `by`/`reason` em 484 ms (A) e 519 ms (B), banner correto no recetor e
