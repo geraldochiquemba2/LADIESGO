@@ -745,7 +745,10 @@ app.post('/api/v1/trips/request', requireAuth, async (c) => {
   const sql = neon(c.env.DB);
   const user = c.get('user');
   const b = await c.req.json().catch(() => ({}));
-  const active = await sql`SELECT id, status FROM trips WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') ORDER BY "createdAt" DESC LIMIT 1`;
+  // QUOTA D1 (2026-10-30): INDEXED BY trips_status_idx — sem ele o SQLite usa
+  // trips_passenger_idx e lê todo o histórico da passageira (78 linhas medidas em
+  // produção) para responder a esta guarda; com ele lê 5. Ver /trips/active.
+  const active = await sql`SELECT id, status FROM trips INDEXED BY trips_status_idx WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') ORDER BY "createdAt" DESC LIMIT 1`;
   if (active.length && active[0].status !== 'REQUESTED') return c.json({ message: 'You already have an active trip. Complete or cancel it first.' }, 400);
   if (active.length) await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = 'Replaced by new booking' WHERE id = ${active[0].id}`;
   const dist = havKm(Number(b.pickupLat), Number(b.pickupLng), Number(b.dropoffLat), Number(b.dropoffLng));
@@ -950,8 +953,15 @@ app.get('/api/v1/trips/active', requireAuth, async (c) => {
   // QUOTA D1: dois lookups indexados (passageira / motorista) em vez de um
   // OR sobre JOIN que forçava varrimento sem índice. Mesma forma e mesmo
   // "trip ativa mais recente" do que antes.
-  const asPax = await sql`SELECT t.* FROM trips t WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND t."passengerId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
-  const asDrv = await sql`SELECT t.* FROM trips t JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND d."userId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
+  // QUOTA D1 (2026-10-30): INDEXED BY trips_status_idx força o índice de estado.
+  // Sem ele o SQLite usa trips_passenger_idx/trips_driver_idx e lê TODAS as viagens
+  // históricas da pessoa para achar a ativa (medido em produção: 78 e 65 linhas).
+  // Com ele o custo passa a depender só das viagens em estado ativo (5 e 6 linhas),
+  // com resultados idênticos e ZERO escritas extra (ao contrário de um índice
+  // parcial novo, que custava +6 escritas por viagem). `trips_status_idx` NÃO pode
+  // ser apagado (migração 0012) — o INDEXED BY falha com erro se ele não existir.
+  const asPax = await sql`SELECT t.* FROM trips t INDEXED BY trips_status_idx WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND t."passengerId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
+  const asDrv = await sql`SELECT t.* FROM trips t INDEXED BY trips_status_idx JOIN drivers d ON d.id = t."driverId" WHERE t.status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') AND d."userId" = ${user.sub} ORDER BY t."createdAt" DESC LIMIT 1`;
   const a = asPax[0] || null, b = asDrv[0] || null;
   const ta = a && a.createdAt ? new Date(a.createdAt).getTime() : 0;
   const tb = b && b.createdAt ? new Date(b.createdAt).getTime() : 0;
@@ -3269,7 +3279,8 @@ app.post('/api/v1/trips/request-web', requireAuth, async (c) => {
   }
   try {
     // Viagem ativa impede novo pedido (a home trata o 409 com o fluxo de avaliação).
-    const active = await sql`SELECT id, status FROM trips WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') ORDER BY "createdAt" DESC LIMIT 1`;
+    // QUOTA D1 (2026-10-30): INDEXED BY trips_status_idx — ver /trips/active (78 → 5 linhas lidas).
+    const active = await sql`SELECT id, status FROM trips INDEXED BY trips_status_idx WHERE "passengerId" = ${user.sub} AND status IN ('REQUESTED','ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS') ORDER BY "createdAt" DESC LIMIT 1`;
     if (active.length && active[0].status !== 'REQUESTED') return c.json({ message: 'Avalia a tua última viagem para pedir outra.' }, 409);
     if (active.length) await sql`UPDATE trips SET status = 'CANCELLED', "cancelledBy" = ${user.sub}, "cancelReason" = 'Replaced by new booking', "updatedAt" = NOW() WHERE id = ${active[0].id}`;
     let pickupName = String(b.pickupName || '').slice(0, 60);

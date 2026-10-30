@@ -604,7 +604,7 @@ Medição em produção com `meta.rows_read` (só `SELECT`) e em **staging** com
 | `POST /drivers/position` (ping) | 1 (`walletBlocked`) + **1 escrita só na transição offline→online** |
 | `GET /trips/incoming` | **3** (gate do motorista 2 + lista 1) |
 | `GET /trips/:id` web / mobile | **4** / **3** (+97 do `AVG` só 1×/120 s) |
-| `GET /trips/active` passageira / motorista | **78** / **65** (lê todas as viagens dela: 76) |
+| `GET /trips/active` passageira / motorista | **5** / **6** — **antes 78 / 65** (lia todas as viagens dela: 76); ver "Terceira vaga" |
 | `GET /trips/history` | **153** (30 resultados) |
 | `GET /ratings/pending` | **83** |
 | `GET /notifications` (lista+banner+unread) | **14** (13+1+**0**) |
@@ -680,6 +680,41 @@ Worker estático `39c8b901`).
   local (437 987 bytes), sem vestígios de `'pt8'`.
 - **Medição de leituras:** `meta.rows_read` da D1 de produção, por statement e com `--remote` (só `SELECT`).
 
+### 6. Terceira vaga (2026-10-30) — `INDEXED BY trips_status_idx` (78 → 5 linhas)
+
+**O problema.** `GET /api/v1/trips/active` (chamado no arranque de cada sessão) e as duas guardas de
+`POST /trips`/`trips/request-web` procuravam a viagem ativa assim:
+`WHERE status IN (4 estados) AND "passengerId" = ? ORDER BY "createdAt" DESC LIMIT 1`.
+O SQLite escolhe `trips_passenger_idx`/`trips_driver_idx`, **lê todas as viagens históricas da pessoa**
+(76 na conta de teste) e ainda faz `USE TEMP B-TREE FOR ORDER BY`. Medido em produção: **78** linhas
+(passageira) e **65** (motorista, com o JOIN `drivers`).
+
+**A correção.** `FROM trips t INDEXED BY trips_status_idx` nas **4** queries (2 de `/trips/active`, 1 mobile
+em `/trips/request`, 1 web em `/trips/request-web`). O plano passa a `SEARCH t USING INDEX trips_status_idx
+(status=?)` e o custo fica dependente **só das viagens em estado ativo**: **5** e **6** linhas medidas em
+produção, com resultados idênticos. **Zero escritas extra** e **zero migrações**.
+
+- `INDEXED BY` é uma **restrição dura**: se `trips_status_idx` desaparecer, a query falha com erro
+  (`no such index`). O índice é criado em `0001_init.sql` e recriado em `0012_admin_stats_indexes.sql`
+  — **não o apagar** num futuro corte de índices.
+- O `residual` "USE TEMP B-TREE FOR ORDER BY" mantém-se (o `status IN` obriga a juntar 4 faixas do índice),
+  mas agora ordena 0–2 linhas em vez de 76.
+- **Porque não se fez um índice parcial novo** (`trips_active_pax_idx`/`_drv_idx`, `WHERE status IN (…)`):
+  é usado pelo SQLite e elimina até o temp B-tree, mas custa **+6 linhas escritas por viagem** (ciclo medido
+  em `ladiesgo-staging`: 12 → 18: INSERT 5→7, ACCEPTED 3→5, IN_PROGRESS 2→4). Ao câmbio do plano
+  (5 M leituras / 100 k escritas = **50:1**), poupar 73 leituras por arranque não paga 6 escritas em cada viagem.
+- **Porque não se fez uma janela de tempo** (`createdAt > now-7d`): **não muda o plano** — continua
+  `SEARCH ... trips_passenger_idx` + temp B-tree a ler as 76 (provado com `node:sqlite`). E partiria as
+  viagens **agendadas**, que nascem `REQUESTED` com `createdAt` de hoje e `scheduledAt` no futuro.
+- **Risco assumido:** o custo passa a depender do nº de viagens em estado ativo. Hoje é 0–2 (121 viagens no
+  total, todas `CANCELLED`/`COMPLETED`). Se um dia ficarem pedidos `REQUESTED` órfãos a acumular (não há
+  expiração automática de `REQUESTED`), esta query e o `/trips/incoming` degradam-se juntas — nesse caso a
+  limpeza é apagar/cancelar os `REQUESTED` velhos, não reverter o `INDEXED BY`.
+- **Provado em staging** (API `746efef0`, D1 `ladiesgo-staging`; contas `ZZ…` e viagens apagadas no fim):
+  sem viagem → 200 `null`; pedido novo → `/trips/active` devolve a viagem com os **43 campos** da tabela
+  (`passengerId`/`status`/`pickupAddress`/`rideType` intactos); 2.º pedido substitui o 1.º (guarda);
+  motorista aceita → o ramo `JOIN drivers` devolve a viagem `ACCEPTED`; a passageira vê a mesma.
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -703,6 +738,13 @@ produção" só porque falhou no `wrangler d1 execute`.**
   pedidos; `caches.default` com HIT poupa leituras da D1/subrequests, não pedidos. O Workers Cache cobra os HITs
   e os assets estáticos; os assets do Pages/Worker estático são grátis e ilimitados.
 - **Contas novas para fugir ao limite:** viola os ToS. **Tabela FTS trigram:** risco de quota de escrita.
+- **Índices parciais `trips_active_pax_idx`/`trips_active_drv_idx`** (`WHERE status IN ('REQUESTED',
+  'ACCEPTED','DRIVER_ARRIVED','IN_PROGRESS')`): o SQLite **usa-os** (`SEARCH t USING INDEX trips_active_pax_idx
+  (passengerId=?)`, sem temp B-tree), mas custam **+6 escritas por viagem** (ciclo 12 → 18, medido em staging).
+  Com 5 M leituras / 100 k escritas (**50:1**), não compensa. Usou-se `INDEXED BY trips_status_idx` (secção 6).
+- **Janela de tempo em `/trips/active`** (`createdAt > now-7d`): **não muda o plano** — continua
+  `SEARCH ... trips_passenger_idx` + `USE TEMP B-TREE FOR ORDER BY` a ler as 76. Além disso partiria as
+  viagens agendadas (`status='REQUESTED'` + `scheduledAt` no futuro).
 
 ## Incidentes de quota (2026-10-17) — NAO REPETIR
 Dois limites foram esgotados no mesmo dia, ambos pela via do assistente (nao por uso real).
