@@ -59,7 +59,8 @@ a tabela por uma extracção da Yango (licença/ToS e todas as categorias ficari
     Com 3 casas (~110 m) apagavam-se entradas distintas do mesmo sítio.
 - **Cache:** a pesquisa guarda a resposta **7 dias** em `caches.default` por datacenter
   (`places:v12:<q>:<lat>,<lng>`). Corrigir a D1 **não chega** — é preciso subir a chave e fazer deploy.
-  Passou a `places:v13` (commit `7b95f75`). **Ao mexer em `places`, subir sempre esta chave.**
+  Passou a `places:v13` (commit `7b95f75`) e depois a **`places:v14`** (2026-10-30, com a pesquisa FTS-only —
+  ver "Cortes de custo no plano Free"). **Ao mexer em `places`, subir sempre esta chave.**
 - **Aplicado em produção (2026-10-29):** 139 UPDATEs + 13 DELETEs = **721 linhas escritas**; `places` e
   `places_fts` 23 345 → **23 332**; `integrity-check` do FTS passa. Verificação: 131/139 na coordenada certa
   e as 8 restantes são os duplicados que o próprio lote apagou. `/api/places/search?q=isptec` devolve
@@ -536,13 +537,76 @@ viagem). No plano pago ($5/mês) 50.000/dia é viável: **≈$377/mês** hoje, *
   vale **0%**. As leituras vêm dos endpoints.
 - **P0 (protege a quota atual):** matar o `LIKE '%…%'` de `places` (−96% leituras), throttle no emissor de
   `geoPushToTrip`, backoff exponencial nos 5 WS (hoje 3 s fixos → 1.200 ligações/hora por socket em falha),
-  `trip_points` 60 s → 180 s, `GET /drivers/wallet/status` (61 → 1 linha).
+  `trip_points` 60 s → 180 s, `GET /drivers/wallet/status` (61 → 1 linha). **Aplicado em 2026-10-30** (excepto
+  o `wallet/status`) — ver "Cortes de custo no plano Free".
 - **P1/P2:** tirar o `AVG(score) JOIN` do `webDriverInfo`, `refreshStatus` 15 → 60 s, `/api/v1/boot`
   agregado, shard do `DriverGeo` por geohash, `NotifHub` por shard, `tripId` no payload do GPS.
 - Scripts de medição: `%TEMP%\opencode\cf-quota.mjs` (hoje/24 h), `cf-d1-hourly.mjs` (hora a hora),
   `cf-do-real2.mjs` (DO por tipo de objeto). **O token OAuth do GraphQL expira**: se devolver
   `{"code":10000,"message":"Authentication error"}`, correr `npx wrangler@4.151.1 whoami` para o renovar
   (nunca `wrangler logout`). O limitador ("budget depleted") precisa de ~5 min.
+
+## Cortes de custo no plano Free — aplicados (2026-10-30)
+Objectivo do dono: **mais viagens/dia sem sair do Free**. Não se muda de plano; corta-se o custo por viagem.
+O alvo nº1 era a pesquisa de lugares: **`3.556.334 ÷ 23.332 ≈ 152` varreduras completas de `places` por dia
+(≈98% de todas as leituras da D1)**. Tudo abaixo está **em produção** (API `6849d3f6…`, Pages `c33e5506…`,
+Worker estático `6bcd9f6f…`).
+
+### 1. `localPlaces()` — FTS5 e mais nada (`cloudflare/api-worker/src/index.ts`)
+- O 3.º passo `norm LIKE '%termo%'` (sem índice) foi **apagado**. A cascata é agora:
+  **FTS5 (`places_fts MATCH`, `ORDER BY rank`, subquery interna `LIMIT 800`) → GLOB de prefixo (só se o FTS der 0)
+  → Photon/Nominatim (só se 1) e 2) derem 0)**.
+- O bug de raiz não era o `LIKE` existir: era disparar **sempre que o FTS devolvia menos de 8 linhas** — ou seja
+  exactamente nas pesquisas precisas (`isptec`, `momo`, `bloco d27`). O FTS já acertava; o `LIKE` escrevia por cima.
+- **Perda aceite:** deixou de haver correspondência a meio da palavra (`sptec` → `isptec`); nesses casos cai no
+  Photon/Nominatim, que acerta em Luanda.
+- **`rows_read` medido no SQL novo** (D1 de produção, `--json` → `meta.rows_read`): `isptec` **3**, `bloco d27` **3**,
+  `patricio` **9**, `momo` **18**, `shoprite` **39**, `banco bic` **183**, `agostinho neto` **237**, `kilamba` **2.399**
+  — contra **23.332** em todos antes (**−98%**; só `kilamba` é caro porque devolve 400 blocos).
+- **Cache:** a chave subiu **`places:v13` → `places:v14`** (com `fold(q).trim()`). Corrigir a D1 não chega —
+  sem subir a chave os datacenters continuam a servir a resposta antiga durante 7 dias. **Ao mexer em `places`,
+  subir sempre esta chave.**
+- Verificado em produção (8/8, 200, primeiro resultado certo): `isptec` → ISPTEC @ -8.9242,13.1830 (Talatona, 1.799 ms),
+  `kilamba` n=15, `momo` n=3, `bloco d27` → Bloco D27, `agostinho neto` n=15, `banco bic` n=7, `patricio` n=2,
+  `shoprite` n=4.
+
+### 2. Servidor (`cloudflare/api-worker/src/index.ts`)
+- **`persistPoint` 60 s → 180 s** (`trip_points`): o rasto é histórico, não desenha o mapa ao vivo. Uma viagem de
+  15 min passa de ~15 para ~5 pontos. Cada `INSERT` escreve também os índices.
+- **`geoPushToTrip` com throttle no emissor** (`GEO_PUSH_MIN_MS = 9.000`, `geoPushAt` por isolate, limpo a >2.000
+  entradas): antes chamava o DO `trip:<id>` em **cada** fix de GPS (1/2 s) para o recetor os deitar fora a menos de
+  10 s. Agora só chama com fix novo (>9 s < 10 s do recetor, por isso nada é descartado a jusante). Corta ~80% dos
+  pedidos ao DO e as leituras de `activeTripForDriver()` (D1).
+- **`calls:` keep-alive:** o cliente passou a mandar a **string crua `'ping'`** e a aceitar `'pong'` cru, servidos
+  pelo `setWebSocketAutoResponse()` do DO — **sem acordar o objeto** (custo 0 de duração). O ramo `{t:'ping'}`
+  continua no servidor como fallback. O `setWebSocketAutoResponse` só aceita **um** par, daí a string literal.
+
+### 3. Cliente (`webapp/ladiesgo-home.html`)
+- **`lgBk`/`lgBkOk`/`lgBkReady`** — backoff partilhado das 5 reconexões WS (`req`, `nearby`, `notif`, `geo`,
+  `calls`): exponencial **1,7×**, jitter ±25%, teto **60 s** (`calls` 20 s), nunca < **15 s** com
+  `navigator.onLine === false`; `lgBkOk` no `onopen` e um listener `online` que limpa todas as chaves e reconecta.
+  Antes era **3 s fixos**: em falha de rede eram **1.200 ligações/hora por socket**, cada uma 1 pedido ao Worker.
+- **`lgPlaceFetch(q, ll)`** — cache de pesquisa no cliente: **10 min** para resultados com linhas, **60 s** para
+  vazio; chave `q.toLowerCase()|round(lat*100),round(lng*100)`. Usada pelo `#q` e pelo `#oq`; debounce 250 → **400 ms**.
+  Provado no browser: 1.ª chamada 200 ms, 2.ª **0 ms** com o **mesmo objecto** (`same_obj:true`).
+- **`refreshProfile(force)`** — TTL **60 s → 900 s** (15 min); o clique no menu chama `refreshProfile(true)`.
+- **`walletData()`** — cache de 60 s + dedupe de pedido em curso (`__walletC`/`__walletP`).
+- **`paintWBadge`** 120 s → **600 s**; **`sharedNotifPoll`** 30 s → **60 s**.
+
+### O que foi medido e NÃO se fez (para não repetir a análise)
+- **Migração `0021` (índices parciais + `DROP INDEX trips_pending_idx`): abandonada.** Contagens de produção:
+  `trips`=**121**, `notifications`=**315**, `drivers`=**1**, `ratings`=**24**, `trip_points`=**1.290**,
+  `chat_messages`=**14**, `call_signals`=**425**, `users`=**26**. Só `places` (23.332) é grande. Índices extra
+  só acrescentam escritas, sem ganho de leitura.
+- **Reescrever o `DriverGeo` para 1 snapshot:** uso medido = **0,16%** do orçamento de leituras de storage. Precipitado.
+- **Cron `* * * * *` → `*/5`:** 1.440 pedidos/dia = ~1,4% da quota, e a precisão ao minuto é necessária para as
+  notificações agendadas.
+- **Sharding do `NotifHub` / correção do `notifPokeMany` (>45 destinatários rebenta o limite de subrequests):**
+  é um bug real, mas com 26 utilizadores não acontece. **Documentado, não corrigido.**
+- **Workers Cache e Cache Rules para `/api/*`:** o Worker corre **à frente** do cache da zona, logo poupa **0**
+  pedidos; `caches.default` com HIT poupa leituras da D1/subrequests, não pedidos. O Workers Cache cobra os HITs
+  e os assets estáticos; os assets do Pages/Worker estático são grátis e ilimitados.
+- **Contas novas para fugir ao limite:** viola os ToS. **Tabela FTS trigram:** risco de quota de escrita.
 
 ## Incidentes de quota (2026-10-17) — NAO REPETIR
 Dois limites foram esgotados no mesmo dia, ambos pela via do assistente (nao por uso real).

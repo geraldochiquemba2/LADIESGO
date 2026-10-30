@@ -192,10 +192,19 @@ Fontes: `developers.cloudflare.com/workers/platform/pricing`, `/d1/platform/pric
 
 1. **Matar o `LIKE '%…%'` de `places`** (`index.ts:1899-1909`).
    Remover o 3.º passo e deixar cair ao Photon/Nominatim (que já corre em paralelo e tem cache de 7 dias). **Ganho: 3,56 M → ~150 k leituras/dia (−96%).** É a diferença entre 71% e 3% da quota. Alternativa melhor: FTS5 sobre a coluna `norm` (o `places_fts` atual indexa tokens de `name`, não `norm`).
+   > **FEITO (2026-10-30).** O 3.º passo foi apagado e a cascata ficou **FTS5 → GLOB (só se o FTS der 0) → Photon/Nominatim**.
+   > **Correção a esta linha:** o `places_fts` **já indexa `norm`** (migração `0008`), não `name` — por isso não foi preciso
+   > tabela nova, bastou parar de a sobrepor. `rows_read` medido: `isptec` **3**, `bloco d27` **3**, `patricio` **9**,
+   > `momo` **18**, `shoprite` **39**, `banco bic` **183**, `agostinho neto` **237**, `kilamba` **2.399** (era 23 332 em todos).
+   > Cache subiu para `places:v14`. Ver AGENTS.md, "Cortes de custo no plano Free".
 2. **Throttle no emissor da ponte GPS** (`geoPushToTrip`): só empurrar se passaram ≥10 s desde o último fix do mesmo motorista (espelhar `PUSH_GPS_MIN_MS`). **Ganho: −58% pedidos a DO por viagem** (600 → ~180) e menos acordares do objeto.
+   > **FEITO (2026-10-30):** `GEO_PUSH_MIN_MS = 9 000` no emissor (9 s < 10 s do recetor, nada é descartado a jusante).
 3. **Backoff exponencial com jitter nos 5 WS** (3→60 s) e só reconectar com `navigator.onLine` e `visibilitychange`. **Ganho: evita 1 200 pedidos/hora por socket em falha.**
+   > **FEITO (2026-10-30):** `lgBk`/`lgBkOk`/`lgBkReady` (1,7×, ±25%, teto 60 s, ≥15 s offline) nos 5 sockets + listener `online`.
 4. **`trip_points` 60 s → 180 s** (`:3941`). **Ganho: −30 escritas D1 por viagem (−25%)** e o tecto de escritas sobe de 833 para ~1 100 viagens/dia.
+   > **FEITO (2026-10-30).**
 5. **`GET /drivers/wallet/status`** devolvendo só `{blocked}`. **Ganho: 61 → 1 linha por chamada.**
+   > **POR FAZER.** No cliente, `walletData()` passou a ter cache de 60 s + dedupe, o que já corta a maioria das chamadas.
 
 ### P1 — para escalar a sério
 
@@ -204,15 +213,28 @@ Fontes: `developers.cloudflare.com/workers/platform/pricing`, `/d1/platform/pric
 8. **`refreshProfile` 60 s → 600 s** ou juntar ao `/api/v1/boot`. **Ganho: −54 pedidos/hora por utilizador aberto** (é a maior fonte em idle).
 9. **`/api/v1/boot` agregado** (categorias + perfil + viagem ativa + não lidas + banner + zona): −8 a −12 pedidos por abertura.
 10. **Índices/agregações do admin**: `notifications(type, createdAt)`, `SUM(finalFare)` com índice parcial, `admin/driver-stats` a ler `drivers.totalTrips/totalEarnings`; e **apagar os índices duplicados em `trips`** (`trips_passenger_idx` ×2, `trips_status_idx` ×2) — cada `UPDATE trips` escreve 2–4 entradas a menos.
+    > **ANULADO (2026-10-30) por medição.** Contagens reais de produção: `trips`=**121**, `notifications`=**315**,
+    > `drivers`=**1**, `ratings`=**24**, `trip_points`=**1.290**, `chat_messages`=**14**, `call_signals`=**425**,
+    > `users`=**26**. Só `places` (23 332) é grande. Índices extra = **+1 linha escrita por INSERT** e zero ganho de
+    > leitura a este volume. Além disso **índices duplicados com o mesmo nome são impossíveis** no SQLite — os pares
+    > `trips_passenger_idx`/`trips_status_idx` são índices distintos sobre colunas parecidas, não cópias. A migração
+    > `0021` (que fazia isto) foi escrita e **descartada sem aplicar**.
 
 ### P2 — desenho para 50 000
 
 11. **Shard do `DriverGeo`** por geohash/cidade (`geo:<célula>`) e **calcular o enquadramento uma vez por ciclo** (não por socket): O(V×S) → O(V + S).
 12. **`NotifHub` por shard** (1 objeto por 1 000 utilizadores com tags) em vez de 1 por utilizador.
+    > **ADIADO.** O problema real não é o shard: é o `notifPokeMany` fazer **1 subrequest por destinatário** e o Worker
+    > só permitir **50 por invocação** — a partir de ~45 destinatários os últimos não recebem o frame. Com 26
+    > utilizadores não acontece. Corrigir quando a base passar de ~40 contas ativas.
 13. **Passar o `tripId` no payload do GPS** e acabar com o `activeTripForDriver()` (1 leitura D1 a cada 20 s por motorista, mesmo sem viagem).
 14. **Snapshot único no `DriverGeo`** (`storage.put('snapshot', …)`) em vez de `p:<user>` por motorista + `load()` O(V).
+    > **ADIADO (2026-10-30).** Uso medido: **0,16%** do orçamento diário de leituras de storage (15 589 leituras em 48 h
+    > com 2 motoristas). Reescrita de alto risco para ~0 de ganho a este volume.
 15. **Rate limit no `webSocketMessage`** do `TripPush` e derivar o `from` do chat do attachment do socket (spoofing).
 16. **Cron de 1 min → 5 min** com `lastRunKey`.
+    > **RECUSADO (2026-10-30).** 1 440 pedidos/dia = **~1,4%** da quota, e a precisão ao minuto é necessária para as
+    > notificações agendadas (`notification_schedules.times` tem horários ao minuto).
 
 ---
 

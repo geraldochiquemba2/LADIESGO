@@ -999,9 +999,23 @@ async function notifyTripPushGps(env: any, tripId: string, lat: number, lng: num
 // isso é lá que se faz a ponte para o TripPush da viagem ativa: assim o carro
 // mexe-se no mapa da passageira com a app da motorista em segundo plano.
 // noTripPush=1 evita realimentação quando o espelho vem do próprio TripPush.
+//
+// THROTTLE NO EMISSOR (2026-10-30): o TripPush já descarta fixes a menos de
+// PUSH_GPS_MIN_MS (10 s), mas o pedido ao DO era feito na MESMA. Com GPS a 1
+// fix/2 s isso eram ~5 pedidos ao DO por fix útil. Aqui só se chama o DO se o
+// fix for realmente novo (>9 s), o que corta ~80% dos pedidos a `trip:<id>`
+// sem atrasar o mapa (9 s < 10 s do recetor, por isso o recetor nunca descarta
+// um fix que aqui passou). Cache por isolate, 1 entrada por motorista.
+const GEO_PUSH_MIN_MS = 9_000;
+const geoPushAt = new Map<string, number>();
 async function geoPushToTrip(env: any, userId: string, lat: number, lng: number, noTripPush?: boolean, h?: number | null) {
   if (noTripPush) return;
   try {
+    const now = Date.now();
+    const last = geoPushAt.get(userId) || 0;
+    if (now - last < GEO_PUSH_MIN_MS) return;
+    if (geoPushAt.size > 2000) geoPushAt.clear();
+    geoPushAt.set(userId, now);
     const tripId = await activeTripForDriver(env, userId);
     if (!tripId) return;
     await notifyTripPushGps(env, tripId, lat, lng, userId, h);
@@ -1856,12 +1870,21 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
     // "Bloco D27") em vez de cair no Photon/Nominatim sem número.
     // Ordenação final: prefixo do nome, depois bloco/quarteirão, depois distância.
     // Cadeia de pesquisa (da mais rápida para a mais cara):
-    //   1) FTS5 indexado (places_fts)  2) GLOB de prefixo (places_nname_idx)
-    //   3) LIKE clássico (recall total, sem índice; lia as ~23k linhas TODAS).
-    // 1) FTS5 (`places_fts`, migração 0008): casamento por palavras/tokens,
-    //    indexado -> lê pouquíssimas linhas mesmo em pesquisas de vários termos.
-    //    Se a tabela ainda não existir (migração não aplicada), o try/catch cai
-    //    para os caminhos GLOB/LIKE abaixo — a pesquisa nunca quebra.
+    //   1) FTS5 indexado (places_fts, migração 0008 — indexa `norm`, não `name`)
+    //   2) GLOB de prefixo (places_nname_idx) — SÓ se o FTS devolver zero
+    //   3) Photon/Nominatim em /api/places/search — SÓ se 1) e 2) derem zero
+    //
+    // O antigo 3.º passo (`norm LIKE '%termo%'`, sem índice) foi REMOVIDO em
+    // 2026-10-30. Ele lia as 23.332 linhas de `places` a cada execução e era
+    // disparado sempre que o FTS devolvia MENOS DE 8 linhas — ou seja, as
+    // pesquisas mais precisas ("isptec", "momo", "bloco d27") eram justamente
+    // as que pagavam o varrimento completo, porque o resultado bom do FTS era
+    // SOBRESCRITO por um pior. Medido: 3.556.334 linhas lidas/dia = 98% de
+    // todas as leituras da D1, com ~150 varrimentos completos por dia.
+    //
+    // Efeito colateral conhecido: deixa de haver casamento a MEIO de palavra
+    // ("sptec" -> "isptec"). Prefixo continua a funcionar ("ispt", "kilam").
+    // Nesses casos raros cai ao Photon/Nominatim, que responde na mesma.
     let rows: any[] = [];
     try {
       const expr = tk
@@ -1870,19 +1893,23 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
         .map((t: string) => t + '*')
         .join(' ');
       if (expr) {
+        // Subquery com LIMIT: sem ele o `ORDER BY` obriga a ler TODOS os
+        // documentos que casam (o prefixo "a*" casa 9.715 = 42% da tabela).
+        // `ORDER BY rank` mantém os melhores do bm25 dentro desses 800.
         rows = await sql`
           SELECT p.name, p.nname, p.lat, p.lng, p.type, p.municipality, p.province, p.street, p."number"
-          FROM places_fts JOIN places p ON p.id = places_fts.rowid
-          WHERE places_fts MATCH ${expr}
+          FROM (SELECT rowid FROM places_fts WHERE places_fts MATCH ${expr} ORDER BY rank LIMIT 800) m
+          JOIN places p ON p.id = m.rowid
           ORDER BY (CASE WHEN p.name LIKE 'Bloco %' OR p.name LIKE 'Bloco%' OR p.name LIKE 'Quarteir%' THEN 1 ELSE 0 END) DESC,
             (ABS(p.lat - ${lat}) + ABS(p.lng - ${lng})) ASC
           LIMIT 400
         `;
       }
     } catch { rows = []; }
-    if (rows.length < 8) {
+    if (rows.length === 0) {
       // 2) Prefixo do nome via índice places_nname_idx (GLOB) — rede de segurança
-      //    (recall para prefixos que o FTS não apanhe).
+      //    para prefixos que o FTS não apanhe. Só corre quando o FTS deu ZERO
+      //    (antes corria com <8 e deitava fora o resultado do FTS).
       const g1 = t1.replace(/([*?\[\]])/g, '[$1]') + '*';
       rows = await sql`
         SELECT name, nname, lat, lng, type, municipality, province, street, "number"
@@ -1894,20 +1921,6 @@ async function localPlaces(c: any, q: string, lat: number, lng: number): Promise
           (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
         LIMIT 400
       `;
-      // 3) LIKE clássico (recall total, sem índice) — último recurso.
-      if (rows.length < 8) {
-        rows = await sql`
-          SELECT name, nname, lat, lng, type, municipality, province, street, "number"
-          FROM places
-          WHERE norm LIKE ${'%' + t1 + '%'}
-            AND (${t2} = '' OR norm LIKE ${'%' + t2 + '%'})
-            AND (${t3} = '' OR norm LIKE ${'%' + t3 + '%'})
-          ORDER BY ((CASE WHEN nname LIKE ${tf + '%'} THEN 2 ELSE 0 END)
-            + (CASE WHEN name LIKE 'Bloco %' OR name LIKE 'Bloco%' OR name LIKE 'Quarteir%' THEN 1 ELSE 0 END)) DESC,
-            (ABS(lat - ${lat}) + ABS(lng - ${lng})) ASC
-          LIMIT 400
-        `;
-      }
     }
     const out = rows.map((r: any) => {
       const type = String(r.type || '');
@@ -1955,7 +1968,11 @@ app.get('/api/places/search', async (c) => {
   // corrigidas contra a Yango (ex.: ISPTEC apontava para o INSUTEC, 5 km ao lado).
   // Sem mudar a chave, as respostas em cache (7 dias, por datacenter) continuavam
   // a mostrar as coordenadas antigas.
-  const pkey = 'places:v13:' + q.toLowerCase() + ':' + Math.round(lat * 100) / 100 + ',' + Math.round(lng * 100) / 100;
+  // v14 (2026-10-30): a cascata de pesquisa mudou (FTS deixou de ser descartado
+  // quando devolvia <8 linhas; o `LIKE '%termo%'` sem índice foi removido). As
+  // respostas antigas em cache vinham da cascata velha, por isso a chave sobe.
+  // A chave usa `fold(q)` para que "Kilamba" e "kilamba" partilhem a entrada.
+  const pkey = 'places:v14:' + fold(q).trim() + ':' + Math.round(lat * 100) / 100 + ',' + Math.round(lng * 100) / 100;
   const phit = await cacheGet(c, pkey);
   if (phit) return phit;
   // Base local primeiro: instantâneo, offline e com distância à localização.
@@ -3931,14 +3948,18 @@ export class TripPush {
       this.pushEta();
     }
   }
-  // Histórico de auditoria: 1 ponto/60s por viagem ativa. Não bloqueia o WS
+  // Histórico de auditoria: 1 ponto/180s por viagem ativa. Não bloqueia o WS
   // (waitUntil) e não substitui a posição viva, que continua só em memória.
+  // 60s -> 180s (2026-10-30): o rasto é histórico, não serve para desenhar o
+  // mapa ao vivo; 180s poupa 2/3 das escritas em `trip_points` (3 tabelas de
+  // índice cada INSERT) sem perda visível. Uma viagem de 15 min passa de ~15
+  // para ~5 pontos.
   async persistPoint(lat: number, lng: number, accuracy?: number) {
     try {
       const st = String(this.status || '');
       if (st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return;
       const now = Date.now();
-      if (now - this.lastPointAt < 60000) return;
+      if (now - this.lastPointAt < 180000) return;
       if (this.pointsOff && now - this.pointsErrAt < 300000) return;
       this.lastPointAt = now;
       let tripId = this.tripId;
