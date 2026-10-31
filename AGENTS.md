@@ -1395,18 +1395,28 @@ comparada com o que a LADIESGO já faz. **Não é para copiar arquitectura** —
   5. **Previsão / posicionamento de oferta** — precisa de semanas de histórico por zona e hora; a base tem
      **121 viagens no total**. Falta matéria-prima, não esforço.
 - **A confirmar (não copiar):** Spanner/Ringpop, Kafka+Flink, RL no despacho, solver bipartido, multi-região.
-- **Capacidade em minutos de viagem, não em viagens:** custo ≈ **5 pedidos fixos + 2 por minuto**
-  (5 + 2×15 = 35). As **horas de carro/dia** ficam quase constantes no Free:
+- **Capacidade em minutos de viagem, não em viagens.** O custo às DO é **por minuto** e o da D1 é
+  **por viagem**; modelo ancorado no medido (35 DO / 34 escritas a 15 min): `DO(d) = 14 + 1,4d` e
+  `D1(d) = 27 + 0,4d`.
 
-  | Duração | Pedidos DO/viagem | Viagens/dia | Horas de carro/dia |
-  |---|---|---|---|
-  | 10 min | ≈25 | ≈4 000 | ≈667 h |
-  | 15 min | ≈35 | **≈2 850** | ≈714 h |
-  | 20 min | ≈45 | ≈2 220 | ≈741 h |
-  | 30 min | ≈65 | ≈1 540 | ≈769 h |
+  | Duração | DO/viagem | Escritas D1 | Viagens/dia | Horas de carro/dia | Trava |
+  |---|---|---|---|---|---|
+  | 10 min | 28 | 31 | 3 226 | 538 h | D1 |
+  | 15 min | **35** | **33** | **2 857** | **714 h** | DO |
+  | 20 min | 42 | 35 | 2 381 | 794 h | DO |
+  | 30 min | 56 | 39 | 1 786 | 893 h | DO |
+  | 60 min | 98 | 51 | 1 020 | 1 020 h | DO |
 
-  Ou seja: **o Free aguenta ~700 horas de carro por dia** (~2 400 corridas/dia a 85 %). A seguir às DO
-  (≈2 850) trava nas **escritas da D1** (≈2 940).
+- **"Mais viagens/dia" e "duplicar as horas" são perguntas diferentes — e só a segunda é possível no
+  Free.** Análise completa em `docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §11.
+  - **Viagens/dia tem muro rígido ≈3 704** = `100 000 ÷ 27 escritas`, o mínimo estrutural de uma viagem
+    concluída (INSERT 5 + `ACCEPTED`/`IN_PROGRESS`/`COMPLETED` 7 + `wallet_tx` 3 + avaliação 4 + 1
+    notificação 4 + 1 `trip_point` 4). É **+30 %** sobre as 2 857 de hoje — **não é 2×**.
+  - **Horas não têm muro:** cortando o `heading` (o maior item de DO, ≈16,5 dos 35, e **redundante** — o
+    frame `{t:'gps'}` já leva o `h`) e as escritas 34→27, as horas passam a ser limitadas só pela D1 e
+    crescem com a duração: 926 h a 15 min, **1 468 h (2×) a ~37 min**, 1 961 h a 60 min.
+  - **Consequência operacional:** encurtar viagens dá mais viagens mas **menos** horas; alongar dá mais
+    horas mas menos viagens. A viagem média é o lever, não o número de pedidos.
 - **A lição do DoorDash traduzida:** quando a procura passa a capacidade, **decide-se com informação
   incompleta em vez de fazer fila** — é exactamente o que o `quota_shed` e o `stale_guard` já fazem.
 

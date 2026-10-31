@@ -368,3 +368,127 @@ Isto não muda o custo **por viagem** (o que trava a seguir continuam a ser as *
 ≈34/viagem, §9.4); muda o custo **por utilizador a pesquisar**. Uma sessão que escreve meia dúzia de
 nomes deixa de custar dezenas de pesquisas FTS e passa a custar uma por termo distinto, com o topo
 (`kilamba` ≈ 2 000 linhas) pago ~1×/10 min em vez de 1×/pausa.
+
+---
+
+## 11. "Mais viagens por dia" e "duplicar as horas" são duas perguntas diferentes (2026-10-31)
+
+Investigação motivada pela pesquisa das outras plataformas (`docs/PICOS-E-CONCORRENCIA-2026-10-31.md`).
+**Conclusão que inverte a intuição:** no Free, **as viagens/dia têm um muro rígido (~3 700) e as horas
+não** — porque as escritas da D1 são ~**fixas por viagem** e os pedidos às DO são **por minuto**.
+
+### 11.1 Os dois muros, em função da duração da viagem
+
+Modelo (ancorado nos valores medidos de §9.4 e §14 do `AGENTS.md`):
+`DO(d) = 14 + 1,4d` e `D1(d) = 27 + 0,4d`, com `d` em minutos.
+
+| Duração | Pedidos DO | Escritas D1 | **Viagens/dia** | **Horas/dia** | Trava |
+|---|---|---|---|---|---|
+| 10 min | 28 | 31 | 3 226 | 538 | D1 |
+| **15 min (hoje)** | **35** | **33** | **2 857** | **714** | DO |
+| 20 min | 42 | 35 | 2 381 | 794 | DO |
+| 30 min | 56 | 39 | 1 786 | 893 | DO |
+| 60 min | 98 | 51 | 1 020 | 1 020 | DO |
+
+Duas leituras que não são óbvias:
+
+- **Encurtar as viagens aumenta as viagens/dia mas reduz as horas.** A 10 min o muro passa a ser a D1
+  (3 226 viagens, só 538 h).
+- **Alongar as viagens aumenta as horas mas reduz as viagens.** A 60 min são 1 020 h mas só 1 020
+  viagens — porque o DO cobra **por minuto** e a D1 cobra **por viagem**.
+
+### 11.2 Os 35 pedidos às DO, item a item (dedução aritmética, a confirmar com medição)
+
+Somando o que o código faz numa viagem de 15 min (`webapp/ladiesgo-home.html` + `src/index.ts`):
+
+| Item | Pedidos facturados | Nota |
+|---|---|---|
+| 5 ligações WebSocket (viagem, `live-geo`, pedidos, notificações, carros próximos) | **5** | 1 por ligação |
+| `TripPush /notify` nas 4 transições (aceite, chegou, iniciou, concluiu) | **4** | 1 por transição |
+| `hubBroadcast` + `notifPoke` | **5** | |
+| `{t:'gps'}` no WS da viagem (1/15 s) | **3** | 60 mensagens ÷ 20 |
+| `live-geo` (1/30 s) | **1,5** | 30 mensagens ÷ 20 |
+| **`{t:'heading'}`** (`liveSendHdg`: máx. 1/**900 ms** se o rumo mudar **≥2°**) | **≈16,5** | **≈330 mensagens ≈ 22/min** |
+| `geoPushToTrip` (ponte) | 0 | cortada pelo flag `noTripPush` (§9) |
+| **Total** | **35** | fecha com o medido |
+
+**O `heading` é o maior item isolado e é redundante:** o frame `{t:'gps'}` **já leva o `h`**
+(`liveSendGps`, 1/15 s), e o cliente roda o marcador a partir dele
+(`drvHdg=carCont(m.h,drvHdg)`, `carRotate`). O `heading` existe só para a rotação ser mais fina que 15 s.
+Duas opções, ambas medidas pela mesma aritmética:
+
+| Opção | Mensagens/min | DO/viagem (15 min) |
+|---|---|---|
+| Hoje (`1/900 ms` + ≥2°) | ≈22 | **35** |
+| Baixar para `1/5 s` + ≥10° | ≈12 | **28** |
+| Eliminar (rodar no `gps`) | 0 | **19** |
+
+Fica `DO(d) = 14 + 1,4d` hoje, `14 + 0,9d` com `1/5 s` e `14 + 0,3d` sem `heading`.
+
+### 11.3 O muro das escritas — ≈27 é o mínimo de uma viagem
+
+Uma viagem concluída **tem** de escrever, no mínimo:
+
+| O que | Escritas |
+|---|---|
+| `INSERT` na viagem | 5 |
+| `ACCEPTED` / `IN_PROGRESS` / `COMPLETED` | 3 + 2 + 2 = 7 |
+| `wallet_tx` (ganho da motorista) | 3 |
+| avaliação | 4 |
+| **1** notificação (em vez de 2) | 4 |
+| **1** ponto de rasto | 4 |
+| **Total** | **27** |
+
+⇒ `100 000 ÷ 27 = **3 704 viagens/dia**` é o **tecto absoluto do Free**, mesmo que os pedidos às DO
+fossem zero. Contra as **2 857** de hoje é **+30 %**, não 2×.
+
+### 11.4 O que cada corte dá, de facto
+
+| Corte | DO/viagem | D1/viagem | Viagens/dia (15 min) | Horas/dia |
+|---|---|---|---|---|
+| Hoje | 35 | 34 | 2 857 | 714 |
+| **Só `heading` a 1/5 s** | 28 | 34 | 2 941 | 735 |
+| **Só eliminar o `heading`** | 19 | 34 | 2 941 | 735 |
+| **Só cortar as escritas** (34→27) | 35 | 27 | 2 857 | 714 |
+| **Os dois** (sem `heading` + 27 escritas) | 19 | 27 | **3 704** | 926 |
+
+- **Cortar o `heading` sozinho não dá quase nada em viagens** (2 857 → 2 941): mal o DO deixa de ser o
+  muro, a D1 toma o lugar (34 escritas ⇒ 2 941). O valor do corte está **noutro lado** — em viagens mais
+  longas, porque o DO cobra por minuto e a D1 por viagem.
+
+Com os dois cortes feitos, as horas deixam de ser limitadas pelo DO e passam a crescer com a duração
+(a D1 é a única trava, e o seu custo marginal é 0,4 escrita/min):
+
+| Duração | DO | D1 | Viagens/dia | **Horas/dia** |
+|---|---|---|---|---|
+| 15 min (hoje) | 19 | 27 | 3 704 | 926 |
+| 30 min | 23 | 39 | 2 564 | **1 282** |
+| 37 min | 25 | 42 | 2 381 | **1 468** ← 2× |
+| 45 min | 28 | 45 | 2 222 | 1 667 |
+| 60 min | 32 | 51 | 1 961 | 1 961 |
+
+- **"Duplicar as horas" é possível no Free** — com os dois cortes **e** uma viagem média de ~**37 min**
+  (hoje 15). Sem os cortes, alongar as viagens só chega a **1 020 h** a 60 min, porque o `heading` e o
+  `gps` passam a cobrar por cada minuto a mais.
+- **"Duplicar as viagens/dia" NÃO é possível no Free**: exigiria ≤17,5 escritas por viagem e o mínimo
+  estrutural é 27 (3 704 é o tecto, +30 % sobre as 2 857 de hoje).
+
+### 11.5 O que fazer, por ordem
+
+1. **Medir o `heading` antes de mexer** (é a única linha do §11.2 que é dedução e não medição). Se
+   confirmar ≈16 dos 35, é o corte com melhor retorno de todo o projecto: 1 linha no cliente.
+2. **Baixar o `heading`** para `1/5 s` + ≥10° (rotação continua suave; 35 → 28) e, se a rotação
+   aguentar, eliminá-lo de vez (→ 19). O `gps` de 15 s já leva o `h`.
+3. **Escritas 34 → 27**: uma só notificação por viagem (`completed`) em vez de duas, e um só ponto de
+   rasto. As duas são mudanças pequenas e não tiram nada à experiência.
+4. **Alongar a viagem média** (o único lever que aumenta horas): com 1–3 feitos, 37 min já duplica as
+   horas. Encurtar viagens é o contrário do que se quer.
+5. **Não** gastar mais nada em cortes de leitura: com 3 704 viagens o que trava é a escrita, e cortar
+   índices troca 1 escrita por ~50 leituras.
+
+### 11.6 A alternativa de uma linha
+
+Com o plano pago (≈**$7–75/mês**, §6), **duplicar é imediato e sem tocar em código** — os tectos
+passam de 100 k/dia para ordens de grandeza acima. A decisão é do dono e está fora do âmbito deste
+documento; fica registado o número para que a escolha seja informada: **o Free já deu o que tinha a
+dar em ~1,3×; o passo seguinte custa ~$7/mês.**
