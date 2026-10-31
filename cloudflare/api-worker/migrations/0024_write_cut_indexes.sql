@@ -1,0 +1,61 @@
+-- 0024_write_cut_indexes.sql
+-- Corta as ESCRITAS da D1 por viagem: 33 -> 28 numa viagem de 15 min
+-- (medido em staging com `meta.rows_written`, statement a statement).
+--
+-- Regra que isto segue: no plano Free a D1 dá 100 000 escritas/dia e cada
+-- entrada de índice É uma linha escrita. Um índice que nenhuma query usa custa
+-- escritas em todas as linhas da tabela e não devolve nada.
+--
+-- ── Custo medido ANTES (por viagem de 15 min, 2 pontos de rasto) ────────────
+--   INSERT trips ................ 5   (linha + PK + pax_created + status + pending)
+--   UPDATE -> ACCEPTED .......... 3   (linha + status + drv_created)
+--   UPDATE -> DRIVER_ARRIVED .... 2   (linha + status)
+--   UPDATE -> IN_PROGRESS ....... 2   (linha + status)
+--   UPDATE -> COMPLETED ......... 9   (trips 3 + drivers 1 + users 2 + wallet_tx 3)
+--   INSERT ratings .............. 4   (linha + PK + rated + trip)
+--   INSERT trip_points .......... 4 x 2 pontos = 8  (linha + PK + trip_ts + ts)
+--   TOTAL ...................... 33
+--
+-- ── O que sai e porque ─────────────────────────────────────────────────────
+-- 1) trips_pending_idx ("createdAt") WHERE status='REQUESTED'
+--    Redundante com trips_status_idx (status, "createdAt"): as duas queries que
+--    filtram REQUESTED por janela de tempo (GET /trips/incoming e o toca-toca do
+--    RequestsHub) já usam o índice de estado. Provado com EXPLAIN QUERY PLAN em
+--    produção: "SEARCH ... USING INDEX trips_status_idx (status=? AND createdAt>?)"
+--    nas duas. Custo: -1 escrita em cada INSERT de viagem.
+-- 2) ratings_trip_idx ("tripId")
+--    Nenhuma query filtra ratings por "tripId": o /ratings/pending junta pelo
+--    id composto (t.id || ':' || userId, que é a PK) e o /ratings/mine e a nota
+--    da motorista usam "ratedId" (ratings_rated_idx). Custo: -1 por avaliação.
+-- 3) users_driver_wallet_idx ("walletBalance") WHERE role='DRIVER'
+--    Só servia a lista de carteiras do admin (ORDER BY "walletBalance"), que
+--    varre 26 utilizadores uma vez por clique. Custo: -1 em cada UPDATE da
+--    carteira da motorista (o de COMPLETED).
+-- 4) users_phone_idx (phone)
+--    Duplicado: `phone` é UNIQUE na tabela, logo já existe
+--    sqlite_autoindex_users_2. EXPLAIN confirma que o login usa o autoindex
+--    ("SEARCH users USING INDEX sqlite_autoindex_users_2 (phone=?)").
+--    Custo: -1 em cada INSERT de utilizador (não é por viagem).
+-- 5) trip_points_ts_idx (ts)
+--    Só servia o purge de 30 dias (`DELETE ... WHERE ts < ...`), que passou a ir
+--    pelas viagens (ver purgeTripPoints em src/index.ts): o plano novo é
+--    "SEARCH trip_points USING COVERING INDEX trip_points_trip_ts_idx (tripId=?)"
+--    + "SCAN trips" (121 linhas, 1x/dia). Custo: -1 por ponto de rasto (-2/viagem).
+--
+-- ── O que NÃO se apaga ─────────────────────────────────────────────────────
+--   trips_status_idx          -> INDEXED BY em /trips/active e /trips/request (falha com "no such index")
+--   trips_pax_created_idx     -> /trips/history 319 -> 90 linhas lidas
+--   trips_drv_created_idx     -> /trips/history da motorista 315 -> 120
+--   trips_completed_pax_idx   -> /ratings/pending 83 -> 11
+--   trip_points_trip_ts_idx   -> rota da viagem + purge + guarda de viagens esquecidas
+--   wallet_tx_user_idx        -> carteira da motorista
+--
+-- Medido em staging DEPOIS (mesma viagem de 15 min):
+--   INSERT trips 4 · ACCEPTED 3 · ARRIVED 2 · IN_PROGRESS 2 · COMPLETED 8
+--   · ratings 3 · trip_points 3 x 2 = 6  =>  28 escritas/viagem (-15 %)
+-- Teto Free: 100 000 / 28 = 3 571 viagens/dia (era 2 941 com 34).
+DROP INDEX IF EXISTS trips_pending_idx;
+DROP INDEX IF EXISTS ratings_trip_idx;
+DROP INDEX IF EXISTS users_driver_wallet_idx;
+DROP INDEX IF EXISTS users_phone_idx;
+DROP INDEX IF EXISTS trip_points_ts_idx;

@@ -522,7 +522,8 @@ Estado das versões iOS:
 ## Capacidade a 50.000 viagens/dia — auditoria (2026-10-30)
 Relatório completo: **`AUDITORIA-50K-VIAGENS.md`**. Veredicto original (antes dos cortes): **≈330 viagens/dia**
 no Free, não 50.000. O que trava primeiro são os **pedidos ao Worker** e os **pedidos às DO**.
-**Depois dos cortes das vagas 1–3 e 7–12 o valor medido é ≈2.000 viagens/dia** (ver "12. Nona vaga").
+**Depois dos cortes das vagas 1–16 o valor medido é ≈2 941 viagens/dia** (ver "12. Nona vaga",
+"14. Décima primeira vaga" e "16. Décima terceira vaga").
 No plano pago ($5/mês) 50.000/dia é viável: **≈$377/mês** hoje, **≈$126/mês** com as correções.
 
 **Medido (não estimado) com a GraphQL Analytics API:**
@@ -1331,6 +1332,77 @@ compilam (`new Function`, sem erros). Base intacta: **26 users / 121 trips / 1 m
 Script: `%TEMP%\opencode\t-search-cache.mjs` (versão Node com `page.route`) e
 `q-syntax.mjs`/`q-sha.mjs` (sintaxe e verificação byte a byte).
 
+### 16. Décima terceira vaga (2026-10-31) — escritas da D1: 33 → 28 por viagem
+
+**O lado que faltava cortar.** Todos os cortes das vagas 1–15 foram de **pedidos** (DO/Worker). As
+**escritas da D1** estavam intocadas. A regra, medida e não deduzida: **cada entrada de índice é uma
+linha escrita** (além da própria linha) — logo um índice que nenhuma query usa custa escritas em todas as
+linhas da tabela e não devolve nada.
+
+**Medido statement a statement** (`meta.rows_written`, duas vias independentes — SQL directo em staging e
+deltas do contador `writes` do `/health` pela API; deram o mesmo):
+
+| Statement | Antes | Depois |
+|---|---|---|
+| `INSERT` da viagem | 5 | **4** |
+| `UPDATE` → `ACCEPTED` / `DRIVER_ARRIVED` / `IN_PROGRESS` | 3 / 2 / 2 | 3 / 2 / 2 |
+| `UPDATE` → `COMPLETED` (trips) + `drivers` + `users` (carteira) + `wallet_tx` | 3+1+2+3 = 9 | **8** |
+| `INSERT` avaliação | 4 | **3** |
+| `INSERT trip_points` ×2 | 4+4 = 8 | **3+3 = 6** |
+| **Total (viagem de 15 min)** | **33** | **28** (−15 %) |
+
+**Migração `0024_write_cut_indexes.sql`** — 5 índices apagados, cada um com prova de que não é usado
+(`EXPLAIN QUERY PLAN` em produção):
+
+| Índice | Consumidor que se pensava ter | Realidade |
+|---|---|---|
+| `trips_pending_idx ("createdAt") WHERE status='REQUESTED'` | `/trips/incoming` + alarme do `RequestsHub` | ambos dão `SEARCH ... USING INDEX trips_status_idx (status=? AND createdAt>?)` |
+| `ratings_trip_idx ("tripId")` | `/ratings/pending` | junta por `sqlite_autoindex_ratings_1 (id=?)` (id = `tripId:userId`); o resto usa `ratedId` |
+| `users_driver_wallet_idx ("walletBalance") WHERE role='DRIVER'` | lista de carteiras do admin | passa a `SCAN users` (26 linhas) + temp B-tree, 1×/clique |
+| `users_phone_idx (phone)` | login | `phone` é `UNIQUE` ⇒ `sqlite_autoindex_users_2` já serve (`SEARCH users USING INDEX sqlite_autoindex_users_2 (phone=?)`) |
+| `trip_points_ts_idx (ts)` | purge de 30 dias | o purge mudou de forma (abaixo) |
+
+- **NÃO apagar** (cada um tem consumidor medido): `trips_status_idx` (**é `INDEXED BY`** — sem ele a query
+  falha com *no such index*), `trips_pax_created_idx` (Histórico 319 → 90), `trips_drv_created_idx`
+  (315 → 120), `trips_completed_pax_idx` (`/ratings/pending` 83 → 11), `trip_points_trip_ts_idx` (rota +
+  purge + guarda de viagens esquecidas), `wallet_tx_user_idx` (carteira da motorista).
+- **`purgeTripPoints()` mudou de forma** (`src/index.ts` ~5540): `DELETE FROM trip_points WHERE ts < …`
+  → `DELETE FROM trip_points WHERE "tripId" IN (SELECT id FROM trips WHERE "createdAt" < NOW() - INTERVAL
+  '30 days')`. Plano: `SEARCH trip_points USING COVERING INDEX trip_points_trip_ts_idx (tripId=?)` +
+  `SCAN trips` (121 linhas, **1×/dia**; medido 8 lidas / 2 escritas). Efeito colateral: posições **órfãs**
+  deixam de ser limpas por idade — há **0** em produção.
+- **Custo aceite:** a lista de carteiras do admin faz `SCAN users` (26 linhas) — 1 clique, irrelevante.
+
+**Conta nova (viagem de 15 min):**
+
+| Recurso | Antes | Depois | Tecto Free/dia | Viagens/dia |
+|---|---|---|---|---|
+| Escritas D1 | 34 | **28** | 100 000 | **3 571** |
+| Pedidos DO facturados | 34 | 34 | 100 000 | **2 941** |
+| Pedidos Worker | ≈20 | ≈20 | 100 000 | ≈5 000 |
+
+⇒ **as viagens/dia NÃO mudaram (2 941): o muro voltou a ser as DO.** O corte comprou **folga** (3 571 de
+tecto contra 2 941 reais) e **descolou** as duas travas. **Quem sobe a capacidade a partir daqui é o
+`heading`** (34 → 25 DO ⇒ 3 571 viagens/dia, 893 h/dia); depois disso, um só ponto de rasto (28 → 25)
+daria 4 000.
+
+**Armadilhas ao repetir a medição:**
+- `wrangler d1 execute --file` **só devolve o resumo** (sem `meta.rows_written` por statement) e
+  `--command` parte-se com espaços via `cmd.exe` ⇒ usar a **REST D1 API** (`%TEMP%\opencode\d1r.mjs`,
+  token OAuth do `%APPDATA%\xdg.config\.wrangler\config\default.toml`).
+- Em staging, motoristas `ZZ%` deixados **online** roubam a oferta e o `PUT /trips/:id/accept` devolve
+  **409** (o ensaio mede 0 escritas) ⇒ correr `clean-stg.mjs` **antes** de `measure-writes.mjs`.
+
+**Publicado:** migração aplicada em staging **e** produção (6 comandos, ✅). API staging
+**`490d9c13-c4c3-4e97-91f5-95632924532c`**, **API produção `f3831a53-0406-41d8-ba93-c22e1bfac0b1`**.
+Smoke de produção **só `GET` 10/10** (`/health` 200 `shed:0`, `/trips/active` 401/200 `null`, `/boot` 200
+com as 6 chaves, `/ratings/pending`, `/trips/history`, `/drivers/nearby`, `/categories` 200
+`public, max-age=300`, `/admin/quota` 200 `configured:true`). Base intacta: **26 users / 121 trips /
+1 motorista / 315 notifications / 24 ratings / 1 290 trip_points / 0 `ZZ %`**; staging a zero. O webapp
+**não mudou** (só servidor + migração).
+Scripts: `%TEMP%\opencode\measure-sql2.mjs` (por statement, auto-limpa), `measure-writes.mjs` (ponta a
+ponta), `d1r.mjs` (REST + `meta`), `clean-stg.mjs`, `smoke-prod.mjs`.
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -1400,18 +1472,21 @@ comparada com o que a LADIESGO já faz. **Não é para copiar arquitectura** —
      **121 viagens no total**. Falta matéria-prima, não esforço.
 - **A confirmar (não copiar):** Spanner/Ringpop, Kafka+Flink, RL no despacho, solver bipartido, multi-região.
 - **Capacidade em minutos de viagem, não em viagens.** O custo às DO é **por minuto** e o da D1 é
-  **por viagem**. Modelos ancorados no medido: `D1(d) = 27 + 0,4d` e, para as DO, `17 + 3,4d` antes dos
-  cortes, `17 + 1,8d` com `heading` a 1/5 s, **`17 + 1,1d` com o espelho a 1/3 min** (`heading` a 1/5 s).
+  **por viagem**. Modelos ancorados no medido: **`D1(d) = 22 + 3 × pontos de rasto`** (1 ponto/600 s,
+  depois da migração `0024`; antes era `27 + 0,4d`, que vinha de uma estimativa errada — ver §16) e, para
+  as DO, `17 + 3,4d` antes dos cortes, `17 + 1,8d` com `heading` a 1/5 s, **`17 + 1,1d` com o espelho a
+  1/3 min** (`heading` a 1/5 s).
 
   | Duração | DO hoje | Escritas D1 | Viagens/dia (hoje) | Horas de carro/dia | Trava |
   |---|---|---|---|---|---|
-  | 10 min | 28 | 31 | 3 226 | 538 h | D1 |
-  | 15 min | **34** | **34** | **2 941** | **735 h** | **empate DO/D1** |
-  | 20 min | 39 | 35 | 2 564 | 855 h | D1 |
-  | 30 min | 50 | 39 | 2 564 | 1 282 h | D1 |
-  | 60 min | 83 | 51 | 1 961 | 1 961 h | D1 |
+  | 10 min | 28 | 28 | 3 571 | 595 h | empate DO/D1 |
+  | 15 min | **34** | **28** | **2 941** | **735 h** | **DO** |
+  | 20 min | 39 | 31 | 2 564 | 855 h | DO |
+  | 30 min | 50 | 34 | 2 000 | 1 000 h | DO |
+  | 60 min | 83 | 43 | 1 205 | 1 205 h | DO |
 
-  (a linha dos 15 min é o ponto de operação actual: **2 941 viagens/dia ou 735 h/dia**.)
+  (a linha dos 15 min é o ponto de operação actual: **2 941 viagens/dia ou 735 h/dia**. O tecto da D1
+  passou a **3 571** — ver §16 — mas as DO continuam a mandar em 2 941.)
 
 - **O `heading` era o que travava tudo — medido em staging a 2026-10-31** (não deduzido): `liveSendHdg`
   mandava **44 msg/min** com o gate antigo (900 ms + ≥2°), o que valia **33 pedidos facturados por viagem
@@ -1421,22 +1496,27 @@ comparada com o que a LADIESGO já faz. **Não é para copiar arquitectura** —
     (`normH(m.h)`, `index.ts` ~4137). No ensaio a passageira recebeu **36/36 frames `driver` com `h`**
     em 36 envios de `gps`, sem nenhum `heading`. Sem `heading` o cliente ainda deriva o rumo do
     movimento (`carBearing` a cada ≥8 m, `ladiesgo-home.html` ~14575).
-  - **Não eliminar o `heading` agora**: com o espelho a 1/3 min as duas travas empatam (DO 34 vs D1 34);
-    eliminar dá 25 DO mas a D1 continua a travar nas mesmas 2 941. Fica a `1/5 s` (0 de custo de
-    capacidade, melhor rotação).
+  - **O `heading` voltou a ser o próximo corte que sobe capacidade** (depois da migração `0024`, ver §16):
+    com a D1 em **28** e as DO em **34**, o muro são as DO. Baixar o `heading` para **1/15 s** (ou
+    eliminar) leva as DO a **25–28** ⇒ **3 571 viagens/dia (893 h/dia)** sem sair do Free. A decisão é do
+    dono (a rotação do carro no mapa da passageira passa de 5 s para 15 s, ou passa a ser derivada do
+    movimento). **Até 31/10 esta nota dizia o contrário** ("não eliminar, a D1 trava nas mesmas 2 941") —
+    era verdade enquanto a D1 estava em 34; deixou de ser.
 - **"Mais viagens/dia" e "duplicar as horas" — as duas são possíveis no Free.** Análise completa em
-  `docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §11–§12.
+  `docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §11–§13.
   - **`heading` a 1/5 s** ✅ → 68 → 44 DO/viagem → **2 272 viagens/dia**.
   - **Espelho `geo:global` 60 → 180 s** ✅ (`MIRROR_MIN_MS`, medido: 3 espelhos em 7 min em vez de 7) →
     44 → **34 DO/viagem** → **2 941 viagens/dia (+29 %)**.
-  - **Viagens/dia tem muro rígido ≈3 704** = `100 000 ÷ 27 escritas`, o mínimo estrutural de uma viagem
-    concluída (INSERT 5 + `ACCEPTED`/`IN_PROGRESS`/`COMPLETED` 7 + `wallet_tx` 3 + avaliação 4 + 1
-    notificação 4 + 1 `trip_point` 4). Contra as ~1 300 de hoje é **2,8×**.
-  - **O próximo corte é nas escritas da D1 (34 → 27)** — uma só notificação por viagem (`completed`) e
-    um só ponto de rasto. É o único que ainda sobe a capacidade; nenhum corte de pedidos ajuda enquanto a
-    D1 travar.
-  - **Horas:** as horas passam a ser limitadas só pela D1 e crescem com a duração: **735 h a 15 min**,
-    **1 468 h (2×) a ~37 min**, 1 961 h a 60 min.
+  - **Escritas da D1 33 → 28** ✅ (migração `0024`, §16) → tecto da D1 **3 571**. **Não subiu as
+    viagens/dia** (as DO mandam em 2 941): comprou folga e descolou as duas travas.
+  - **Muro da D1 com as escritas em 28: `100 000 ÷ 28 = 3 571`.** A composição real (medida, não
+    estimada) é `INSERT` 4 + `ACCEPTED` 3 + `ARRIVED` 2 + `IN_PROGRESS` 2 + `COMPLETED` 8 + avaliação 3 +
+    2 pontos de rasto 6 = **28**. **Não existe linha em `notifications` por viagem** (a antiga conta de
+    27 punha lá uma) — ver a correcção em §11.3 do relatório.
+  - **Depois do `heading` descer, o corte seguinte é nas escritas (28 → 25)**: um só ponto de rasto
+    (gate 600 s → 1200 s) ⇒ 4 000 viagens/dia. Sozinho não muda nada.
+  - **Horas:** com a D1 em 28 as horas crescem com a duração — **735 h a 15 min**, **1 471 h (2×) a
+    ~30 min** (desceu de 37 min), 2 041 h a 60 min.
   - **Consequência operacional:** encurtar viagens dá mais viagens mas **menos** horas; alongar dá mais
     horas mas menos viagens. A viagem média é o lever, não o número de pedidos.
 - **A lição do DoorDash traduzida:** quando a procura passa a capacidade, **decide-se com informação

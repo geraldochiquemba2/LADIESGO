@@ -5537,10 +5537,16 @@ async function ringStart(env: any) {
 
 // Retenção do histórico de posições (30 dias) e do log do guarda de viagens (7 dias).
 // Corre 1x/dia via Cron Trigger. `try` separados: se um falhar o outro continua.
+//
+// QUOTA D1 (2026-10-31): o purge das posições deixou de filtrar por `ts` (que
+// obrigava a manter `trip_points_ts_idx`, +1 escrita por ponto = +2 por viagem)
+// e passou a ir pelas viagens antigas. Plano: "SEARCH trip_points USING COVERING
+// INDEX trip_points_trip_ts_idx (tripId=?)" + "SCAN trips" (121 linhas, 1x/dia).
+// Migração 0024_write_cut_indexes.sql apaga o índice `ts`.
 async function purgeTripPoints(env: any) {
   const sql = neon(env.DB);
   try {
-    await sql`DELETE FROM trip_points WHERE ts < ${Date.now() - 30 * 24 * 60 * 60 * 1000}`;
+    await sql`DELETE FROM trip_points WHERE "tripId" IN (SELECT id FROM trips WHERE "createdAt" < NOW() - INTERVAL '30 days')`;
   } catch {}
   try {
     // O log do guarda é diagnóstico: 7 dias chegam (e a tabela fica pequena).
