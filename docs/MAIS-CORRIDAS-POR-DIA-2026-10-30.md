@@ -314,3 +314,57 @@ escritas.
   pelo Worker estático.
 - Smoke de produção só de `GET`: **12/12**. Base intacta: **26 users / 121 trips / 1 motorista /
   315 notifications / 0 `ZZ %`**. Staging a zero.
+
+## 10. MEDIDO - pesquisa de lugares: todos os inputs na cache de cliente (2026-10-31)
+
+O servidor já estava FTS5-only desde o §1 (3 a 2 400 linhas lidas por pesquisa, contra 23 332), mas o
+**cliente** ainda abria um pedido por pausa na escrita em **4 sítios** que não passavam pelo
+`lgPlaceFetch` (cache de 10 min). Como cada **prefixo** é uma chave nova na cache do servidor
+(`places:v14:<q>:<lat,lng>`), escrever "kilamba" devagar continuava a valer várias pesquisas.
+
+### 10.1 O que mudou (só cliente, 1 linha por sítio)
+
+`fetch('/api/places/search?q=…&lat=…&lng=…&v=3').then(r => r.ok ? r.json() : null)` →
+`lgPlaceFetch(q, [lat, lng])`. Ficou **1** ocorrência de `fetch('/api/places/search…')` no ficheiro,
+dentro do próprio `lgPlaceFetch`; e o `window.__plC` passou a podar-se acima de 150 chaves.
+
+| Sítio | Estado | Cache antes | Cache agora |
+|---|---|---|---|
+| `#q` / `#oq` (destino/origem da corrida) | vivo | já tinha | — |
+| `#qs` (folha "Adicionar paragem" → `stop`) | **vivo** | não | **sim** |
+| `#prmPickSearch` (picker unificado: **Premium e Partida**) | **vivo** | não | **sim** |
+| `sharedPlaceInput` (`sharedSugO`/`sharedSugD`) | código morto | não | sim (por coerência) |
+| `sharedPickSearch` (`#sharedPickSearch`) | código morto | não | sim (por coerência) |
+
+Os dois últimos são mortos: `renderSharedCreate()` desenha origem/destino como `readonly` com
+`onclick="sharedPickOnMap(…)"` e `renderSharedPickBar()` — a única coisa que criaria
+`#sharedPickSearch` — nunca é chamado. A Partida usa o **mesmo** bar do Premium (`prmPickBar()`,
+`_prmTarget='shared'`), portanto é o `prmPickSearch` que corre.
+
+### 10.2 Medido no browser (produção, API real, 0 escritas)
+
+| Sítio | 1.ª pesquisa | 2.ª (mesma) |
+|---|---|---|
+| `#qs` ("Adicionar paragem") | **1 pedido**, 784 ms | **0 pedidos** |
+| picker unificado (`#prmPickSearch`) | **1 pedido**, 980 ms | **0 pedidos** |
+
+Contagem por `performance.getEntriesByType('resource')` filtrado por `/api/places/search`; sugestões
+reais renderizadas (Kilamba, Kilamba Kiaxi - centro, Kilambar, Bloco V) e a escolha continua a ser
+guardada (`_prmDraftName:'Kilamba'`, `_prmDraft:[-8.827963,13.271258]`). Com a API stubada
+(`page.route`), os 4 sítios deram todos `1 → 0`.
+
+### 10.3 Publicado
+
+Pages **`bad50008.ladiesgo.pages.dev`** (alias `ladiesgo.pages.dev`), Worker estático
+**`37f18fc5-d7bc-4fa1-9a6c-b81adb74f2c2`**. `ladiesgo-home.html` com **443 418 bytes**, sha256
+**`f19a75031e2cb8a34b0a0fc695071fb6352824153c7c573ff52b449da5c1bae4`**, byte a byte igual no local, no
+alias do Pages, no deployment e no Worker estático. Os 22 blocos `<script>` inline compilam. Base
+intacta (**26 users / 121 trips / 1 motorista / 315 notifications / 0 `ZZ %`**); as 2 contas guest do
+ensaio foram apagadas.
+
+### 10.4 Onde isto entra na conta
+
+Isto não muda o custo **por viagem** (o que trava a seguir continuam a ser as **escritas da D1**,
+≈34/viagem, §9.4); muda o custo **por utilizador a pesquisar**. Uma sessão que escreve meia dúzia de
+nomes deixa de custar dezenas de pesquisas FTS e passa a custar uma por termo distinto, com o topo
+(`kilamba` ≈ 2 000 linhas) pago ~1×/10 min em vez de 1×/pausa.

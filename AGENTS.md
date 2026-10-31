@@ -598,6 +598,8 @@ Worker estático `6bcd9f6f…`).
 - **`lgPlaceFetch(q, ll)`** — cache de pesquisa no cliente: **10 min** para resultados com linhas, **60 s** para
   vazio; chave `q.toLowerCase()|round(lat*100),round(lng*100)`. Usada pelo `#q` e pelo `#oq`; debounce 250 → **400 ms**.
   Provado no browser: 1.ª chamada 200 ms, 2.ª **0 ms** com o **mesmo objecto** (`same_obj:true`).
+  Desde 2026-10-31 é o **único** caminho para `/api/places/search` (ver "Décima segunda vaga"): os 4 sítios que
+  ainda chamavam o `fetch` directo passaram a usá-la e o `__plC` poda-se quando passa de 150 chaves.
 - **`refreshProfile(force)`** — TTL **60 s → 900 s** (15 min); o clique no menu chama `refreshProfile(true)`.
 - **`walletData()`** — cache de 60 s + dedupe de pedido em curso (`__walletC`/`__walletP`).
 - **`paintWBadge`** 120 s → **600 s**; **`sharedNotifPoll`** 30 s → **60 s**.
@@ -1268,6 +1270,63 @@ intacta (26 users / 121 trips / 1 motorista / 315 notifications / 0 `ZZ %`); sta
 Scripts: `%TEMP%\opencode\t-bridge-bg.mjs` (segundo plano), `t-bridge-ab.mjs` (A/B), `m-ride-cost.mjs`
 (`NP=1` liga o flag e conta os frames da passageira), `t-do-count.mjs` (pedidos por objeto, já assentados).
 
+### 15. Décima segunda vaga (2026-10-31) — pesquisa: **todos** os inputs na cache de cliente
+
+**O que faltava.** A pesquisa de lugares já era FTS5-only no servidor (vaga 1), mas **5 sítios** do
+`webapp/ladiesgo-home.html` chamavam `/api/places/search` e só **2** (`#q` e `#oq`) passavam pelo
+`lgPlaceFetch` (cache de 10 min). Nos outros, cada pausa na escrita era um pedido de rede e cada
+**prefixo** é uma chave de cache nova no servidor (`places:v14:<q>:<lat,lng>`): escrever "kilamba"
+devagar podia valer ~7 pesquisas (3 a 2 000 linhas lidas cada).
+
+**A alteração (só cliente, 1 linha por sítio).** `fetch('/api/places/search?q=…&lat=…&lng=…&v=3')
+.then(r => r.ok ? r.json() : null)` → `lgPlaceFetch(q, [lat, lng])` nos 4 sítios que faltavam. Ficou
+**1** ocorrência de `fetch('/api/places/search…')` no ficheiro — dentro do próprio `lgPlaceFetch`.
+Acrescentada poda do `window.__plC` (>150 chaves → apaga as expiradas) para a memória não crescer sem
+limite numa sessão longa.
+
+| Sítio | Estado | Cache antes | Cache agora |
+|---|---|---|---|
+| `#q` / `#oq` (destino/origem da corrida) | vivo | já tinha | — |
+| `#qs` (folha "Adicionar paragem" → `stop`) | **vivo** | não | **sim** |
+| `#prmPickSearch` (picker unificado: **Premium e Partida**) | **vivo** | não | **sim** |
+| `sharedPlaceInput` (`sharedSugO`/`sharedSugD`) | **código morto** | não | sim (por coerência) |
+| `sharedPickSearch` (`#sharedPickSearch`) | **código morto** | não | sim (por coerência) |
+
+- Os dois últimos são **mortos** porque `renderSharedCreate()` desenha os campos de origem/destino como
+  `readonly` com `onclick="sharedPickOnMap(…)"` (o picker unificado), e `renderSharedPickBar()` — a única
+  coisa que criaria `#sharedPickSearch` — **nunca é chamado** (1 ocorrência = a definição). `sharedPlaceInput`
+  só é chamado por `sharedDestInput`, que também ninguém chama. Ficaram convertidos para não voltarem a ser
+  um caminho directo se alguém os reactivar.
+- **Não confundir `sharedPickSearch` com o picker da Partida:** "Anunciar Partida" → "Ponto de partida" abre
+  o **mesmo** bar do Premium (`prmPickBar()`, `#prmPickSearch`/`#prmPickSug`), com `_prmTarget='shared'`;
+  é o `prmPickSearch` que corre.
+
+**Prova no browser (produção, `https://ladiesgo.pages.dev/home`, conta admin do backdoor — 0 escritas):**
+
+| Sítio | 1.ª pesquisa | 2.ª (mesma) | Sugestões reais |
+|---|---|---|---|
+| `#qs` ("Adicionar paragem") | **1 pedido**, 784 ms | **0 pedidos** | Kilamba Escola · Rangel · 2,3 km; Kilamba Kiaxi - centro; Kilambar Pub; Bloco V Transporte |
+| picker unificado (`#prmPickSearch`) | **1 pedido**, 980 ms | **0 pedidos** | Kilamba; Kilamba Kiaxi - centro; Kilambar; Bloco V |
+
+- Contagem por `performance.getEntriesByType('resource')` filtrado por `/api/places/search` — **API real**,
+  sem stubs. `window.__plC` ficou com `kilamba|-884,1329`.
+- O picker continua a guardar a escolha: `prmPickSugPick(0)` → `_prmDraftName:'Kilamba'`,
+  `_prmDraft:[-8.827963,13.271258]`, `_prmDraftPicked:true`.
+- Com a API **stubada** (`page.route`) os 4 sítios deram todos `1 → 0` pedidos e chave em cache, incluindo
+  os dois mortos — é a prova de que a conversão em si está certa.
+- **0 erros de consola** próprios da alteração (só os recursos pré-existentes: 404 de uma viagem antiga
+  guardada em `localStorage`, geolocalização bloqueada e pedidos abortados ao fechar a página).
+
+**Publicado:** Pages **`bad50008.ladiesgo.pages.dev`** (alias `ladiesgo.pages.dev`), Worker estático
+**`37f18fc5-d7bc-4fa1-9a6c-b81adb74f2c2`**. `ladiesgo-home.html` com **443 418 bytes**,
+sha256 **`f19a75031e2cb8a34b0a0fc695071fb6352824153c7c573ff52b449da5c1bae4`**, servido **byte a byte
+igual** pelo Pages (alias + deployment) e pelo Worker estático. Todos os 22 blocos `<script>` inline
+compilam (`new Function`, sem erros). Base intacta: **26 users / 121 trips / 1 motorista / 315 notifications /
+0 `ZZ %`**; as 2 contas guest `ZZ Pesq Cache` do ensaio foram apagadas (0 dependentes em
+`notifications`/`wallet_tx`/`trips`/`shared_reservations`/`premium_reservations`).
+Script: `%TEMP%\opencode\t-search-cache.mjs` (versão Node com `page.route`) e
+`q-syntax.mjs`/`q-sha.mjs` (sintaxe e verificação byte a byte).
+
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,
 por isso `SELECT ... ::float` **funciona na API** mas falha com
@@ -1320,9 +1379,12 @@ Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da Gr
 - **Cada pico é um múltiplo inteiro de 23 332 = o tamanho de `places`** (186 908 = 8,01×; 23 375 = 1,00×).
   Nenhuma outra tabela chega perto (`trips` 121, `notifications` 315) — é a assinatura de uma **varredura
   completa de `places`**, feita pelo 3.º passo `norm LIKE '%termo%'` de `localPlaces()`, **removido às 08:21Z**
-  (commit `c515d18`). E o cliente manda **1 pedido por tecla** em `#qs`(L113), `sharedPlaceInput`(L961),
-  `sharedPickSearch`(L971) e `prmPick`(L1499) — só `#q`/`#oq` usam `lgPlaceFetch`. Ou seja: **escrever
+  (commit `c515d18`). E o cliente mandava **1 pedido por tecla** em `#qs`(L113), `sharedPlaceInput`(L961),
+  `sharedPickSearch`(L971) e `prmPick`(L1499) — só `#q`/`#oq` usavam `lgPlaceFetch`. Ou seja: **escrever
   "kilamba" = 7 varreduras = 163 324 linhas = 3,3 % do tecto diário; 214 pesquisas = os 5 M do dia.**
+  *(**Corrigido em 2026-10-31:** os 4 sítios passaram a usar `lgPlaceFetch` — cache de 10 min. Dos 4, só
+  `#qs` e o picker unificado (`#prmPickSearch`, que também serve a Partida) estão vivos; os outros dois são
+  código morto. Ver "Décima segunda vaga".)*
 - **Piso de repouso medido (sem ninguém): 120–741 linhas/hora e ~100–120 pedidos/hora** → 3–18 k linhas e
   2,4–2,9 k pedidos por dia. **O cron por minuto NÃO é problema** — a ideia antiga de "65 linhas/min ⇒ 93,6 k/dia"
   vinha de uma janela com trabalho de teste a decorrer.
