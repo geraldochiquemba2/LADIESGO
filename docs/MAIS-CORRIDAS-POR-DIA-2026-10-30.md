@@ -476,34 +476,41 @@ Composição real de uma viagem de 15 min (medida, ver §13):
 | **`heading` a 1/5 s** ✅ feito | 44 | 34 | **2 272** | 568 |
 | **+ espelho 1/3 min** ✅ feito | **34** | 34 | **2 941** | 735 |
 | **+ escritas 33 → 28** ✅ feito (0024) | 34 | **28** | **2 941** | 735 |
-| + `heading` a 1/15 s (ou eliminar) | 25–28 | 28 | **3 571** | 893 |
+| **+ `heading` a 1/15 s** ✅ feito | **28** | 28 | **3 571** | 893 |
+| + `heading` eliminado (daria 25) | 25 | 28 | 3 571 | 893 |
 | + escritas 28 → 25 (1 só ponto de rasto) | 25 | 25 | **4 000** | 1 000 |
 
 - **O `heading` a `1/5 s` foi o corte que mais rendeu** (1 470 → 2 272 viagens/dia).
 - **O espelho a 1/3 min levou ao empate DO 34 vs D1 34** (§12): as duas travas passam a morder ao mesmo
   tempo, nas mesmas 2 941 viagens.
 - **As escritas 33 → 28 (§13) compraram folga, não viagens**: a D1 passou a 3 571 e as DO continuam a
-  mandar (2 941). **A partir daqui quem manda são as DO outra vez** — e aí o `heading` volta a ser o
-  único corte que sobe a capacidade (34 → 25/28), ao contrário do que se concluiu a 31/10 antes deste corte.
+  mandar (2 941). **A partir daí quem manda são as DO outra vez** — e o `heading` voltou a ser o único
+  corte que sobe a capacidade, ao contrário do que se tinha concluído antes do corte das escritas.
+- **O `heading` a 1/15 s (§14) fecha o empate outra vez, agora em 28/28** ⇒ **3 571 viagens/dia**.
+  Eliminar o `heading` por completo **já não sobe nada** (25 DO mas D1 em 28): a partir daqui só se
+  passa das 3 571 **mexendo nas duas travas ao mesmo tempo**.
 
-Com o `heading` eliminado e o espelho a 1/3 min, a D1 passa a ser `22 + 3 × pontos` (um ponto de rasto
-por 600 s) e o muro é o **maior** dos dois:
+Com o `heading` a 1/15 s (o que ficou) e o espelho a 1/3 min, as DO são `17 + 0,7d` (era `17 + 1,1d`
+com o `heading` a 1/5 s) e a D1 é `22 + 3 × pontos` (um ponto de rasto por 600 s); o muro é o **maior**
+dos dois:
 
-| Duração | DO | D1 (0024) | Viagens/dia | **Horas/dia** |
+| Duração | DO (1/15 s) | D1 (0024) | Viagens/dia | **Horas/dia** |
 |---|---|---|---|---|
-| 15 min (hoje) | 25 | **28** | 3 571 | 893 |
-| 30 min | 33 | **34** | 2 941 | **1 471** ← 2× |
-| 37 min | 37 | 34 | 2 703 | 1 667 |
-| 45 min | 41 | 37 | 2 439 | 1 829 |
-| 60 min | 49 | 43 | 2 041 | 2 041 |
+| 15 min (hoje) | **28** | **28** | 3 571 | 893 |
+| 30 min | 38 | 34 | 2 632 | 1 316 |
+| 37 min | 43 | 34 | 2 326 | 1 435 |
+| 40 min | 45 | 37 | 2 222 | **1 481** ← 2× |
+| 45 min | 49 | 37 | 2 041 | 1 531 |
+| 60 min | 59 | 43 | 1 695 | 1 695 |
 
-- **"Duplicar as horas" é possível no Free** — com os cortes **e** uma viagem média de ~**30 min**
-  (hoje 15). Depois das escritas 33 → 28 o ponto de duplicação desceu de 37 para **30 min**.
-- **"Duplicar as viagens/dia" também passou a ser possível**: o ponto de partida real é ~1 300 e o
-  tecto estrutural (com o `heading` a 1/5 s e as escritas em 28) é **3 571**. O que **não** é possível
-  é passar disso sem descer o `heading`.
-- *(Estas linhas são **modelo** `DO = f(d)`/`D1 = 22 + 3·pontos` ancorado no medido a 15 min, não
-  medição por duração. A linha dos 15 min é a única medida ponta a ponta.)*
+- **"Duplicar as horas" é possível no Free** — com os cortes **e** uma viagem média de ~**40 min**
+  (hoje 15). Subiu de 30 para 40 min porque o `heading` a 1/15 s custa 0,2 DO facturado por minuto
+  (a 30 min as DO já em 38 e a D1 em 34 ⇒ 2 632 viagens ⇒ 1 316 h, abaixo das 1 471).
+- **"Duplicar as viagens/dia" também é possível**: o ponto de partida real é ~1 300 e o tecto
+  estrutural é **3 571** (2,7×). Passar disso exige **baixar as duas travas**: só o `heading` (25 DO)
+  ou só as escritas (25 D1) dão na mesma 3 571.
+- *(Estas linhas são **modelo** `DO = 17 + 0,7d` / `D1 = 22 + 3·pontos`, ancorado no medido a 15 min,
+  não medição por duração. A linha dos 15 min é a única medida ponta a ponta.)*
 
 ### 11.5 O que fazer, por ordem
 
@@ -515,12 +522,14 @@ por 600 s) e o muro é o **maior** dos dois:
    nenhuma query usava (provado com `EXPLAIN QUERY PLAN` em produção) foram apagados. Medido statement a
    statement com `meta.rows_written`: **33 → 28** por viagem de 15 min (§13). A D1 passou a **3 571** e
    as DO (34) voltaram a ser o muro ⇒ **viagens/dia não mudou (2 941)**.
-4. **`heading` a 1/15 s (ou eliminar)** — **agora é o único corte que sobe a capacidade**: DO 34 → 25–28
-   com a D1 já em 28 ⇒ **3 571 viagens/dia (893 h/dia)**. É uma decisão do dono (a rotação do carro no
-   mapa da passageira passa de 5 s para 15 s, ou passa a ser derivada do movimento).
-5. **Escritas 28 → 25** (um só ponto de rasto: gate de 600 s → 1200 s) — leva a 4 000 viagens/dia, mas
-   **só morde depois do passo 4**; sozinho não muda nada porque o muro são as DO.
-6. **Alongar a viagem média** (o único lever que aumenta horas): com 1–5 feitos, ~30 min já duplica as
+4. **`heading` a 1/15 s + ≥20°** ✅ **FEITO 31/10** — 1 linha no cliente (`liveSendHdg`: `<5000` → `<15000`,
+   `d<10` → `d<20`). Medido no browser com a função real da página: **13 → 5 mensagens/min** no perfil
+   com curvas (o piso é o próprio intervalo) ⇒ **−6 DO facturados/viagem** ⇒ DO 34 → **28** ⇒
+   **3 571 viagens/dia (893 h/dia)**. Detalhe e prova em §14.
+5. **Escritas 28 → 25** (um só ponto de rasto: gate de 600 s → 1200 s) — **sozinho não muda nada**
+   (DO 28 continua a mandar). Com o passo 4 feito, **só sobe a capacidade se as duas travas descerem**:
+   25 DO + 25 D1 ⇒ **4 000 viagens/dia**.
+6. **Alongar a viagem média** (o único lever que aumenta horas): com 1–5 feitos, ~40 min duplica as
    horas.
 7. **Não** gastar mais nada em cortes de leitura: a 3 571 viagens o que trava são as DO e a escrita, e
    cortar índices troca 1 escrita por ~50 leituras.
@@ -699,4 +708,71 @@ Modelo da D1 actualizado: **`D1(d) = 22 + 3 × (pontos de rasto)`**, com 1 ponto
 - Base de produção intacta: **26 users / 121 trips / 1 motorista / 315 notifications / 24 ratings /
   1 290 trip_points / 0 `ZZ %`**. Staging a zero (1 admin, 0 viagens, 0 `ZZ %`).
 - O webapp **não mudou** neste passo (só servidor + migração).
+
+## 14. MEDIDO — `heading` a 1/15 s: DO 34 → 28 (2026-10-31)
+
+O último corte que faltava para subir as viagens/dia. O `heading` (rumo do carro) era enviado pelo WS da
+viagem com um gate de **1/5 s + ≥10°** — ou seja, **12 mensagens/minuto no máximo**, 180 por viagem de
+15 min, **9 DO facturados**. Cada mensagem é **1 pedido na métrica e 1/20 na factura** (§13 da vaga 10).
+
+### 14.1 A alteração — 2 números, 1 linha
+
+`webapp/ladiesgo-home.html`, `liveSendHdg`:
+
+```diff
+-var now=Date.now();if(now-_liveHdgAt<5000)return true;if(_liveHdgV!=null){...if(d<10)return true}
++var now=Date.now();if(now-_liveHdgAt<15000)return true;if(_liveHdgV!=null){...if(d<20)return true}
+```
+
+Nada mais mudou: o frame `{t:'heading',h}` é o mesmo, o handler do servidor é o mesmo, e o rumo continua a
+chegar por **duas outras vias** que já existiam:
+
+- o frame **`{t:'gps'}`** (a cada 15 s) leva `h: drvHeadVal()` e o servidor põe-no no frame `driver`
+  (`normH(m.h)`);
+- o cliente **deriva o rumo do movimento** (`carBearing`, a cada ≥8 m) para rodar o carro no mapa.
+
+### 14.2 A/B na página real (função real, sem tocar na rede)
+
+Ensaio no browser sobre `https://ladiesgo.pages.dev/home`: lê-se `window.liveSendHdg.toString()`, derivam-se
+as duas variantes **por substituição dos dois números do gate** (a única diferença entre elas é o gate),
+substituem-se só as pré-condições (`liveWsOpen`, `me`, `drvHeadVal`, `_liveWs.send`) e corre-se **60 s de
+viagem a 4 amostras/s** com um relógio controlado.
+
+| Perfil de rumo (60 s) | Antes (1/5 s + 10°) | Depois (1/15 s + 20°) | Redução |
+|---|---|---|---|
+| recta (ruído ±4°) | 1 msg | 1 msg | — |
+| cidade (curva de 35° a cada 3 s) | **13 msg** | **5 msg** | **−62 %** |
+| ruído GPS (0–359° aleatório) | **13 msg** | **5 msg** | **−62 %** |
+
+- O perfil "recta" já quase não mandava `heading` (a guarda de 10°/20° corta) — **a poupança vem das
+  curvas**, que é o que uma corrida urbana tem.
+- Nas curvas o resultado é **exactamente o piso do intervalo**: 5 s → 13 msgs em 60 s (t=0,5,…,60);
+  15 s → 5 (t=0,15,30,45,60). Por isso a conta é determinística: **180 → 60 mensagens por viagem de
+  15 min** (medido na página já publicada: **61** em 900 s, 4,07/min).
+- **6 DO facturados a menos por viagem** (120 mensagens ÷ 20) ⇒ **34 → 28**.
+
+### 14.3 Conta nova (viagem de 15 min)
+
+| Recurso | Antes | Depois | Tecto Free/dia | Viagens/dia |
+|---|---|---|---|---|
+| Pedidos DO facturados | 34 | **28** | 100 000 | **3 571** |
+| Escritas D1 | 28 | 28 | 100 000 | 3 571 |
+| Pedidos Worker | ≈20 | ≈20 | 100 000 | ≈5 000 |
+
+⇒ **2 941 → 3 571 viagens/dia (+21 %)** e **735 → 893 h/dia**. As duas travas ficam **empatadas em 28**:
+a partir daqui **nenhum corte sozinho sobe a capacidade** — baixar só o `heading` (25 DO) ou só as
+escritas (25 D1) dá na mesma 3 571. Para passar disso as duas têm de descer (25/25 ⇒ 4 000).
+
+### 14.4 Publicado
+
+- **Pages** `869a4d0d.ladiesgo.pages.dev` (alias `ladiesgo.pages.dev`) e **Worker estático** `ladiesgo`
+  versão `136c6aca-9c93-4159-9689-020c235d7948`.
+- `ladiesgo-home.html` **443 421 bytes**, sha256
+  **`72aa3e84fd06a5cef3d359cd62f1b6bad567a8db83e7ad0bc41da421e88ef7c0`**, servido **byte a byte igual**
+  pelo alias, pelo deployment e pelo Worker estático; `gate15s`/`gate20` presentes nos três.
+- Todos os **22** blocos `<script>` inline compilam (`new Function`, sem erros).
+- Verificação na página publicada: `gate_novo:true`, `gate_antigo:false`, **61 mensagens em 15 min**
+  (4,07/min, 3,05 DO facturados). **0 erros de consola** próprios da alteração.
+- Só cliente: **nenhuma** alteração de API, migração ou base de dados.
+
 

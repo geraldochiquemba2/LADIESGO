@@ -62,6 +62,7 @@ Papéis: **PASSENGER**, **DRIVER**, **ADMIN** (mesma conta, papel escolhido no s
 - Badge do chat: `{t:'unread'}` no WS da viagem incrementa `__chatUnreadN`; `__chatTick` (30 s) salta quando o WS está aberto.
 - Regra Cloudflare: cada **ligação** WS conta 1 pedido; as **mensagens** WS **não** contam como pedidos do Worker (contam no Durable Object a 20:1). Por isso **preferir WS a polling**.
 - `geoPresence()` já se auto-limita (heartbeat 30 s em viagem, 60 s parada) — não é preciso mexer no intervalo.
+- **`liveSendHdg` (rumo pelo WS da viagem): gate `1/15 s + ≥20°`** (2026-10-31; era 5 s + 10°). Cada mensagem vale 1/20 de pedido ao DO, e o gate de 5 s dava 12 msg/min = 9 DO facturados por viagem de 15 min. O rumo **não se perde**: o frame `{t:'gps'}` (15 s) já leva `h` e o `carBearing` deriva-o do movimento (≥8 m). Não baixar o intervalo sem medir — é o que separa 2 941 de 3 571 viagens/dia no plano Free.
 
 ## Cache (`webapp/_headers`)
 - HTML e rotas (`/*.html`, `/`, `/app`, `/home`, `/t`, `/ladiesgo`, …) → **`no-store`**.
