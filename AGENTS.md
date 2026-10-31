@@ -1396,24 +1396,33 @@ comparada com o que a LADIESGO já faz. **Não é para copiar arquitectura** —
      **121 viagens no total**. Falta matéria-prima, não esforço.
 - **A confirmar (não copiar):** Spanner/Ringpop, Kafka+Flink, RL no despacho, solver bipartido, multi-região.
 - **Capacidade em minutos de viagem, não em viagens.** O custo às DO é **por minuto** e o da D1 é
-  **por viagem**; modelo ancorado no medido (35 DO / 34 escritas a 15 min): `DO(d) = 14 + 1,4d` e
-  `D1(d) = 27 + 0,4d`.
+  **por viagem**. Modelos ancorados no medido: `D1(d) = 27 + 0,4d` e, para as DO, `17 + 3,4d` hoje
+  (`heading` 1/900 ms), `17 + 1,8d` com `heading` a 1/5 s, `17 + 1,2d` sem `heading`.
 
-  | Duração | DO/viagem | Escritas D1 | Viagens/dia | Horas de carro/dia | Trava |
+  | Duração | DO hoje | Escritas D1 | Viagens/dia (hoje) | Horas de carro/dia | Trava |
   |---|---|---|---|---|---|
-  | 10 min | 28 | 31 | 3 226 | 538 h | D1 |
-  | 15 min | **35** | **33** | **2 857** | **714 h** | DO |
-  | 20 min | 42 | 35 | 2 381 | 794 h | DO |
-  | 30 min | 56 | 39 | 1 786 | 893 h | DO |
-  | 60 min | 98 | 51 | 1 020 | 1 020 h | DO |
+  | 10 min | 51 | 31 | 1 960 | 327 h | DO |
+  | 15 min | **68** | **33** | **1 470** | **368 h** | DO |
+  | 20 min | 85 | 35 | 1 176 | 392 h | DO |
+  | 30 min | 119 | 39 | 840 | 420 h | DO |
+  | 60 min | 221 | 51 | 452 | 452 h | DO |
 
-- **"Mais viagens/dia" e "duplicar as horas" são perguntas diferentes — e só a segunda é possível no
-  Free.** Análise completa em `docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §11.
+- **O `heading` é o que trava tudo — medido em staging a 2026-10-31** (não deduzido): `liveSendHdg`
+  manda **44 msg/min** com o gate real (900 ms + ≥2°), o que vale **33 pedidos facturados por viagem
+  de 15 min** dos 68 totais; no tecto do throttle são 58–66/min (50/viagem). **1 mensagem = 1 pedido na
+  métrica** (que é 1:1 com as mensagens) e **1/20 na factura**.
+  - É **redundante**: o frame `{t:'gps'}` já leva o `h` e o servidor põe-no no `driver`
+    (`normH(m.h)`, `index.ts` ~4137). No ensaio a passageira recebeu **36/36 frames `driver` com `h`**
+    em 36 envios de `gps`, sem nenhum `heading`. Sem `heading` o cliente ainda deriva o rumo do
+    movimento (`carBearing` a cada ≥8 m, `ladiesgo-home.html` ~14575).
+- **"Mais viagens/dia" e "duplicar as horas" — as duas são possíveis no Free.** Análise completa em
+  `docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §11.
+  - **`heading` a 1/5 s** (1 linha no cliente) → 68 → 44 DO/viagem → **2 272 viagens/dia**.
+    Eliminá-lo → 35 → **2 857**. Espelho `geo:global` 60→180 s (`MIRROR_MIN_MS`) → 25 → 2 941.
   - **Viagens/dia tem muro rígido ≈3 704** = `100 000 ÷ 27 escritas`, o mínimo estrutural de uma viagem
     concluída (INSERT 5 + `ACCEPTED`/`IN_PROGRESS`/`COMPLETED` 7 + `wallet_tx` 3 + avaliação 4 + 1
-    notificação 4 + 1 `trip_point` 4). É **+30 %** sobre as 2 857 de hoje — **não é 2×**.
-  - **Horas não têm muro:** cortando o `heading` (o maior item de DO, ≈16,5 dos 35, e **redundante** — o
-    frame `{t:'gps'}` já leva o `h`) e as escritas 34→27, as horas passam a ser limitadas só pela D1 e
+    notificação 4 + 1 `trip_point` 4). Contra as ~1 300 de hoje é **2,8×**.
+  - **Horas:** com o `heading` fora e o espelho a 1/3 min, as horas passam a ser limitadas só pela D1 e
     crescem com a duração: 926 h a 15 min, **1 468 h (2×) a ~37 min**, 1 961 h a 60 min.
   - **Consequência operacional:** encurtar viagens dá mais viagens mas **menos** horas; alongar dá mais
     horas mas menos viagens. A viagem média é o lever, não o número de pedidos.

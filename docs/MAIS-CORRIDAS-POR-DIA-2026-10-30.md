@@ -374,56 +374,75 @@ nomes deixa de custar dezenas de pesquisas FTS e passa a custar uma por termo di
 ## 11. "Mais viagens por dia" e "duplicar as horas" são duas perguntas diferentes (2026-10-31)
 
 Investigação motivada pela pesquisa das outras plataformas (`docs/PICOS-E-CONCORRENCIA-2026-10-31.md`).
-**Conclusão que inverte a intuição:** no Free, **as viagens/dia têm um muro rígido (~3 700) e as horas
-não** — porque as escritas da D1 são ~**fixas por viagem** e os pedidos às DO são **por minuto**.
+**Conclusão:** no Free, **as escritas da D1 são ~fixas por viagem e os pedidos às DO são por minuto** — e
+hoje o que trava primeiro são as DO, **dominadas pelo frame `{t:'heading'}`**.
+
+> **CORRECÇÃO (2026-10-31, medida):** a versão anterior deste §11 dizia **35 DO/viagem** e **2 857
+> viagens/dia**. A medição em staging (§11.2) mostra **68–85 DO/viagem** — a estimativa do `heading`
+> (16,5) era **metade** do real (33–50). A capacidade real de hoje é **≈1 200–1 470 viagens/dia**, não
+> 2 857. A boa notícia inverte o veredicto: **duplicar as viagens/dia passa a ser possível no Free**,
+> porque o ponto de partida é metade do que se pensava.
 
 ### 11.1 Os dois muros, em função da duração da viagem
 
-Modelo (ancorado nos valores medidos de §9.4 e §14 do `AGENTS.md`):
-`DO(d) = 14 + 1,4d` e `D1(d) = 27 + 0,4d`, com `d` em minutos.
+Modelos ancorados no medido — `D1(d) = 27 + 0,4d` (§11.3) e quatro variantes de DO (§11.2):
 
-| Duração | Pedidos DO | Escritas D1 | **Viagens/dia** | **Horas/dia** | Trava |
+| | `DO(d)` |
+|---|---|
+| Hoje (`heading` 1/900 ms) | `17 + 3,4d` |
+| `heading` a 1/5 s | `17 + 1,8d` |
+| Sem `heading` | `17 + 1,2d` |
+| Sem `heading` + espelho 1/3 min | `17 + 0,5d` |
+
+| Duração | DO hoje | Escritas D1 | **Viagens/dia (hoje)** | **Horas/dia (hoje)** | Trava |
 |---|---|---|---|---|---|
-| 10 min | 28 | 31 | 3 226 | 538 | D1 |
-| **15 min (hoje)** | **35** | **33** | **2 857** | **714** | DO |
-| 20 min | 42 | 35 | 2 381 | 794 | DO |
-| 30 min | 56 | 39 | 1 786 | 893 | DO |
-| 60 min | 98 | 51 | 1 020 | 1 020 | DO |
+| 10 min | 51 | 31 | 1 960 | 327 | DO |
+| **15 min (hoje)** | **68** | **33** | **1 470** | **368** | DO |
+| 20 min | 85 | 35 | 1 176 | 392 | DO |
+| 30 min | 119 | 39 | 840 | 420 | DO |
+| 60 min | 221 | 51 | 452 | 452 | DO |
 
-Duas leituras que não são óbvias:
+- **Hoje o muro é sempre as DO** — a D1 só aparece a partir de ~3 000 viagens, que o `heading` nunca
+  deixa atingir.
+- **Alongar viagens quase não ajuda hoje** (452 h a 60 min contra 368 h a 15): o `heading` cobra
+  **2,2 pedidos facturados por minuto** e come a margem toda. É por isso que os cortes de §11.4 valem
+  mais em horas do que em viagens.
 
-- **Encurtar as viagens aumenta as viagens/dia mas reduz as horas.** A 10 min o muro passa a ser a D1
-  (3 226 viagens, só 538 h).
-- **Alongar as viagens aumenta as horas mas reduz as viagens.** A 60 min são 1 020 h mas só 1 020
-  viagens — porque o DO cobra **por minuto** e a D1 cobra **por viagem**.
+### 11.2 O `heading` — medido, não deduzido (2026-10-31)
 
-### 11.2 Os 35 pedidos às DO, item a item (dedução aritmética, a confirmar com medição)
+Ensaio em **staging** (`%TEMP%\opencode\hdg-measure.mjs`), viagem `b6fd73dc-82ba-4579-a16b-29f71782d647`,
+05:51:34Z–06:00:34Z, 3 fases de 180 s com a **mesma cadência de `gps` do cliente (1/15 s)**:
 
-Somando o que o código faz numa viagem de 15 min (`webapp/ladiesgo-home.html` + `src/index.ts`):
+| Fase | `heading` enviado | Pedidos ao DO da viagem/min | Facturado |
+|---|---|---|---|
+| 1 — sem `heading` | 0 | **3 · 4 · 4** | base |
+| 2 — `1/s` com ruído ±3° (gate 900 ms + ≥2°) | 44/min | **46 · 53 · 49** | +44 msg/min |
+| 3 — gate sempre aberto (tecto do throttle) | 58/min | **66 · 52** | +58 msg/min |
 
-| Item | Pedidos facturados | Nota |
+- **1 mensagem `heading` = 1 pedido na métrica** (que é 1:1 com as mensagens) e **1/20 na factura**.
+  A métrica por minuto sobe exactamente pelo nº de mensagens — confirmado nas 3 fases.
+- **A rotação do mapa da passageira NÃO depende do `heading`:** a passageira recebeu **36 frames
+  `driver` em 36 envios de `gps`, todos os 36 com `h`**, intervalos de 15 s, 12 valores distintos.
+  No servidor o `h` do frame `driver` vem de `normH(m.h)` **do próprio `gps`**
+  (`TripPush.onGps`, `index.ts` ~4137), não do `heading`.
+- **Rede de segurança no cliente:** `drvHdgAt` só é escrito pelo frame `driverheading`; sem ele o
+  `liveUpd` cai em `carBearing(drvHdgFrom, p)` a cada **≥8 m** (`ladiesgo-home.html` ~14575). Ou seja,
+  sem `heading` o carro continua a rodar — pelo rumo do movimento.
+- **Conta por viagem de 15 min** (decomposição: o que é por minuto escala, o resto não):
+
+| Item | Facturado | Por minuto? |
 |---|---|---|
-| 5 ligações WebSocket (viagem, `live-geo`, pedidos, notificações, carros próximos) | **5** | 1 por ligação |
-| `TripPush /notify` nas 4 transições (aceite, chegou, iniciou, concluiu) | **4** | 1 por transição |
-| `hubBroadcast` + `notifPoke` | **5** | |
-| `{t:'gps'}` no WS da viagem (1/15 s) | **3** | 60 mensagens ÷ 20 |
-| `live-geo` (1/30 s) | **1,5** | 30 mensagens ÷ 20 |
-| **`{t:'heading'}`** (`liveSendHdg`: máx. 1/**900 ms** se o rumo mudar **≥2°**) | **≈16,5** | **≈330 mensagens ≈ 22/min** |
-| `geoPushToTrip` (ponte) | 0 | cortada pelo flag `noTripPush` (§9) |
-| **Total** | **35** | fecha com o medido |
+| `heading` (44/min) | **33** | sim |
+| espelho para `geo:global` (1/min) | 15 | sim |
+| `{t:'gps'}` (60 msg) | 3 | sim |
+| ligações + `notify`/`state` + hubs | 17 | não |
+| **Total hoje** | **68** | (85 se o `heading` for a 66/min) |
 
-**O `heading` é o maior item isolado e é redundante:** o frame `{t:'gps'}` **já leva o `h`**
-(`liveSendGps`, 1/15 s), e o cliente roda o marcador a partir dele
-(`drvHdg=carCont(m.h,drvHdg)`, `carRotate`). O `heading` existe só para a rotação ser mais fina que 15 s.
-Duas opções, ambas medidas pela mesma aritmética:
-
-| Opção | Mensagens/min | DO/viagem (15 min) |
-|---|---|---|
-| Hoje (`1/900 ms` + ≥2°) | ≈22 | **35** |
-| Baixar para `1/5 s` + ≥10° | ≈12 | **28** |
-| Eliminar (rodar no `gps`) | 0 | **19** |
-
-Fica `DO(d) = 14 + 1,4d` hoje, `14 + 0,9d` com `1/5 s` e `14 + 0,3d` sem `heading`.
+| Opção | `heading`/min | DO/viagem (15 min) | Viagens/dia |
+|---|---|---|---|
+| Hoje (`1/900 ms` + ≥2°) | 44–66 | **68–85** | **1 176–1 470** |
+| **`1/5 s` + ≥10°** | 12 | **44** | **2 272** |
+| Eliminar (rodar no `gps`) | 0 | **35** | **2 857** |
 
 ### 11.3 O muro das escritas — ≈27 é o mínimo de uma viagem
 
@@ -440,55 +459,58 @@ Uma viagem concluída **tem** de escrever, no mínimo:
 | **Total** | **27** |
 
 ⇒ `100 000 ÷ 27 = **3 704 viagens/dia**` é o **tecto absoluto do Free**, mesmo que os pedidos às DO
-fossem zero. Contra as **2 857** de hoje é **+30 %**, não 2×.
+fossem zero. Contra as **~1 300 de hoje** é **2,8×**.
 
 ### 11.4 O que cada corte dá, de facto
 
 | Corte | DO/viagem | D1/viagem | Viagens/dia (15 min) | Horas/dia |
 |---|---|---|---|---|
-| Hoje | 35 | 34 | 2 857 | 714 |
-| **Só `heading` a 1/5 s** | 28 | 34 | 2 941 | 735 |
-| **Só eliminar o `heading`** | 19 | 34 | 2 941 | 735 |
-| **Só cortar as escritas** (34→27) | 35 | 27 | 2 857 | 714 |
-| **Os dois** (sem `heading` + 27 escritas) | 19 | 27 | **3 704** | 926 |
+| Hoje | 68 | 34 | **1 470** | 368 |
+| **`heading` a 1/5 s** | 44 | 34 | **2 272** | 568 |
+| **Eliminar o `heading`** | 35 | 34 | **2 857** | 714 |
+| Eliminar + espelho 1/3 min | 25 | 34 | 2 941 | 735 |
+| Eliminar + espelho + escritas 27 | 25 | 27 | **3 704** | 926 |
 
-- **Cortar o `heading` sozinho não dá quase nada em viagens** (2 857 → 2 941): mal o DO deixa de ser o
-  muro, a D1 toma o lugar (34 escritas ⇒ 2 941). O valor do corte está **noutro lado** — em viagens mais
-  longas, porque o DO cobra por minuto e a D1 por viagem.
+- **O `heading` sozinho é o corte que dobra as viagens** (1 470 → 2 272 com `1/5 s`, → 2 857 sem ele).
+  A partir daí o muro passa a ser a D1 (34 escritas ⇒ 2 941) e os cortes seguintes só servem para
+  chegar ao tecto de 3 704.
+- **Baixar para `1/5 s` já dá 77 % do ganho total** (1 470 → 2 272 de um máximo de 2 941) e mantém a
+  rotação a 5 s em vez de 15 s.
 
-Com os dois cortes feitos, as horas deixam de ser limitadas pelo DO e passam a crescer com a duração
-(a D1 é a única trava, e o seu custo marginal é 0,4 escrita/min):
+Com o `heading` eliminado e o espelho a 1/3 min, as horas deixam de ser limitadas pelo DO e passam a
+crescer com a duração (a D1 é a única trava, e o seu custo marginal é 0,4 escrita/min):
 
 | Duração | DO | D1 | Viagens/dia | **Horas/dia** |
 |---|---|---|---|---|
-| 15 min (hoje) | 19 | 27 | 3 704 | 926 |
-| 30 min | 23 | 39 | 2 564 | **1 282** |
-| 37 min | 25 | 42 | 2 381 | **1 468** ← 2× |
-| 45 min | 28 | 45 | 2 222 | 1 667 |
-| 60 min | 32 | 51 | 1 961 | 1 961 |
+| 15 min (hoje) | 25 | 27 | 3 704 | 926 |
+| 30 min | 33 | 39 | 2 564 | **1 282** |
+| 37 min | 37 | 42 | 2 381 | **1 468** ← 2× |
+| 45 min | 41 | 45 | 2 222 | 1 667 |
+| 60 min | 49 | 51 | 1 961 | 1 961 |
 
-- **"Duplicar as horas" é possível no Free** — com os dois cortes **e** uma viagem média de ~**37 min**
-  (hoje 15). Sem os cortes, alongar as viagens só chega a **1 020 h** a 60 min, porque o `heading` e o
-  `gps` passam a cobrar por cada minuto a mais.
-- **"Duplicar as viagens/dia" NÃO é possível no Free**: exigiria ≤17,5 escritas por viagem e o mínimo
-  estrutural é 27 (3 704 é o tecto, +30 % sobre as 2 857 de hoje).
+- **"Duplicar as horas" é possível no Free** — com os cortes **e** uma viagem média de ~**37 min**
+  (hoje 15).
+- **"Duplicar as viagens/dia" também passou a ser possível**: o ponto de partida real é ~1 300 e o
+  tecto estrutural é 3 704. O que **não** é possível é passar das 3 704.
 
 ### 11.5 O que fazer, por ordem
 
-1. **Medir o `heading` antes de mexer** (é a única linha do §11.2 que é dedução e não medição). Se
-   confirmar ≈16 dos 35, é o corte com melhor retorno de todo o projecto: 1 linha no cliente.
-2. **Baixar o `heading`** para `1/5 s` + ≥10° (rotação continua suave; 35 → 28) e, se a rotação
-   aguentar, eliminá-lo de vez (→ 19). O `gps` de 15 s já leva o `h`.
-3. **Escritas 34 → 27**: uma só notificação por viagem (`completed`) em vez de duas, e um só ponto de
-   rasto. As duas são mudanças pequenas e não tiram nada à experiência.
-4. **Alongar a viagem média** (o único lever que aumenta horas): com 1–3 feitos, 37 min já duplica as
-   horas. Encurtar viagens é o contrário do que se quer.
-5. **Não** gastar mais nada em cortes de leitura: com 3 704 viagens o que trava é a escrita, e cortar
+1. **`heading` a 1/5 s + ≥10°** — 1 linha no cliente (`liveSendHdg`: `900` → `5000`, `d<2` → `d<10`).
+   Medido: 68 → 44 DO/viagem, **1 470 → 2 272 viagens/dia**. A rotação continua a 5 s.
+2. **Eliminar o `heading`** (opcional, se a rotação a 15 s aguentar): 44 → 35, 2 857 viagens/dia. O
+   `gps` de 15 s já leva o `h` e há `carBearing` de reserva a cada 8 m.
+3. **Espelho `geo:global` de 60 s para 180 s** (`MIRROR_MIN_MS`): 15 → 5 por viagem, −10 DO. O polling
+   da passageira só fica mais lento quando o WS da viagem está caído.
+4. **Escritas 34 → 27**: uma só notificação por viagem (`completed`) em vez de duas, e um só ponto de
+   rasto. Só vale depois dos passos 1–3, quando a D1 for o muro.
+5. **Alongar a viagem média** (o único lever que aumenta horas): com 1–3 feitos, 37 min já duplica as
+   horas.
+6. **Não** gastar mais nada em cortes de leitura: a 3 704 viagens o que trava é a escrita, e cortar
    índices troca 1 escrita por ~50 leituras.
 
 ### 11.6 A alternativa de uma linha
 
 Com o plano pago (≈**$7–75/mês**, §6), **duplicar é imediato e sem tocar em código** — os tectos
 passam de 100 k/dia para ordens de grandeza acima. A decisão é do dono e está fora do âmbito deste
-documento; fica registado o número para que a escolha seja informada: **o Free já deu o que tinha a
-dar em ~1,3×; o passo seguinte custa ~$7/mês.**
+documento; fica registado o número para que a escolha seja informada: **o Free ainda aguenta ~2,8× o
+que faz hoje (≈1 300 → 3 704 viagens/dia) com 4 cortes pequenos; o passo seguinte custa ~$7/mês.**
