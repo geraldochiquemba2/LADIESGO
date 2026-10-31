@@ -1170,10 +1170,103 @@ Objectivo: fechar o "2×" da nona vaga com números medidos, não modelados. Rel
 30 dos 54). **Recusado** subir o `geoPushToTrip` para 60 s: pouparia 15 pedidos/viagem mas o mapa da
 passageira saltaria ~1 km de cada vez a 50 km/h.
 
+> **CORRECÇÃO (2026-10-31):** o "30 dos 54" era uma **estimativa não verificada** — na altura não se sabia
+> se a ponte disparava sempre. Medido na décima primeira vaga (abaixo): a ponte custa **2 pedidos/min = 30
+> por viagem de 15 min**, e esse valor **só desaparece com o flag do cliente** (`noTripPush`). A guarda
+> dentro do DO **poupa 0 pedidos** — o pedido já foi feito e facturado para lá chegar. Também o "≈54"
+> ficou curto: a contagem completa (com ligações e transições de estado nos seus próprios minutos) dá
+> **≈65 pedidos facturados por viagem**.
+
 **Publicado:** API produção **`28f87bf1-4ae4-4bcf-907e-c992b2201a5c`**, staging `445b439b-4685-459a-b4d8-5ddbb36e3b54`.
 Smoke de produção só de `GET` **12/12**; base intacta (26 users / 121 trips / 1 motorista / 315
 notifications / 0 `ZZ %`); staging a zero.
 Scripts: `%TEMP%\opencode\m-ride-cost.mjs` (custo de uma viagem) e `m-ws-ratio.mjs` (rácio das mensagens).
+
+### 14. Décima primeira vaga (2026-10-31) — a ponte DriverGeo→TripPush só quando o WS da viagem cala
+
+**O problema.** O mesmo fix de GPS viajava **duas vezes** para o DO da viagem:
+1. pelo **WS da viagem** (`onGps`) — 1 mensagem, que na facturação vale **1/20 de pedido**;
+2. pela **ponte** `DriverGeo → TripPush` (`POST /gps`, `onGpsPush`) — 1 pedido **inteiro**.
+
+Com a app da motorista em primeiro plano as duas vias entregam o mesmo dado no mesmo instante. A ponte só
+é necessária no **segundo plano** (o GPS de fundo nunca passa pelo WS da viagem).
+
+**Duas camadas, ambas a falhar ABERTA:**
+
+1. **Cliente → Worker (a que poupa o pedido).** `geoSend()` no `webapp/ladiesgo-home.html` passa a mandar
+   `noTripPush: liveWsOpen()` no frame do WS global `drivers/live-geo`. `liveWsOpen()` só é `true` com o
+   socket **aberto (`readyState===1`) e ligado à viagem atual** (`_liveTrip === myTripId`). No
+   `DriverGeo.webSocketMessage` o Worker faz `geoPushToTrip(..., !!m.noTripPush, ...)` — sem o flag
+   (builds antigos, segundo plano, socket caído) a ponte dispara como sempre.
+2. **Guarda dentro do `TripPush.onGpsPush` (rede de segurança).** Se já houver um socket de motorista com
+   `lastFixAt` < `WS_FIX_FRESH_MS` (**20 s** = 15 s do cliente + 5 s de folga), a ponte cala-se. A frescura
+   vive no **attachment do socket**, não em `this.*` — o DO hiberna e é recriado entre fixes (o mesmo bug
+   que fez o gate de `trip_points` nunca valer).
+
+**A camada 2 NÃO poupa pedidos.** O pedido já foi feito e facturado para o DO poder decidir. Só poupa o
+trabalho. Foi por isso que a primeira tentativa (só a guarda no DO) mediu **22 vs 22** pedidos — delta zero.
+A camada 1 é a única que reduz a factura. A camada 2 fica para builds antigos e para qualquer caminho que
+ainda mande a ponte.
+
+**Bug encontrado pelo caminho:** `DriverGeo.webSocketMessage` tinha `geoPushToTrip(..., false, ...)`
+**hardcoded** — o flag do cliente era ignorado. A rota `/set` já o respeitava. Corrigido para
+`!!m.noTripPush`.
+
+**Porque o flag não pode "calar" o mapa:** `liveSendGps` tem throttle de **15 s** e a ponte só dispara a
+cada **30 s** (`GEO_PUSH_MIN_MS`), por isso sempre que a ponte iria disparar o WS já entregou. Além disso o
+polling (`GET /trips/:id`) lê a posição da DriverGeo, portanto nem um socket de viagem morto congela o carro.
+
+**Medido (staging, viagens de 5 min, mesma cadência real: trip WS 1 fix/15 s + live-geo 1 fix/30 s):**
+
+| | sem flag | com `noTripPush` |
+|---|---|---|
+| `trip:<id>` — regime estável | **6 pedidos/min** | **4 pedidos/min** |
+| `trip:<id>` — 5 min (métrica, total) | 32–37 | 20–28 |
+| frames `driver` na passageira | 10 em 300 s (1/30 s) | **10 em 300 s (1/30 s)** |
+| último fix recebido pela passageira | −9,5600 | **−9,5600** |
+
+- O sinal limpo é a **taxa por minuto em regime estável**, não o total de 5 min: ligações e transições de
+  estado caem em minutos diferentes e a janela da analytics corta os últimos ~2 min. Totais variam
+  (32 / 28 / 37) sem significado.
+- A diferença de **2 pedidos/min = exatamente 1 por fix de `live-geo`** (30 s) ⇒ **30 pedidos por viagem de
+  15 min**.
+- **A passageira não perdeu nada:** 10 frames em 300 s, intervalos `[30,30,…,30]`, mesma posição final.
+
+**A/B com 150 s e analytics assentada** (`t-bridge-ab.mjs`, variante A sem flag / B com flag): **22 vs 18**
+pedidos ao DO da viagem. Antes da correção do `hardcoded false` deu **22 vs 22** (prova de que o flag
+estava a ser ignorado).
+
+**Regressão do segundo plano** (`t-bridge-bg.mjs`, **5/5**): só com o WS global `live-geo` (sem socket de
+viagem), os 3 fixes chegaram todos ao `GET /trips/:id` e a passageira recebeu 2 frames `driver` — a ponte
+continua a funcionar quando é a única via.
+
+**`wrangler tail` a confirmar as decisões** (staging): todas as chegadas da ponte foram saltadas com
+`age=346 ms / 15 068 ms / 15 131 ms` — o cliente a 15 s mantém a janela de 20 s sempre fresca.
+
+**Conta nova de capacidade (por viagem de 15 min):**
+
+| Recurso | antes | depois | Viagens/dia (tecto Free) |
+|---|---|---|---|
+| Pedidos DO **facturados** | ≈65 | **≈35** | **≈2 900** |
+| Escritas D1 | ≈34 | ≈34 | ≈2 940 |
+| Pedidos Worker | ≈20 | ≈20 | ≈5 000 |
+
+⇒ **≈1 550 → ≈2 900 viagens/dia (1,9×)**, e o que trava a seguir deixam de ser os pedidos às DO: são as
+**escritas da D1** (≈34/viagem). Qualquer ganho adicional tem de vir de escritas, não de pedidos.
+
+**Prova no browser em produção** (`https://ladiesgo.pages.dev`, conta de teste, sessão DRIVER com viagem
+`ACCEPTED`): `liveWsOpen:true`, `_liveTrip === myTripId === 2a371400…`, socket da viagem `readyState 1`;
+payload real de `geoSend` = `{"lat":-9.5101,"lng":13.5001,"h":null,"cats":[…],"noTripPush":true}`.
+Contraprova com `liveWsOpen` forçado a `false` → `"noTripPush":false`. **0 erros de consola.**
+
+**Publicado:** API produção **`442df0de-e53b-4873-a874-5854300fc371`** (`b6ddb05a-4639-413d-b21c-278115470419`
+foi o deploy da lógica; o segundo difere só num comentário), Pages
+`c5bb4188.ladiesgo.pages.dev` (alias `ladiesgo.pages.dev`), Worker estático
+`5a4167a6-84ab-42cb-806b-57aad4f822ef`. `ladiesgo-home.html` (443 645 bytes, sha256 `6aa634f4…`) servido
+**byte a byte igual** pelo Pages e pelo Worker estático. Smoke de produção só de `GET` **12/12**; base
+intacta (26 users / 121 trips / 1 motorista / 315 notifications / 0 `ZZ %`); staging a zero.
+Scripts: `%TEMP%\opencode\t-bridge-bg.mjs` (segundo plano), `t-bridge-ab.mjs` (A/B), `m-ride-cost.mjs`
+(`NP=1` liga o flag e conta os frames da passageira), `t-do-count.mjs` (pedidos por objeto, já assentados).
 
 ### Armadilha ao medir SQL à mão: `::` não existe no D1
 O `db.ts` **remove os casts** (`s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\[\])?/g, '')`) antes de enviar o SQL,

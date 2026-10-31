@@ -3783,6 +3783,13 @@ export class TripRinger {
 // escritas Neon de estado continuam exclusivas do REST existente.
 const PUSH_GPS_MIN_MS = 10_000;
 const PUSH_STATUS_TTL_MS = 60_000;
+// 2026-10-31: a ponte DriverGeo->TripPush (`/gps`) e o WS da viagem entregam o
+// MESMO fix. Com a app em primeiro plano o WS chega a cada 15 s e a ponte era
+// um pedido inteiro por fix: medido, 2 pedidos/min ao DO da viagem = 30 por
+// viagem de 15 min, ~46% do custo facturado das DO. A ponte passa a calar-se
+// quando ha um socket de motorista com fix mais recente que isto; sem socket
+// (segundo plano) dispara como sempre. 20 s = 15 s do cliente + 5 s de folga.
+const WS_FIX_FRESH_MS = 20_000;
 // Espelho do fix na DriverGeo global, feito dentro do DO da viagem (onGps).
 // Cada espelho e um `fetch` ao DO `geo:global` = 1 pedido, e com a app em
 // primeiro plano o MESMO fix ja vai pelo WS `drivers/live-geo` (geoPresence);
@@ -3873,7 +3880,7 @@ export class TripPush {
             this.tripId = tId;
             try { await this.state.storage.put('tripId', tId); } catch {}
           }
-          await this.onGpsPush(la, lo, String(b?.uid || ''), normH(b?.h)).catch(() => {});
+          await this.onGpsPush(la, lo, String(b?.uid || ''), normH(b?.h)).catch(() => false);
         }
       } catch {}
       return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
@@ -4154,14 +4161,37 @@ export class TripPush {
   // tempo real mesmo com a app da motorista fechada.
   async onGpsPush(la: number, lo: number, uid: string, h?: number | null) {
     const now = Date.now();
-    if (now - Number(this.lastFixAt || 0) < PUSH_GPS_MIN_MS) return;
+    // 2026-10-31: esta ponte so serve quando o WS da viagem NAO esta a entregar.
+    // Com a app da motorista em primeiro plano o MESMO fix ja chega por `onGps`
+    // (mensagem WS = 1/20 de um pedido) e a ponte era um pedido INTEIRO para o
+    // mesmo dado: medido, 2 pedidos/min ao DO da viagem = 30 por viagem de
+    // 15 min (~46% dos ~65 pedidos facturados das DO).
+    // ATENCAO: esta guarda NO INTERIOR do DO poupa trabalho, NAO o pedido — o
+    // pedido ja foi feito e facturado para aqui chegar. O que poupa o pedido e o
+    // flag `noTripPush` do cliente, decidido no Worker antes de `notifyTripPushGps`
+    // (`DriverGeo.webSocketMessage`). Esta guarda fica como rede de seguranca dos
+    // builds antigos e de qualquer caminho que ainda mande a ponte.
+    // A frescura vive no attachment do socket (sobrevive a hibernacao), nao em
+    // memoria: o DO e recriado entre fixes e `this.*` voltava a 0 — foi o bug
+    // que fez o gate de `trip_points` nunca valer.
+    // Falha ABERTA: sem socket de motorista, ou com o ultimo fix >20 s (app em
+    // segundo plano / socket suspenso), a ponte dispara como antes. O cliente
+    // manda 1 fix/15 s no WS da viagem, por isso 20 s cobre sempre o 1.o plano.
+    try {
+      for (const s of this.state.getWebSockets('driver')) {
+        let a: any = null;
+        try { a = s.deserializeAttachment(); } catch {}
+        if (a && now - Number(a.lastFixAt || 0) < WS_FIX_FRESH_MS) return false;
+      }
+    } catch {}
+    if (now - Number(this.lastFixAt || 0) < PUSH_GPS_MIN_MS) return false;
     this.lastFixAt = now;
     const hh = normH(h);
     this.driver = { lat: la, lng: lo, h: hh != null ? hh : (this.driver?.h ?? null), ts: now };
     await this.refreshStatus(false);
     // Viagem terminada/cancelada: nǜo vale a pena difunde posi����es.
     const st = String(this.status || '');
-    if (st && st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return;
+    if (st && st !== 'ACCEPTED' && st !== 'DRIVER_ARRIVED' && st !== 'IN_PROGRESS') return false;
     try { this.state.waitUntil(this.persistPoint(la, lo)); } catch { this.persistPoint(la, lo).catch(() => {}); }
     const movedKm = this.pushAt ? havKm(Number(this.pushLat), Number(this.pushLng), la, lo) : 1;
     const hChg = hh != null && this.pushH != null && angDelta(hh, this.pushH) >= 15;
@@ -4172,6 +4202,7 @@ export class TripPush {
       this.broadcastTag('pub', { t: 'driver', lat: la, lng: lo, h: hh != null ? hh : null, ts: now });
       this.pushEta();
     }
+    return true;
   }
   // Histórico de auditoria: 1 ponto/600s por viagem ativa. Não bloqueia o WS
   // (waitUntil) e não substitui a posição viva, que continua só em memória.
@@ -4701,8 +4732,12 @@ export class DriverGeo {
     await this.load();
     const wasOnline = this.setPos(userId, lat, lng, cats, true, hh);
     if (!wasOnline) await this.d1Online(userId, true);
-    // GPS por WebSocket global ��' WS da viagem (mesma ponte do /set).
-    try { this.state.waitUntil(geoPushToTrip(this.env, userId, lat, lng, false, hh)); } catch {}
+    // GPS por WebSocket global → WS da viagem (mesma ponte do /set).
+    // 2026-10-31: o cliente manda `noTripPush:1` quando o WS da viagem está aberto
+    // e a entregar o mesmo fix. Aí a ponte é um pedido INTEIRO ao DO da viagem para
+    // um dado que já lá está (a mensagem WS custa 1/20). Falha ABERTA: sem o flag
+    // (builds antigos, segundo plano, socket caído) a ponte dispara como sempre.
+    try { this.state.waitUntil(geoPushToTrip(this.env, userId, lat, lng, !!m.noTripPush, hh)); } catch {}
   }
   async webSocketClose(_ws: any, _code: any, _reason: any, _wasClean: any) {
     // Mantém a posição até expirar (TTL na leitura); nova ligação repõe.

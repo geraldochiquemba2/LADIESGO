@@ -224,6 +224,11 @@ Viagem real em staging com a **cadência do cliente** (trip WS 1 fix/15 s + `liv
 ⇒ **≈900 → ≈1 850 viagens/dia (2,0×)**, sem sair do Free. O que trava primeiro passou a ser, de novo,
 os **pedidos às DO** (o espelho e o `geoPushToTrip` a 30 s valem 45 dos 54).
 
+> **Actualizado em 2026-10-31 (§9):** o `geoPushToTrip` a 30 s era **duplicação** do mesmo fix que já
+> ia pelo WS da viagem. Cortado com o flag `noTripPush` do cliente: **6 → 4 pedidos/min** no DO da viagem
+> (30 por viagem de 15 min). O total passa a **≈65 → ≈35 pedidos DO facturados/viagem** e a capacidade a
+> **≈2 900 viagens/dia**, agora limitada pelas **escritas da D1** (≈34/viagem), não pelos pedidos.
+
 ### 8.5 Publicado
 
 - API produção **`28f87bf1-4ae4-4bcf-907e-c992b2201a5c`**; staging `445b439b-4685-459a-b4d8-5ddbb36e3b54`.
@@ -240,3 +245,72 @@ os **pedidos às DO** (o espelho e o `geoPushToTrip` a 30 s valem 45 dos 54).
 - **`PUSH_GPS_MIN_MS` 15 s (item D do §7):** as mensagens custam 1/20 do que se pensava; o ganho real
   é ~1 pedido por viagem. **Não vale o risco.**
 - **Espelho a 120 s:** +190 viagens/dia, mas a posição no polling sem WS ficaria 2 min velha. **Não.**
+
+## 9. MEDIDO — a ponte `DriverGeo → TripPush` deixou de duplicar o fix (2026-10-31)
+
+O maior termo que sobrava era o **mesmo fix a viajar duas vezes** para o DO da viagem: uma pelo WS da
+viagem (`onGps`, mensagem = 1/20 de pedido) e outra pela ponte `DriverGeo → TripPush`
+(`POST /gps` → `onGpsPush`, **1 pedido inteiro**). Com a app em primeiro plano as duas vias entregam o
+mesmo dado no mesmo instante; a ponte só serve no **segundo plano**.
+
+### 9.1 O que foi feito (duas camadas, ambas a falhar ABERTA)
+
+1. **Cliente → Worker** (a única que poupa o **pedido**): `geoSend()` manda `noTripPush: liveWsOpen()` no
+   frame do WS global `drivers/live-geo`; `liveWsOpen()` exige socket aberto **e** ligado à viagem atual.
+   O Worker (`DriverGeo.webSocketMessage`) passa o flag a `geoPushToTrip`. Sem flag (builds antigos,
+   segundo plano, socket caído) a ponte dispara como antes.
+2. **Guarda dentro do `TripPush.onGpsPush`** (rede de segurança, não poupa pedidos): cala a ponte se
+   houver um socket de motorista com `lastFixAt` < `WS_FIX_FRESH_MS` (**20 s**). A frescura vive no
+   **attachment do socket** — o DO hiberna e é recriado entre fixes.
+
+### 9.2 A camada 2 sozinha vale ZERO
+
+Primeira tentativa, só com a guarda no DO: **22 vs 22** pedidos ao objeto. O pedido já foi feito e
+facturado para o DO poder decidir — a guarda só poupa trabalho. Foi aí que se encontrou o bloqueador
+real: `DriverGeo.webSocketMessage` tinha `geoPushToTrip(..., false, ...)` **hardcoded**, por isso o flag
+do cliente era ignorado (a rota `/set` já o respeitava).
+
+### 9.3 Medido (staging, viagens de 5 min, cadência real do cliente)
+
+| | sem flag | com `noTripPush` |
+|---|---|---|
+| `trip:<id>` — **regime estável** | **6 pedidos/min** | **4 pedidos/min** |
+| `trip:<id>` — total de 5 min (métrica) | 32–37 | 20–28 |
+| frames `driver` na passageira | 10 em 300 s | **10 em 300 s** (intervalos 30 s) |
+| último fix recebido pela passageira | −9,5600 | **−9,5600** |
+
+- **2 pedidos/min = exatamente 1 por fix de `live-geo`** (30 s) ⇒ **30 pedidos por viagem de 15 min**.
+- **Armadilha de medição:** os totais de 5 min são ruído (32 / 28 / 37). Ligações e transições de estado
+  caem em minutos diferentes e a janela da analytics corta os últimos ~2 min. O sinal válido é a
+  **taxa por minuto em regime estável** — e é preciso voltar a consultar 3–5 min depois.
+- **A/B de 150 s com analytics assentada:** **22 vs 18** pedidos (antes da correção do `hardcoded
+  false`: 22 vs 22).
+- **Regressão do segundo plano (`t-bridge-bg.mjs`, 5/5):** só com o WS global (sem socket de viagem), os
+  3 fixes chegaram todos ao `GET /trips/:id` e a passageira recebeu 2 frames — a ponte continua a ser a
+  via do segundo plano.
+- **`wrangler tail`:** todas as chegadas da ponte saltadas com `age=346 ms / 15 068 ms / 15 131 ms` — o
+  cliente a 15 s mantém a janela de 20 s sempre fresca.
+- **Prova no browser em produção:** payload real `{"lat":…,"lng":…,"h":null,"cats":[…],"noTripPush":true}`;
+  contraprova com `liveWsOpen` forçado a `false` → `"noTripPush":false`. 0 erros de consola.
+
+### 9.4 Conta nova (por viagem de 15 min)
+
+| Recurso | antes (§8) | depois | Viagens/dia (tecto Free) |
+|---|---|---|---|
+| Pedidos DO **facturados** | ≈65 | **≈35** | **≈2 900** |
+| Escritas D1 | ≈34 | ≈34 | ≈2 940 |
+| Pedidos Worker | ≈20 | ≈20 | ≈5 000 |
+
+⇒ **≈1 550 → ≈2 900 viagens/dia (1,9×)**, acumulado com os cortes do §8. **O que trava a seguir são as
+escritas da D1 (≈34/viagem), não os pedidos às DO** — a partir daqui, qualquer ganho tem de vir de
+escritas.
+
+### 9.5 Publicado
+
+- API produção **`442df0de-e53b-4873-a874-5854300fc371`** (`b6ddb05a-4639-413d-b21c-278115470419` foi o
+  deploy da lógica; o segundo difere só num comentário); Pages `c5bb4188.ladiesgo.pages.dev`
+  (alias `ladiesgo.pages.dev`); Worker estático `5a4167a6-84ab-42cb-806b-57aad4f822ef`.
+- `ladiesgo-home.html` (443 645 bytes, sha256 `6aa634f4…`) servido **byte a byte igual** pelo Pages e
+  pelo Worker estático.
+- Smoke de produção só de `GET`: **12/12**. Base intacta: **26 users / 121 trips / 1 motorista /
+  315 notifications / 0 `ZZ %`**. Staging a zero.
