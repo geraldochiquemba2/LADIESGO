@@ -28,7 +28,11 @@ O ficheiro mais importante é **`ladiesgo-home.html`** (~250 KB) — quase toda 
 ## Como fala com a API
 - No topo de **cada** HTML há um *fetch patch* que reescreve `/api/*` para o Worker:
   `var A='https://ladiesgo-api.rererererererere670.workers.dev'` (API na conta `rerere…`).
-- Em `localhost` (via `node server.js`) o `/api/*` é servido localmente.
+- O patch **não** tem caso especial para `localhost`: reescreve sempre para o Worker. Ou seja, ao correr
+  `node server.js` o browser continua a falar com a **API de produção** (`location.hostname` é lido mas não usado).
+  A API local do `server.js` só é usada se a constante `A` for `''` — e nesse caso faltam rotas
+  (`/boot`, `/users/profile`, `/categories`, `/ratings/*`, `/premium/*`, `/shared/*`, `/health`), por isso a app
+  fica numa casca. Para testar a interface localmente, entrar com uma conta real em `/app`.
 - **Se o host da API mudar de novo**, há que trocar essa constante em **todos** os HTML de `webapp/` **e** em `mobile/` (ver `cloudflare/README.md` §4).
 - Base das rotas da API: `/api/v1/...` (auth, users, drivers, trips, ratings, turn).
 
