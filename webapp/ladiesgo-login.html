@@ -73,8 +73,10 @@
   .login-guest{display:block;width:100%;text-align:center;margin-top:6px;font-weight:700;font-size:13px;color:#61188E;padding:8px}
   .login-wrap{display:flex;flex-direction:column;justify-content:flex-start;min-height:100%}
   .cta-ghost{background:#fff;color:#61188E;border:2px solid #e3d0f8;box-shadow:none;margin-top:10px;animation:none}
-  .splash{position:absolute;inset:0;z-index:20;background:#61188E;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;transition:opacity .7s,visibility .7s}
-  .splash.off{opacity:0;visibility:hidden}.splash svg{width:120px;animation:hov 2s ease-in-out infinite}.splash img{width:280px;max-width:80%;border-radius:24px;box-shadow:0 12px 40px rgba(0,0,0,.45);animation:hov 2s ease-in-out infinite}
+  .splash{position:absolute;inset:0;z-index:20;background:#61188E;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;color:#fff;transition:opacity .7s,visibility .7s}
+  .splash.off{opacity:0;visibility:hidden}.splash svg{width:120px;animation:hov 2s ease-in-out infinite}
+  .splash-photo{flex:1 1 auto;width:100%;min-height:0;background-image:url(splash-photo.jpg);background-position:center;background-size:cover;background-repeat:no-repeat}
+  .splash img{width:min(52vw,220px);max-width:70%;height:auto;border-radius:20px;box-shadow:0 14px 34px rgba(20,4,35,.5);margin:18px 0 calc(env(safe-area-inset-bottom,0px) + 26px);animation:none}
   .splash h1{font-size:40px;font-weight:800;-webkit-text-stroke:2px #4a1a8f;paint-order:stroke fill}
   @keyframes hov{50%{transform:translateY(-10px)}}
   .modal{position:absolute;inset:0;z-index:15;background:rgba(20,0,50,.6);display:none;align-items:flex-end}.modal.on{display:flex}
@@ -126,7 +128,7 @@
     <button class="cta red" style="margin-bottom:8px">Ligar para a emergência</button>
     <button class="cta" style="margin-bottom:8px">Alertar contactos de confiança</button>
     <button class="chip" data-a="close" style="width:100%;height:42px">Estou bem, voltar</button></div></div>
-  <div class="splash" id="splash"><img src="splash.jpg" alt="LadiesGo! – Mobilidade Feminina Segura"></div>
+  <div class="splash" id="splash" role="img" aria-label="LadiesGo! – Mobilidade Feminina Segura"><div class="splash-photo"></div><img src="splash.jpg" alt=""></div>
 </div>
 
 <script>

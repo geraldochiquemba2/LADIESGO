@@ -68,6 +68,27 @@ Papéis: **PASSENGER**, **DRIVER**, **ADMIN** (mesma conta, papel escolhido no s
 - `geoPresence()` já se auto-limita (heartbeat 30 s em viagem, 60 s parada) — não é preciso mexer no intervalo.
 - **`liveSendHdg` (rumo pelo WS da viagem): gate `1/15 s + ≥20°`** (2026-10-31; era 5 s + 10°). Cada mensagem vale 1/20 de pedido ao DO, e o gate de 5 s dava 12 msg/min = 9 DO facturados por viagem de 15 min. O rumo **não se perde**: o frame `{t:'gps'}` (15 s) já leva `h` e o `carBearing` deriva-o do movimento (≥8 m). Não baixar o intervalo sem medir — é o que separa 2 941 de 3 571 viagens/dia no plano Free.
 
+## Splash (`splash-photo.jpg` + `splash.jpg`)
+- O splash é **dois ficheiros**, não uma imagem composta: fotografia em cima (`splash-photo.jpg`,
+  1080×1620, 221 622 bytes, **sem véu e sem logo**) e uma faixa lilás em baixo com a **logo original**
+  (`splash.jpg`, 1024×1024, quadrado lilás em gradiente `#62198F`→`#4A0B74`).
+- Estrutura (igual nas 3 páginas):
+  `<div class="splash" id="splash"><div class="splash-photo"></div><img src="splash.jpg" alt=""></div>`.
+  `.splash{position:absolute|fixed;inset:0;background:#61188E;display:flex;flex-direction:column;
+  justify-content:flex-end}` · `.splash-photo{flex:1 1 auto;background:url(splash-photo.jpg) center/cover}` ·
+  `.splash img{width:min(52vw,220px);border-radius:20px;margin:18px 0 calc(env(safe-area-inset-bottom,0px) + 26px)}`.
+  A faixa é `#61188E`, praticamente igual ao quadrado da logo — por isso só se vê o emblema + wordmark.
+- **Sem véu**: o dono pediu "apenas a imagem". Não repor `linear-gradient(...)` no `.splash`.
+- **Só no `/app` e no `/home`.** A landing `/ladiesgo` (primeira página que a app nativa abre) **não**
+  tem splash: o dono pediu para remover (2026-10-31). Não voltar a pôr lá sem ele pedir.
+- **Duração:** `/app` **2,4 s** (`ladiesgo-login.html`, `setTimeout(...,2400)`), `/home` **1,9 s**
+  (`ladiesgo-home.html`). A transição é `opacity .7s` — o splash fica invisível ~0,7 s depois do timer.
+- **Ao mudar a fotografia, usar um nome novo** (`splash-photo2.jpg`, …) e actualizar as 3 páginas:
+  `_headers` marca `*.jpg` como **imutável por 1 ano**, por isso o mesmo nome fica preso na cache.
+  `splash-bg.jpg` (arte antiga com foto+véu+logo incrustados) já não é referenciada por nenhuma página.
+- O splash nativo (`mobile/app.json` → `assets/splash-bg.png`, hoje um **lilás liso** 1024×1024) é
+  **outra coisa**: só muda com build nativo novo (ver `mobile/AGENTS.md`). Este é o splash do webapp/WebView.
+
 ## Cache (`webapp/_headers`)
 - HTML e rotas (`/*.html`, `/`, `/app`, `/home`, `/t`, `/ladiesgo`, …) → **`no-store`**.
   Isto é **obrigatório**: sem isto o iOS/Android serve HTML antigo dentro da WebView.
