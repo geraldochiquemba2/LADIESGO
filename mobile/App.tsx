@@ -5,9 +5,19 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import * as SplashScreen from 'expo-splash-screen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import './src/services/bgLocation';
 import { BG_LOCATION_TASK } from './src/services/bgLocation';
+
+// SPLASH NATIVO (o "flash branco" no arranque).
+// O iOS mostra primeiro a launch screen e só depois o React. Sem o plugin
+// `expo-splash-screen` no app.json a launch screen do prebuild é BRANCA
+// (`systemBackgroundColor` = white) — era esse o flash que aparecia antes do
+// lilás. Aqui a splash nativa fica lilás com a logo e é mantida no ecrã até a
+// WebView ter conteúdo (endLoading), para não haver um frame branco no meio.
+SplashScreen.preventAutoHideAsync().catch(() => {});
+SplashScreen.setOptions({ duration: 250, fade: true });
 
 // A app iOS é a LadiesGo! web (Cloudflare Pages) em ecrã cheio: um só código,
 // o mesmo produto e marca em todo o lado. Login, viagens, chat, SOS,
@@ -195,6 +205,9 @@ export default function App() {
     loadTimer.current = null;
     loadRetry.current = 0;
     setLoading(false);
+    // A splash nativa só sai quando há conteúdo por baixo (overlay lilás +
+    // WebView já carregada). Antes saía sozinha e deixava ver branco.
+    try { SplashScreen.hide(); } catch {}
   };
   const beginLoading = () => {
     setLoading(true);
@@ -388,6 +401,14 @@ export default function App() {
       } catch {}
       await ensurePushToken();
     })();
+  }, []);
+
+  // Rede de segurança da splash nativa: se a WebView nunca terminar (rede
+  // morta, JS bloqueado), a splash sai na mesma aos 10 s e fica o overlay
+  // lilás — nunca um ecrã preso na logo.
+  useEffect(() => {
+    const t = setTimeout(() => { try { SplashScreen.hide(); } catch {} }, 10000);
+    return () => clearTimeout(t);
   }, []);
 
   // Notificação tocada (app aberta, em fundo, ou arranque a frio) → reserva

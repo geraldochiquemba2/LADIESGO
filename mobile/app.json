@@ -7,14 +7,18 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash-bg.png",
-      "resizeMode": "cover",
-      "backgroundColor": "#61188E"
-    },
     "plugins": [
       "@maplibre/maplibre-react-native",
       "expo-notifications",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#61188E",
+          "image": "./assets/icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain"
+        }
+      ],
       [
         "expo-location",
         {

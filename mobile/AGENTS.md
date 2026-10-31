@@ -93,6 +93,24 @@ Todos os WS levavam o JWT por query (`?token=<JWT>`, `encodeURIComponent`); sem 
 - Quem abre os WS hoje é o **webapp** (`webapp/AGENTS.md`); no mobile resta o WS de GPS (`/drivers/live-geo`)
   e as escritas REST da task de fundo.
 
+## Splash nativo (o "flash branco" do arranque)
+- O splash nativo **não é** o do webapp (`webapp/AGENTS.md`): é a *launch screen* do iOS, gerada pelo
+  `expo prebuild` a partir do `app.json`.
+- **Causa do flash branco (corrigida a 2026-10-31):** o `expo-splash-screen` **não estava** nas
+  `dependencies` (nem no `package-lock.json`) e por isso o plugin nunca corria. Sem plugin, o prebuild deixa
+  a `SplashScreen.storyboard` do template, que usa `systemBackgroundColor` = **branco**
+  (`white="1"` — ver `templates/expo-template-bare-minimum/ios/HelloWorld/SplashScreen.storyboard` no
+  `expo/expo` `sdk-56`). Resultado: ecrã branco até o React montar.
+- **Correção:** `expo-splash-screen@~56.0.16` nas `dependencies` + plugin no `app.json`:
+  `["expo-splash-screen", { backgroundColor:"#61188E", image:"./assets/icon.png", imageWidth:160, resizeMode:"contain" }]`.
+  O plugin escreve `Images.xcassets/SplashScreenBackground.colorset` com o lilás e a logo no
+  `SplashScreenLogo.imageset` (ver `plugin/src/withIosSplashColors.ts`). A chave legada `splash` foi removida.
+- **`SplashScreen.preventAutoHideAsync()` no topo do `App.tsx`** e `hide()` no `endLoading()`: a launch screen
+  só sai quando a WebView já tem conteúdo (overlay lilás + página pintada), senão havia um frame branco entre
+  a splash e a primeira pintura. Rede de segurança: `hide()` aos 10 s mesmo que a página nunca carregue.
+- **Só muda com build nativo novo** (`build-ios.yml`). Qualquer `push` que toque em `mobile/app.json`
+  dispara o build — é o gatilho, não esquecer.
+
 ## Estado conhecido / armadilhas
 - **Sem `node_modules`, sem `android/` nem `ios/`** (Expo managed). `npx tsc --noEmit` **não corre**
   (`This is not the tsc command you are looking for`; o `tsconfig.json` também faz `extends: expo/tsconfig.base`,
