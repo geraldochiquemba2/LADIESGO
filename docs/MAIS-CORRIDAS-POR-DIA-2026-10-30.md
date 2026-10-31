@@ -465,17 +465,17 @@ fossem zero. Contra as **~1 300 de hoje** é **2,8×**.
 
 | Corte | DO/viagem | D1/viagem | Viagens/dia (15 min) | Horas/dia |
 |---|---|---|---|---|
-| Hoje | 68 | 34 | **1 470** | 368 |
-| **`heading` a 1/5 s** | 44 | 34 | **2 272** | 568 |
-| **Eliminar o `heading`** | 35 | 34 | **2 857** | 714 |
-| Eliminar + espelho 1/3 min | 25 | 34 | 2 941 | 735 |
-| Eliminar + espelho + escritas 27 | 25 | 27 | **3 704** | 926 |
+| Hoje (antes de 31/10) | 68 | 34 | **1 470** | 368 |
+| **`heading` a 1/5 s** ✅ feito | 44 | 34 | **2 272** | 568 |
+| **+ espelho 1/3 min** ✅ feito | **34** | 34 | **2 941** | 735 |
+| Eliminar o `heading` (agora) | 25 | 34 | 2 941 | 735 |
+| + escritas 27 | 25 | 27 | **3 704** | 926 |
 
-- **O `heading` sozinho é o corte que dobra as viagens** (1 470 → 2 272 com `1/5 s`, → 2 857 sem ele).
-  A partir daí o muro passa a ser a D1 (34 escritas ⇒ 2 941) e os cortes seguintes só servem para
-  chegar ao tecto de 3 704.
-- **Baixar para `1/5 s` já dá 77 % do ganho total** (1 470 → 2 272 de um máximo de 2 941) e mantém a
-  rotação a 5 s em vez de 15 s.
+- **O `heading` a `1/5 s` foi o corte que mais rendeu** (1 470 → 2 272 viagens/dia).
+- **O espelho a 1/3 min levou ao empate DO 34 vs D1 34** (§12): as duas travas passam a morder ao mesmo
+  tempo, nas mesmas 2 941 viagens. **Nesse ponto eliminar o `heading` já não compra capacidade nenhuma**
+  (só 9 pedidos de folga): o que trava é a D1. Fica a `1/5 s` porque a rotação do mapa é melhor e custa 0.
+- Só **escritas 34 → 27** sobe para além das 2 941 (até 3 704).
 
 Com o `heading` eliminado e o espelho a 1/3 min, as horas deixam de ser limitadas pelo DO e passam a
 crescer com a duração (a D1 é a única trava, e o seu custo marginal é 0,4 escrita/min):
@@ -495,14 +495,15 @@ crescer com a duração (a D1 é a única trava, e o seu custo marginal é 0,4 e
 
 ### 11.5 O que fazer, por ordem
 
-1. **`heading` a 1/5 s + ≥10°** — 1 linha no cliente (`liveSendHdg`: `900` → `5000`, `d<2` → `d<10`).
-   Medido: 68 → 44 DO/viagem, **1 470 → 2 272 viagens/dia**. A rotação continua a 5 s.
-2. **Eliminar o `heading`** (opcional, se a rotação a 15 s aguentar): 44 → 35, 2 857 viagens/dia. O
-   `gps` de 15 s já leva o `h` e há `carBearing` de reserva a cada 8 m.
-3. **Espelho `geo:global` de 60 s para 180 s** (`MIRROR_MIN_MS`): 15 → 5 por viagem, −10 DO. O polling
-   da passageira só fica mais lento quando o WS da viagem está caído.
-4. **Escritas 34 → 27**: uma só notificação por viagem (`completed`) em vez de duas, e um só ponto de
-   rasto. Só vale depois dos passos 1–3, quando a D1 for o muro.
+1. **`heading` a 1/5 s + ≥10°** ✅ **FEITO 31/10** — 1 linha no cliente (`liveSendHdg`: `900` → `5000`,
+   `d<2` → `d<10`). Medido: 68 → 44 DO/viagem, **1 470 → 2 272 viagens/dia**. A rotação continua a 5 s.
+2. **Espelho `geo:global` de 60 s para 180 s** ✅ **FEITO 31/10** (`MIRROR_MIN_MS`): 15 → 5 por viagem,
+   −10 DO, medido (§12). Ficou **34 DO vs 34 D1** ⇒ **2 941 viagens/dia**.
+3. **Escritas 34 → 27** — **o próximo corte, e o único que ainda sobe a capacidade**: uma só notificação
+   por viagem (`completed`) em vez de duas, e um só ponto de rasto. Leva ao tecto de 3 704.
+4. **Eliminar o `heading`** — **deixou de valer capacidade** depois do passo 2 (34 → 25 DO, mas a D1
+   trava nas mesmas 2 941). Só faz sentido se a D1 descer primeiro. Mantém-se a `1/5 s` (0 de custo de
+   capacidade, melhor rotação).
 5. **Alongar a viagem média** (o único lever que aumenta horas): com 1–3 feitos, 37 min já duplica as
    horas.
 6. **Não** gastar mais nada em cortes de leitura: a 3 704 viagens o que trava é a escrita, e cortar
@@ -514,3 +515,64 @@ Com o plano pago (≈**$7–75/mês**, §6), **duplicar é imediato e sem tocar 
 passam de 100 k/dia para ordens de grandeza acima. A decisão é do dono e está fora do âmbito deste
 documento; fica registado o número para que a escolha seja informada: **o Free ainda aguenta ~2,8× o
 que faz hoje (≈1 300 → 3 704 viagens/dia) com 4 cortes pequenos; o passo seguinte custa ~$7/mês.**
+
+## 12. MEDIDO — espelho `geo:global` a 1/3 min (2026-10-31)
+
+O espelho dentro do `TripPush.onGps` chamava o DO `geo:global` no máximo 1×/min (`MIRROR_MIN_MS =
+60_000`). Passou a **1×/180 s**. É a **3.ª via de escrita na `DriverGeo`**, não a principal:
+
+| Via | Quando escreve na `DriverGeo` | Cadência |
+|---|---|---|
+| WS global `drivers/live-geo` (`geoPresence`/`geoSend`) | app aberta | carro andou ≥10 m **ou** 30 s |
+| REST `POST /drivers/position` | WS global caído / app em fundo | 60 s |
+| **Espelho (este)** | o fix chegou pelo WS da viagem | **180 s** + ≥40 m |
+
+(A ponte `DriverGeo → TripPush` vai no sentido contrário — é o `onGpsPush` a 30 s / 150 m — e não
+escreve na `DriverGeo`.)
+
+### 12.1 Ensaio (staging, viagem de 420 s, cadência real)
+
+`%TEMP%\opencode\mirror3.mjs` — 28 fixes `gps` a 1/15 s pelo WS da viagem, **sem `heading`** (para isolar
+o espelho), passageira com o WS da viagem aberto e polling `?view=web` 1/min. As duas vias principais
+foram **desligadas de propósito** para que o espelho fosse o único escritor: é o pior caso, não o normal.
+
+| Métrica | Resultado |
+|---|---|
+| `geo:global` — pedidos no total | **12** |
+| − polling (`geoGet`, 7) − setup (`/drivers/position` 1 + candidatas do pedido 1) | **3 espelhos** |
+| Espelhos esperados a 180 s | 3 (t = 0 s, 180 s, 360 s) ✅ |
+| Por minuto (buckets) | `06:23=4 · 24=1 · 25=1 · 26=2 · 27=1 · 28=1 · 29=2` — encaixa **exacto** |
+| Antes (60 s), mesma viagem | 7 espelhos ⇒ **12 → 3** (−67 %) |
+| Frames `driver` na passageira | **28/28 com `h`**, intervalos `15 s` constantes |
+| Ciclo `arrived`/`in_progress`/`completed` | 200/200/200 |
+| `trip_points` no fim | **1** (gate de 600 s durável a funcionar) |
+
+### 12.2 O atraso do polling no pior caso — e porque não é regressão
+
+Com o espelho como única via, o polling mostrou a posição com atraso igual ao intervalo do espelho:
+`0 s · 64 s · 127 s · 190 s` e depois `61 s · 125 s · 188 s` (recomeça a cada espelho). **Isto é
+artificial:** o ensaio desligou as duas vias que em produção escrevem sempre que o carro anda —
+`geoPresence` (≥10 m ou 30 s) e o REST de 60 s. Com qualquer delas viva, a `DriverGeo` está fresca e o
+polling não perde nada. O espelho só serve o caso em que **o WS da viagem é o único canal vivo**, e nesse
+caso a passageira está a receber `driver` frames pelo próprio WS a cada 30 s.
+
+### 12.3 Conta nova
+
+| Recurso | Antes (heading 1/5 s) | Depois (+ espelho 1/3 min) | Viagens/dia |
+|---|---|---|---|
+| Pedidos DO facturados | 44 | **34** | **2 941** |
+| Escritas D1 | 34 | 34 | 2 941 |
+| Pedidos Worker | ≈20 | ≈20 | ≈5 000 |
+
+⇒ **2 272 → 2 941 viagens/dia (+29 %)**, e as duas travas (DO 34, D1 34) passam a morder **ao mesmo
+tempo**. A partir daqui **eliminar o `heading` não compra capacidade** (34 → 25 DO, mas a D1 trava nas
+mesmas 2 941); o próximo corte tem de ser nas **escritas da D1 (34 → 27)**.
+
+### 12.4 Publicado
+
+API produção **`ddc37649-d097-460c-bc31-5e6691964a8c`** (`f9132f20-9ff0-48b3-8610-d19b68d322c2` foi o
+deploy da lógica; o segundo difere só num comentário), staging **`ded126ec-20b6-433a-9d8b-3e195d6de639`**
+(só servidor — o webapp não mudou neste passo). Smoke de produção só de `GET` 8/8 (`/health` 200
+`shed:0`, `/boot` 200, `/trips/active` 200 `null` + 401 sem token, `/categories` 200, `/admin/quota`
+200 `configured:true`, `/drivers/nearby` 200 com `lat/lng`). Base intacta: **26 users / 121 trips /
+1 motorista / 315 notifications / 0 `ZZ %`**; staging a zero (1 admin, 0 viagens, 0 `ZZ %`).

@@ -3798,11 +3798,19 @@ const WS_FIX_FRESH_MS = 20_000;
 // A 15 s (intervalo do cliente) eram ~60 pedidos por viagem de 15 min, o maior
 // gasto escondido do modelo de capacidade. Medido a 30/10 (staging, viagem
 // real de 5 min com a cadencia do cliente): 30 pedidos ao DO da viagem + 21 ao
-// geo:global. 60 s + "so se o carro andou >=40 m" corta o espelho para ~1/3:
-// o polling da passageira com WS aberto e de 120 s, o link publico recebe a
-// posicao pelo proprio TripPush (broadcastTag 'pub'), e um carro parado nao
-// tem posicao nova para escrever.
-const MIRROR_MIN_MS = 60_000;
+// geo:global. 60 s + "so se o carro andou >=40 m" cortou o espelho para ~1/3.
+// 2026-10-31: 60 s -> 180 s. O espelho e a 3.a via de escrita na DriverGeo (com
+// a app em primeiro plano o MESMO fix ja vai pelo WS `drivers/live-geo` ->
+// DriverGeo, a 10 m/30 s; em segundo plano vai pelo REST `/drivers/position`,
+// 1/60 s); so serve o polling e o link publico, e ambos continuam a ler a
+// DriverGeo fresca por essas duas vias.
+// Custo medido do espelho a 60 s: 15 pedidos por viagem de 15 min (1/min). A
+// 180 s passa a ~5 (1/3 min) => -10 pedidos facturados por viagem (44 -> 34),
+// sem tocar no que a passageira ve (frames `driver` vem do WS da viagem a
+// 1/30 s, nao do espelho).
+// Um carro parado (fila, semaforo, a espera da passageira) nao tem posicao nova
+// para escrever: 40 m e acima do ruido do GPS.
+const MIRROR_MIN_MS = 180_000;
 const MIRROR_MIN_M = 40;
 function normH(v: any): number | null {
   if (v == null || v === '') return null;
@@ -4111,9 +4119,10 @@ export class TripPush {
       // passageira (/trips/:id?view=web) e o link de partilha (/trips/public).
       // Sem isto ficavam presos a posi����es antigas enquanto o WS ia fresco.
       // noTripPush: o fix jǭ foi entregue por este WS �?" nǜo volta ao TripPush.
-      // 2026-10-30: espelho com teto de 60 s + guarda de movimento (MIRROR_MIN_MS /
-      // MIRROR_MIN_M). Era 1 por fix (o cliente manda 1/15 s) = ~60 pedidos por
-      // viagem ao DO `geo:global`, o maior gasto escondido do modelo de capacidade.
+      // 2026-10-30: espelho com teto (MIRROR_MIN_MS / MIRROR_MIN_M), era 1 por
+      // fix (o cliente manda 1/15 s) = ~60 pedidos por viagem ao DO
+      // `geo:global`, o maior gasto escondido do modelo de capacidade.
+      // 2026-10-31: teto 60 s -> 180 s (ver comentario da constante).
       // Um carro parado (fila, semaforo, a espera da passageira) nao tem posicao
       // nova para escrever: 40 m e acima do ruido do GPS.
       const _movedM = att.lastMirrorLat == null ? 1e9 : havKm(Number(att.lastMirrorLat), Number(att.lastMirrorLng), la, lo) * 1000;

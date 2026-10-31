@@ -1117,14 +1117,18 @@ Objectivo: fechar o "2×" da nona vaga com números medidos, não modelados. Rel
   mensagens **inflaciona** o custo por viagem (~30 "pedidos" que valem 1,5).
 - Não confundir com os **pedidos ao Worker**: as mensagens WS não passam pelo Worker (só a ligação).
 
-**2. O espelho `geoSet` dentro do `TripPush.onGps` era o maior gasto escondido — cortado para 60 s + ≥40 m.**
+**2. O espelho `geoSet` dentro do `TripPush.onGps` era o maior gasto escondido — cortado para 60 s + ≥40 m, depois 180 s.**
 - Viagem real em staging com a cadência do cliente (trip WS 1 fix/15 s + `live-geo` 1 fix/30 s), 5 min
   com **90 s parada**: `geo:global` fazia **21 pedidos** (10 mensagens + 10 espelhos + 1 ligação) →
-  passou a **16** (10 mensagens + **5** espelhos + 1). O teto é `MIRROR_MIN_MS = 60_000` **e**
+  passou a **16** (10 mensagens + **5** espelhos + 1). O teto é `MIRROR_MIN_MS` **e**
   `MIRROR_MIN_M = 40`: um carro parado (semaforo, fila, à espera da passageira) não tem posição nova
-  para escrever. O espelho é a **3.ª via** — com a app em primeiro plano o mesmo fix já vai pelo WS
-  `drivers/live-geo`, e com esse socket caído o fallback REST `/drivers/position` (1/60 s) também
-  escreve na DriverGeo.
+  para escrever. O espelho é a **4.ª via** — com a app em primeiro plano o mesmo fix já vai pelo WS
+  `drivers/live-geo` (≥10 m ou 30 s), e com esse socket caído o fallback REST `/drivers/position`
+  (1/60 s) também escreve na DriverGeo.
+- **`MIRROR_MIN_MS` 60 s → 180 s (2026-10-31).** Medido em staging (`%TEMP%\opencode\mirror3.mjs`,
+  viagem de 420 s, espelho como **único** escritor de propósito): `geo:global` **12 pedidos** = 7 polls +
+  2 setup + **3 espelhos** — exactamente t=0/180/360 s (antes seriam 7). `trip_points` = **1** (gate de
+  600 s durável). Conta: **44 → 34 DO/viagem**, 2 272 → **2 941 viagens/dia**.
 - `GEO_PUSH_MIN_MS` 20 s → **30 s** (= o intervalo de redesenho do recetor, `onGpsPush` 30 s ou 150 m;
   nenhum frame é descartado).
 - **Prova funcional do espelho 60 s + 40 m** (staging, `%TEMP%\opencode\t-mirror60b.mjs`, **6/6**, lido
@@ -1140,8 +1144,8 @@ Objectivo: fechar o "2×" da nona vaga com números medidos, não modelados. Rel
   2. **O espelho vive dentro do bloco da motorista**, depois do gate `PUSH_GPS_MIN_MS = 10 s` — um fix
      menos de 10 s após o anterior **sai antes** de chegar ao espelho. Ao testar, dar ≥11 s entre fixes.
 - A guarda de movimento compara com o **último ponto espelhado** (`att.lastMirrorLat/Lng`), não com o
-  último fix: por isso um fix bloqueado pelo teto de 60 s **não** "gasta" a guarda (é o que faz o F3
-  do ensaio passar).
+  último fix: por isso um fix bloqueado pelo teto (60 s então, **180 s** agora) **não** "gasta" a guarda
+  (é o que faz o F3 do ensaio passar).
 
 **3. `persistPoint` tinha um bug de raiz: o gate NUNCA valeu.**
 - O DO da viagem **hiberna e é recriado** entre fixes; `this.lastPointAt` voltava a 0 a cada arranque.
@@ -1396,34 +1400,43 @@ comparada com o que a LADIESGO já faz. **Não é para copiar arquitectura** —
      **121 viagens no total**. Falta matéria-prima, não esforço.
 - **A confirmar (não copiar):** Spanner/Ringpop, Kafka+Flink, RL no despacho, solver bipartido, multi-região.
 - **Capacidade em minutos de viagem, não em viagens.** O custo às DO é **por minuto** e o da D1 é
-  **por viagem**. Modelos ancorados no medido: `D1(d) = 27 + 0,4d` e, para as DO, `17 + 3,4d` hoje
-  (`heading` 1/900 ms), `17 + 1,8d` com `heading` a 1/5 s, `17 + 1,2d` sem `heading`.
+  **por viagem**. Modelos ancorados no medido: `D1(d) = 27 + 0,4d` e, para as DO, `17 + 3,4d` antes dos
+  cortes, `17 + 1,8d` com `heading` a 1/5 s, **`17 + 1,1d` com o espelho a 1/3 min** (`heading` a 1/5 s).
 
   | Duração | DO hoje | Escritas D1 | Viagens/dia (hoje) | Horas de carro/dia | Trava |
   |---|---|---|---|---|---|
-  | 10 min | 51 | 31 | 1 960 | 327 h | DO |
-  | 15 min | **68** | **33** | **1 470** | **368 h** | DO |
-  | 20 min | 85 | 35 | 1 176 | 392 h | DO |
-  | 30 min | 119 | 39 | 840 | 420 h | DO |
-  | 60 min | 221 | 51 | 452 | 452 h | DO |
+  | 10 min | 28 | 31 | 3 226 | 538 h | D1 |
+  | 15 min | **34** | **34** | **2 941** | **735 h** | **empate DO/D1** |
+  | 20 min | 39 | 35 | 2 564 | 855 h | D1 |
+  | 30 min | 50 | 39 | 2 564 | 1 282 h | D1 |
+  | 60 min | 83 | 51 | 1 961 | 1 961 h | D1 |
 
-- **O `heading` é o que trava tudo — medido em staging a 2026-10-31** (não deduzido): `liveSendHdg`
-  manda **44 msg/min** com o gate real (900 ms + ≥2°), o que vale **33 pedidos facturados por viagem
-  de 15 min** dos 68 totais; no tecto do throttle são 58–66/min (50/viagem). **1 mensagem = 1 pedido na
-  métrica** (que é 1:1 com as mensagens) e **1/20 na factura**.
+  (a linha dos 15 min é o ponto de operação actual: **2 941 viagens/dia ou 735 h/dia**.)
+
+- **O `heading` era o que travava tudo — medido em staging a 2026-10-31** (não deduzido): `liveSendHdg`
+  mandava **44 msg/min** com o gate antigo (900 ms + ≥2°), o que valia **33 pedidos facturados por viagem
+  de 15 min** dos 68 totais. **1 mensagem = 1 pedido na métrica** (1:1 com as mensagens) e **1/20 na
+  factura**. **Cortado para 1/5 s + ≥10°** (2 valores em `liveSendHdg`) → 68 → 44 DO/viagem.
   - É **redundante**: o frame `{t:'gps'}` já leva o `h` e o servidor põe-no no `driver`
     (`normH(m.h)`, `index.ts` ~4137). No ensaio a passageira recebeu **36/36 frames `driver` com `h`**
     em 36 envios de `gps`, sem nenhum `heading`. Sem `heading` o cliente ainda deriva o rumo do
     movimento (`carBearing` a cada ≥8 m, `ladiesgo-home.html` ~14575).
+  - **Não eliminar o `heading` agora**: com o espelho a 1/3 min as duas travas empatam (DO 34 vs D1 34);
+    eliminar dá 25 DO mas a D1 continua a travar nas mesmas 2 941. Fica a `1/5 s` (0 de custo de
+    capacidade, melhor rotação).
 - **"Mais viagens/dia" e "duplicar as horas" — as duas são possíveis no Free.** Análise completa em
-  `docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §11.
-  - **`heading` a 1/5 s** (1 linha no cliente) → 68 → 44 DO/viagem → **2 272 viagens/dia**.
-    Eliminá-lo → 35 → **2 857**. Espelho `geo:global` 60→180 s (`MIRROR_MIN_MS`) → 25 → 2 941.
+  `docs/MAIS-CORRIDAS-POR-DIA-2026-10-30.md` §11–§12.
+  - **`heading` a 1/5 s** ✅ → 68 → 44 DO/viagem → **2 272 viagens/dia**.
+  - **Espelho `geo:global` 60 → 180 s** ✅ (`MIRROR_MIN_MS`, medido: 3 espelhos em 7 min em vez de 7) →
+    44 → **34 DO/viagem** → **2 941 viagens/dia (+29 %)**.
   - **Viagens/dia tem muro rígido ≈3 704** = `100 000 ÷ 27 escritas`, o mínimo estrutural de uma viagem
     concluída (INSERT 5 + `ACCEPTED`/`IN_PROGRESS`/`COMPLETED` 7 + `wallet_tx` 3 + avaliação 4 + 1
     notificação 4 + 1 `trip_point` 4). Contra as ~1 300 de hoje é **2,8×**.
-  - **Horas:** com o `heading` fora e o espelho a 1/3 min, as horas passam a ser limitadas só pela D1 e
-    crescem com a duração: 926 h a 15 min, **1 468 h (2×) a ~37 min**, 1 961 h a 60 min.
+  - **O próximo corte é nas escritas da D1 (34 → 27)** — uma só notificação por viagem (`completed`) e
+    um só ponto de rasto. É o único que ainda sobe a capacidade; nenhum corte de pedidos ajuda enquanto a
+    D1 travar.
+  - **Horas:** as horas passam a ser limitadas só pela D1 e crescem com a duração: **735 h a 15 min**,
+    **1 468 h (2×) a ~37 min**, 1 961 h a 60 min.
   - **Consequência operacional:** encurtar viagens dá mais viagens mas **menos** horas; alongar dá mais
     horas mas menos viagens. A viagem média é o lever, não o número de pedidos.
 - **A lição do DoorDash traduzida:** quando a procura passa a capacidade, **decide-se com informação
