@@ -1371,6 +1371,45 @@ produção" só porque falhou no `wrangler d1 execute`.**
   `SEARCH ... trips_passenger_idx` + `USE TEMP B-TREE FOR ORDER BY` a ler as 76. Além disso partiria as
   viagens agendadas (`status='REQUESTED'` + `scheduledAt` no futuro).
 
+## Como as outras plataformas lidam com o pico (2026-10-31)
+Relatório: **`docs/PICOS-E-CONCORRENCIA-2026-10-31.md`**. Pesquisa em Uber, Lyft, Grab, DiDi e DoorDash
+comparada com o que a LADIESGO já faz. **Não é para copiar arquitectura** — eles resolvem 10⁴–10⁷ pedidos/min.
+
+- **Dos 10 padrões identificados, a LADIESGO já pratica 5:** oferta **exclusiva sequencial** com timeout e
+  expansão de raio (DiDi/Uber modernos), **coordenação separada do cálculo** (DoorDash: `TripPush` por viagem vs.
+  `DriverGeo`/`RequestsHub`), **backpressure** (`quota_shed` 0/1/2), **shadow testing** (staging + `stale_guard`
+  `shadow` + flags sem deploy) e a **não-exclusiva** como rede de segurança (`pushTripToDrivers` máx. 3 resumos).
+- **Faltam 5, e só 1 é urgente:**
+  1. **Preço por hora/zona** (Uber/Lyft/Grab/DoorDash) — **0 pedidos**, poucas linhas. É o **único lever que
+     reduz o número de viagens**; todos os cortes das vagas 1–14 só baixaram o custo por viagem. Decisão de
+     negócio do dono (Angola, dinheiro vivo, frota de 1).
+  2. **Shard geográfico** — `DriverGeo` é **1 DO global** com tudo numa chave `snapshot:v1` limitada a
+     **100 KiB** → enche a **~600–700 motoristas**; o `RequestsHub` também é global. É o próximo muro real.
+     **Não precisa de H3**: um **geohash de 4 caracteres** (~39×19,5 km) resolve e o shard vai no *nome* do DO
+     (`geo:<geohash4>`) → **0 pedidos extra**. Um shard vazio não custa nada (o objeto não é criado).
+  3. **Chain dispatch** (DiDi) — dar a próxima corrida a quem está a acabar; **1 leitura** por pedido, só rende
+     com ≥10 motoristas ocupadas ao mesmo tempo.
+  4. **Emparelhamento em lote** (Uber/DiDi) — **não agora**: com poucos pedidos só acrescenta latência. Passa a
+     valer com >5 `REQUESTED` em simultâneo na mesma zona — e nessa altura **também poupa pedidos** (1 decisão
+     em vez de N ofertas).
+  5. **Previsão / posicionamento de oferta** — precisa de semanas de histórico por zona e hora; a base tem
+     **121 viagens no total**. Falta matéria-prima, não esforço.
+- **A confirmar (não copiar):** Spanner/Ringpop, Kafka+Flink, RL no despacho, solver bipartido, multi-região.
+- **Capacidade em minutos de viagem, não em viagens:** custo ≈ **5 pedidos fixos + 2 por minuto**
+  (5 + 2×15 = 35). As **horas de carro/dia** ficam quase constantes no Free:
+
+  | Duração | Pedidos DO/viagem | Viagens/dia | Horas de carro/dia |
+  |---|---|---|---|
+  | 10 min | ≈25 | ≈4 000 | ≈667 h |
+  | 15 min | ≈35 | **≈2 850** | ≈714 h |
+  | 20 min | ≈45 | ≈2 220 | ≈741 h |
+  | 30 min | ≈65 | ≈1 540 | ≈769 h |
+
+  Ou seja: **o Free aguenta ~700 horas de carro por dia** (~2 400 corridas/dia a 85 %). A seguir às DO
+  (≈2 850) trava nas **escritas da D1** (≈2 940).
+- **A lição do DoorDash traduzida:** quando a procura passa a capacidade, **decide-se com informação
+  incompleta em vez de fazer fila** — é exactamente o que o `quota_shed` e o `stale_guard` já fazem.
+
 ## Quem gasta a quota — atribuição ao minuto (2026-10-30)
 Relatório: **`AUDITORIA-QUEM-GASTA-2026-10-30.md`**. Medição por minuto da GraphQL Analytics (só D1 de produção).
 
